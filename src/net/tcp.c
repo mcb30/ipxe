@@ -66,6 +66,15 @@ struct tcp_connection {
 	 */
 	uint32_t rcv_ack;
 
+	/**
+	 *
+	 * Equivalent to TS.Recent in RFC 1323 terminology.
+	 */
+	uint32_t ts_recent;
+
+
+	uint32_t max_seq;
+
 	/** Transmit queue */
 	struct list_head queue;
 	/** Retransmission timer */
@@ -160,11 +169,12 @@ tcp_dump_flags ( struct tcp_connection *tcp, unsigned int flags ) {
  */
 static int tcp_bind ( struct tcp_connection *tcp, unsigned int port ) {
 	struct tcp_connection *existing;
-	static uint16_t try_port = 1024;
+	static uint16_t try_port = 1023;
 
 	/* If no port specified, find the first available port */
 	if ( ! port ) {
-		for ( ; try_port ; try_port++ ) {
+		while ( try_port ) {
+			try_port++;
 			if ( try_port < 1024 )
 				continue;
 			if ( tcp_bind ( tcp, htons ( try_port ) ) == 0 )
@@ -380,6 +390,7 @@ static int tcp_xmit ( struct tcp_connection *tcp, int force_send ) {
 	struct io_buffer *iobuf;
 	struct tcp_header *tcphdr;
 	struct tcp_mss_option *mssopt;
+	struct tcp_timestamp_padded_option *tsopt;
 	void *payload;
 	unsigned int flags;
 	size_t len = 0;
@@ -407,6 +418,15 @@ static int tcp_xmit ( struct tcp_connection *tcp, int force_send ) {
 		seq_len++;
 	}
 	tcp->snd_sent = seq_len;
+
+
+#if 0
+	if ( tcp->rcv_ack < tcp->max_seq ) {
+		printf ( "#" );
+		seq_len++;
+	}
+#endif
+
 
 	/* If we have nothing to transmit, stop now */
 	if ( ( seq_len == 0 ) && ! force_send )
@@ -447,6 +467,16 @@ static int tcp_xmit ( struct tcp_connection *tcp, int force_send ) {
 		mssopt->kind = TCP_OPTION_MSS;
 		mssopt->length = sizeof ( *mssopt );
 		mssopt->mss = htons ( TCP_MSS );
+	}
+	if ( 1 /* ts opt allowed */ ) {
+		static uint32_t hack = 10000;
+
+		tsopt = iob_push ( iobuf, sizeof ( *tsopt ) );
+		memset ( tsopt->nop, TCP_OPTION_NOP, sizeof ( tsopt->nop ) );
+		tsopt->tsopt.kind = TCP_OPTION_TS;
+		tsopt->tsopt.length = sizeof ( tsopt->tsopt );
+		tsopt->tsopt.tsval = ntohl ( hack++ );
+		tsopt->tsopt.tsecr = ntohl ( tcp->ts_recent );
 	}
 	tcphdr = iob_push ( iobuf, sizeof ( *tcphdr ) );
 	memset ( tcphdr, 0, sizeof ( *tcphdr ) );
@@ -594,6 +624,46 @@ static struct tcp_connection * tcp_demux ( unsigned int local_port ) {
 }
 
 /**
+ * Parse TCP received options
+ *
+ * @v tcp		TCP connection
+ * @v data		Raw options data
+ * @v len		Raw options length
+ * @v options		Options structure to fill in
+ */
+static void tcp_rx_opts ( struct tcp_connection *tcp, const void *data,
+			  size_t len, struct tcp_options *options ) {
+	const void *end = ( data + len );
+	const struct tcp_option *option;
+	unsigned int kind;
+
+	memset ( options, 0, sizeof ( *options ) );
+	while ( data < end ) {
+		option = data;
+		kind = option->kind;
+		if ( kind == TCP_OPTION_END )
+			return;
+		if ( kind == TCP_OPTION_NOP ) {
+			data++;
+			continue;
+		}
+		switch ( kind ) {
+		case TCP_OPTION_MSS:
+			options->mssopt = data;
+			break;
+		case TCP_OPTION_TS:
+			options->tsopt = data;
+			break;
+		default:
+			DBGC ( tcp, "TCP %p received unknown option %d\n",
+			       tcp, kind );
+			break;
+		}
+		data += option->length;
+	}
+}
+
+/**
  * Handle TCP received SYN
  *
  * @v tcp		TCP connection
@@ -688,7 +758,7 @@ static int tcp_rx_data ( struct tcp_connection *tcp, uint32_t seq,
 	size_t len;
 	int rc;
 
-	/* Ignore duplicate data */
+	/* Ignore duplicate or out-of-order data */
 	already_rcvd = ( tcp->rcv_ack - seq );
 	len = iob_len ( iobuf );
 	if ( already_rcvd >= len ) {
@@ -696,6 +766,7 @@ static int tcp_rx_data ( struct tcp_connection *tcp, uint32_t seq,
 		return 0;
 	}
 	iob_pull ( iobuf, already_rcvd );
+	len -= already_rcvd;
 
 	/* Deliver data to application */
 	if ( ( rc = xfer_deliver_iob ( &tcp->xfer, iobuf ) ) != 0 )
@@ -715,7 +786,7 @@ static int tcp_rx_data ( struct tcp_connection *tcp, uint32_t seq,
  */
 static int tcp_rx_fin ( struct tcp_connection *tcp, uint32_t seq ) {
 
-	/* Ignore duplicate FIN */
+	/* Ignore duplicate or out-of-order FIN */
 	if ( ( tcp->rcv_ack - seq ) > 0 )
 		return 0;
 
@@ -774,6 +845,7 @@ static int tcp_rx ( struct io_buffer *iobuf,
 		    uint16_t pshdr_csum ) {
 	struct tcp_header *tcphdr = iobuf->data;
 	struct tcp_connection *tcp;
+	struct tcp_options options;
 	unsigned int hlen;
 	uint16_t csum;
 	uint32_t start_seq;
@@ -818,6 +890,8 @@ static int tcp_rx ( struct io_buffer *iobuf,
 	ack = ntohl ( tcphdr->ack );
 	win = ntohs ( tcphdr->win );
 	flags = tcphdr->flags;
+	tcp_rx_opts ( tcp, ( ( ( void * ) tcphdr ) + sizeof ( *tcphdr ) ),
+		      ( hlen - sizeof ( *tcphdr ) ), &options );
 	iob_pull ( iobuf, hlen );
 	len = iob_len ( iobuf );
 
@@ -867,13 +941,24 @@ static int tcp_rx ( struct io_buffer *iobuf,
 		seq++;
 	}
 
+	if ( seq > tcp->max_seq )
+		tcp->max_seq = seq;
+
+	/* Update timestamp, if present and applicable */
+	if ( ( seq == tcp->rcv_ack ) && options.tsopt )
+		tcp->ts_recent = ntohl ( options.tsopt->tsval );
+
 	/* Dump out any state change as a result of the received packet */
 	tcp_dump_state ( tcp );
 
 	/* Send out any pending data.  If peer is expecting an ACK for
 	 * this packet then force sending a reply.
 	 */
-	tcp_xmit ( tcp, ( start_seq != seq ) );
+	//	if ( seq == tcp->rcv_ack ) {
+		tcp_xmit ( tcp, ( start_seq != seq ) );
+		//	} else {
+		//		printf ( "d" );
+		//	}
 
 	/* If this packet was the last we expect to receive, set up
 	 * timer to expire and cause the connection to be freed.

@@ -166,6 +166,7 @@ static void iscsi_scsi_done ( struct iscsi_session *iscsi, int rc ) {
 
 	assert ( iscsi->tx_state == ISCSI_TX_IDLE );
 
+	printf ( "]" );
 	iscsi->command = NULL;
 	iscsi->rc = rc;
 }
@@ -208,6 +209,7 @@ static void iscsi_start_command ( struct iscsi_session *iscsi ) {
 	command->cmdsn = htonl ( iscsi->cmdsn );
 	command->expstatsn = htonl ( iscsi->statsn + 1 );
 	memcpy ( &command->cdb, &iscsi->command->cdb, sizeof ( command->cdb ));
+	printf ( "[" );
 	DBGC ( iscsi, "iSCSI %p start " SCSI_CDB_FORMAT " %s %#x\n",
 	       iscsi, SCSI_CDB_DATA ( command->cdb ),
 	       ( iscsi->command->data_in ? "in" : "out" ),
@@ -268,6 +270,8 @@ static int iscsi_rx_data_in ( struct iscsi_session *iscsi,
 			      size_t remaining __unused ) {
 	struct iscsi_bhs_data_in *data_in = &iscsi->rx_bhs.data_in;
 	unsigned long offset;
+
+	printf ( "." );
 
 	/* Copy data to data-in buffer */
 	offset = ntohl ( data_in->offset ) + iscsi->rx_offset;
@@ -1098,6 +1102,7 @@ static int iscsi_rx_bhs ( struct iscsi_session *iscsi, const void *data,
 			  size_t len, size_t remaining __unused ) {
 	memcpy ( &iscsi->rx_bhs.bytes[iscsi->rx_offset], data, len );
 	if ( ( iscsi->rx_offset + len ) >= sizeof ( iscsi->rx_bhs ) ) {
+		printf ( "B" );
 		DBGC ( iscsi, "iSCSI %p received PDU opcode %#x len %#lx\n",
 		       iscsi, iscsi->rx_bhs.common.opcode,
 		       ISCSI_DATA_LEN ( iscsi->rx_bhs.common.lengths ) );

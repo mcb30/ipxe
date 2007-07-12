@@ -188,6 +188,14 @@ struct net_device_operations {
 	void ( * irq ) ( struct net_device *netdev, int enable );
 };
 
+/** Network device error breakdown */
+struct net_device_error {
+	/** Error number */
+	int errno;
+	/** Error count */
+	unsigned int count;
+};
+
 /** Network device statistics */
 struct net_device_stats {
 	/** Count of successfully completed transmissions */
