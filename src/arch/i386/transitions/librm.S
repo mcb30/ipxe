@@ -383,7 +383,7 @@ prot_call:
 	.code32
 1:
 	/* Set up environment expected by C code */
-//	call	gateA20_set
+	call	gateA20_set
 
 	/* Call function */
 	leal	PC_OFFSET_IX86(%esp), %eax

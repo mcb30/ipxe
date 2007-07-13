@@ -65,15 +65,13 @@ struct tcp_connection {
 	 * Equivalent to RCV.NXT in RFC 793 terminology.
 	 */
 	uint32_t rcv_ack;
-
-	/**
+	/** Most recent received timestamp
 	 *
 	 * Equivalent to TS.Recent in RFC 1323 terminology.
 	 */
 	uint32_t ts_recent;
-
-
-	uint32_t max_seq;
+	/** Timestamps enabled */
+	int timestamps;
 
 	/** Transmit queue */
 	struct list_head queue;
@@ -419,15 +417,6 @@ static int tcp_xmit ( struct tcp_connection *tcp, int force_send ) {
 	}
 	tcp->snd_sent = seq_len;
 
-
-#if 0
-	if ( tcp->rcv_ack < tcp->max_seq ) {
-		printf ( "#" );
-		seq_len++;
-	}
-#endif
-
-
 	/* If we have nothing to transmit, stop now */
 	if ( ( seq_len == 0 ) && ! force_send )
 		return 0;
@@ -468,14 +457,12 @@ static int tcp_xmit ( struct tcp_connection *tcp, int force_send ) {
 		mssopt->length = sizeof ( *mssopt );
 		mssopt->mss = htons ( TCP_MSS );
 	}
-	if ( 1 /* ts opt allowed */ ) {
-		static uint32_t hack = 10000;
-
+	if ( ( flags & TCP_SYN ) || tcp->timestamps ) {
 		tsopt = iob_push ( iobuf, sizeof ( *tsopt ) );
 		memset ( tsopt->nop, TCP_OPTION_NOP, sizeof ( tsopt->nop ) );
 		tsopt->tsopt.kind = TCP_OPTION_TS;
 		tsopt->tsopt.length = sizeof ( tsopt->tsopt );
-		tsopt->tsopt.tsval = ntohl ( hack++ );
+		tsopt->tsopt.tsval = ntohl ( currticks() );
 		tsopt->tsopt.tsecr = ntohl ( tcp->ts_recent );
 	}
 	tcphdr = iob_push ( iobuf, sizeof ( *tcphdr ) );
@@ -668,13 +655,18 @@ static void tcp_rx_opts ( struct tcp_connection *tcp, const void *data,
  *
  * @v tcp		TCP connection
  * @v seq		SEQ value (in host-endian order)
+ * @v options		TCP options
  * @ret rc		Return status code
  */
-static int tcp_rx_syn ( struct tcp_connection *tcp, uint32_t seq ) {
+static int tcp_rx_syn ( struct tcp_connection *tcp, uint32_t seq,
+			struct tcp_options *options ) {
 
 	/* Synchronise sequence numbers on first SYN */
-	if ( ! ( tcp->tcp_state & TCP_STATE_RCVD ( TCP_SYN ) ) )
+	if ( ! ( tcp->tcp_state & TCP_STATE_RCVD ( TCP_SYN ) ) ) {
 		tcp->rcv_ack = seq;
+		if ( options->tsopt )
+			tcp->timestamps = 1;
+	}
 
 	/* Ignore duplicate SYN */
 	if ( ( tcp->rcv_ack - seq ) > 0 )
@@ -921,7 +913,7 @@ static int tcp_rx ( struct io_buffer *iobuf,
 
 	/* Handle SYN, if present */
 	if ( flags & TCP_SYN ) {
-		tcp_rx_syn ( tcp, seq );
+		tcp_rx_syn ( tcp, seq, &options );
 		seq++;
 	}
 
@@ -941,9 +933,6 @@ static int tcp_rx ( struct io_buffer *iobuf,
 		seq++;
 	}
 
-	if ( seq > tcp->max_seq )
-		tcp->max_seq = seq;
-
 	/* Update timestamp, if present and applicable */
 	if ( ( seq == tcp->rcv_ack ) && options.tsopt )
 		tcp->ts_recent = ntohl ( options.tsopt->tsval );
@@ -954,11 +943,7 @@ static int tcp_rx ( struct io_buffer *iobuf,
 	/* Send out any pending data.  If peer is expecting an ACK for
 	 * this packet then force sending a reply.
 	 */
-	//	if ( seq == tcp->rcv_ack ) {
-		tcp_xmit ( tcp, ( start_seq != seq ) );
-		//	} else {
-		//		printf ( "d" );
-		//	}
+	tcp_xmit ( tcp, ( start_seq != seq ) );
 
 	/* If this packet was the last we expect to receive, set up
 	 * timer to expire and cause the connection to be freed.

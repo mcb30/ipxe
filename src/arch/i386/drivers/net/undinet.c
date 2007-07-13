@@ -189,7 +189,7 @@ static int undinet_call ( struct undi_nic *undinic, unsigned int function,
 	 * screwed up by the UNDI driver, because Etherboot always
 	 * resides in an even megabyte of RAM.
 	 */	
-	//	gateA20_set();
+	gateA20_set();
 
 	/* Determine return status code based on PXENV_EXIT and
 	 * PXENV_STATUS
@@ -449,9 +449,9 @@ static void undinet_poll ( struct net_device *netdev ) {
 			frag_len = undi_isr.BufferLength;
 			if ( ( len == 0 ) || ( len < frag_len ) ) {
 				/* Don't laugh.  VMWare does it. */
-				//				DBGC ( undinic, "UNDINIC %p reported insane "
-				//				       "fragment (%zd of %zd bytes)\n",
-				//				       undinic, frag_len, len );
+				DBGC ( undinic, "UNDINIC %p reported insane "
+				       "fragment (%zd of %zd bytes)\n",
+				       undinic, frag_len, len );
 				netdev_rx_err ( netdev, NULL, -EINVAL );
 				break;
 			}
@@ -495,8 +495,8 @@ static void undinet_poll ( struct net_device *netdev ) {
 			goto done;
 		default:
 			/* Should never happen */
-			//			DBGC ( undinic, "UNDINIC %p ISR returned invalid "
-			//			       "FuncFlag %04x\n", undinic, undi_isr.FuncFlag );
+			DBGC ( undinic, "UNDINIC %p ISR returned invalid "
+			       "FuncFlag %04x\n", undinic, undi_isr.FuncFlag );
 			undinic->isr_processing = 0;
 			goto done;
 		}
