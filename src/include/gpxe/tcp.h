@@ -274,8 +274,12 @@ struct tcp_options {
  * Finally, since the window goes into a 16-bit field and we cannot
  * actually use 65536, we use a window size of (65536-4) to ensure
  * that payloads remain dword-aligned.
+ *
+ * [cisco-iscsi]: limit window to 8kB until UNDI driver packet loss
+ * issues are resolved.  These may not be resolvable; the only proper
+ * fix may be an adaptive window size.
  */
-#define TCP_MAX_WINDOW_SIZE	( 65536 - 4 )
+#define TCP_MAX_WINDOW_SIZE	8192
 
 /**
  * Path MTU
