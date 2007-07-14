@@ -82,6 +82,7 @@ static int gateA20_is_set ( void ) {
  * return immediately if it is already part of the call stack.
  */
 void gateA20_set ( void ) {
+#if 0
 	static char reentry_guard = 0;
 	unsigned int discard_a;
 	unsigned int scp_a;
@@ -140,6 +141,8 @@ void gateA20_set ( void ) {
 		DBG ( "%d attempts were required to enable A20\n",
 		      ( retries + 1 ) );
 	reentry_guard = 0;
+
+#endif
 }
 
 void gateA20_unset ( void ) {
