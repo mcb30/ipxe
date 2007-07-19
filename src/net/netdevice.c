@@ -271,6 +271,8 @@ struct net_device * alloc_netdev ( size_t priv_size ) {
 	return netdev;
 }
 
+unsigned int ifindex = 0;
+
 /**
  * Register network device
  *
@@ -281,7 +283,6 @@ struct net_device * alloc_netdev ( size_t priv_size ) {
  * devices.
  */
 int register_netdev ( struct net_device *netdev ) {
-	static unsigned int ifindex = 0;
 
 	/* Create device name */
 	snprintf ( netdev->name, sizeof ( netdev->name ), "net%d",

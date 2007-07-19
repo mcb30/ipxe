@@ -19,12 +19,21 @@ Literature dealing with the network protocols:
 #include <gpxe/shell_banner.h>
 #include <usr/autoboot.h>
 
+#include <io.h>
+
 /**
  * Main entry point
  *
  * @ret rc		Return status code
  */
 int main ( void ) {
+
+	extern unsigned int ifindex;
+	void *dump = ( ( ( void * ) &ifindex ) - 64 );
+	printf ( "\nAfter relocation:\n" );
+	dbg_hex_dump_da ( virt_to_phys ( dump ), dump, 128 );
+
+	while ( 1 ) {}
 
 	initialise();
 	startup();

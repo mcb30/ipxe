@@ -2,6 +2,8 @@
 #include <registers.h>
 #include <gpxe/memmap.h>
 
+#include <test.h>
+
 /*
  * Originally by Eric Biederman
  *
@@ -44,6 +46,11 @@ void relocate ( struct i386_all_regs *ix86 ) {
 	unsigned long start, end, size, padded_size;
 	unsigned long new_start, new_end;
 	unsigned i;
+
+	extern unsigned int ifindex;
+	void *dump = ( ( ( void * ) &ifindex ) - 64 );
+	printf ( "\nAfter decompression:\n" );
+	dbg_hex_dump_da ( virt_to_phys ( dump ), dump, 128 );
 
 	/* Get memory map and current location */
 	get_memmap ( &memmap );
@@ -158,6 +165,6 @@ void relocate ( struct i386_all_regs *ix86 ) {
 	
 	/* Let prefix know what to copy */
 	ix86->regs.esi = start;
-	ix86->regs.edi = new_start;
+	ix86->regs.edi = ( RELOC_MB << 20 );
 	ix86->regs.ecx = size;
 }

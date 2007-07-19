@@ -1,3 +1,5 @@
+#include <test.h>
+	
 /*
  * Copyright (C) 2006 Michael Brown <mbrown@fensystems.co.uk>.
  *
@@ -35,7 +37,7 @@
  * joke.
  *
  */
-#define HIGHMEM_LOADPOINT ( 4 << 20 )
+#define HIGHMEM_LOADPOINT ( LOAD_MB << 20 )
 
 /* Image compression enabled */
 #define COMPRESS 1
