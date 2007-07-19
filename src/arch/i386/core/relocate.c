@@ -47,12 +47,6 @@ void relocate ( struct i386_all_regs *ix86 ) {
 	unsigned long new_start, new_end;
 	unsigned i;
 
-	extern unsigned int ifindex;
-	extern char _bss[];
-	void *dump = ( ( ( void * ) _bss ) - 64 );
-	printf ( "\nAfter decompression:\n" );
-	dbg_hex_dump_da ( virt_to_phys ( dump ), dump, 128 );
-
 	/* Get memory map and current location */
 	get_memmap ( &memmap );
 	start = virt_to_phys ( _text );
@@ -168,4 +162,11 @@ void relocate ( struct i386_all_regs *ix86 ) {
 	ix86->regs.esi = start;
 	ix86->regs.edi = ( RELOC_MB << 20 );
 	ix86->regs.ecx = size;
+
+	void *dump1 = phys_to_virt ( 0x220000 - 64 );
+	void *dump2 = phys_to_virt ( 0x420000 - 64 );
+	printf ( "\nImmediately before relocation:\n" );
+	dbg_hex_dump_da ( virt_to_phys ( dump1 ), dump1, 128 );
+	printf ( "\n" );
+	dbg_hex_dump_da ( virt_to_phys ( dump2 ), dump2, 128 );
 }

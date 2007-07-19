@@ -28,15 +28,13 @@ Literature dealing with the network protocols:
  */
 int main ( void ) {
 
-	extern unsigned int ifindex;
-	extern char _bss[];
-	void *dump = ( ( ( void * ) _bss ) - 64 );
+	void *dump1 = phys_to_virt ( 0x220000 - 64 );
+	void *dump2 = phys_to_virt ( 0x420000 - 64 );
+	more();
 	printf ( "\nAfter relocation:\n" );
-	while ( 1 ) {
-		dbg_hex_dump_da ( virt_to_phys ( dump ), dump, 128 );
-		more();
-		dump += 128;
-	}
+	dbg_hex_dump_da ( virt_to_phys ( dump1 ), dump1, 128 );
+	printf ( "\n" );
+	dbg_hex_dump_da ( virt_to_phys ( dump2 ), dump2, 128 );
 
 	while ( 1 ) {}
 
