@@ -32,7 +32,11 @@ int main ( void ) {
 	extern char _bss[];
 	void *dump = ( ( ( void * ) _bss ) - 64 );
 	printf ( "\nAfter relocation:\n" );
-	dbg_hex_dump_da ( virt_to_phys ( dump ), dump, 128 );
+	while ( 1 ) {
+		dbg_hex_dump_da ( virt_to_phys ( dump ), dump, 128 );
+		more();
+		dump += 128;
+	}
 
 	while ( 1 ) {}
 
