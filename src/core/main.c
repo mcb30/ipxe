@@ -29,7 +29,8 @@ Literature dealing with the network protocols:
 int main ( void ) {
 
 	extern unsigned int ifindex;
-	void *dump = ( ( ( void * ) &ifindex ) - 64 );
+	extern char _bss[];
+	void *dump = ( ( ( void * ) _bss ) - 64 );
 	printf ( "\nAfter relocation:\n" );
 	dbg_hex_dump_da ( virt_to_phys ( dump ), dump, 128 );
 
