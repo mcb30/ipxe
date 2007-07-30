@@ -273,7 +273,7 @@ static inline void udivmod64_lo ( const struct uint64 *x,
 		  : "g" ( d->l ), "0" ( x->l ), "1" ( r_dash ) );
 }
 
-static void udivmod64 ( const struct uint64 *x,
+void udivmod64 ( const struct uint64 *x,
 			const struct uint64 *d,
 			struct uint64 *q,
 			struct uint64 *r ) {
@@ -319,6 +319,7 @@ UDItype __udivmoddi4 ( UDItype x, UDItype d, UDItype *r ) {
  */
 UDItype __udivdi3 ( UDItype x, UDItype d ) {
 	UDItype r;
+
 	return __udivmoddi4 ( x, d, &r );
 }
 

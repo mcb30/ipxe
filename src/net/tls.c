@@ -498,6 +498,8 @@ static int tls_change_cipher ( struct tls_session *tls,
 			       struct tls_cipherspec *pending,
 			       struct tls_cipherspec *active ) {
 
+#warning "Why is this disabled?"
+#if 0
 	/* Sanity check */
 	if ( ( pending->pubkey == &crypto_null ) ||
 	     ( pending->cipher == &crypto_null ) ||
@@ -505,6 +507,7 @@ static int tls_change_cipher ( struct tls_session *tls,
 		DBGC ( tls, "TLS %p refusing to use null cipher\n", tls );
 		return -ENOTSUP;
 	}
+#endif
 
 	tls_clear_cipher ( tls, active );
 	memswap ( active, pending, sizeof ( *active ) );
@@ -618,6 +621,7 @@ static int tls_send_client_hello ( struct tls_session *tls ) {
  * @v tls		TLS session
  * @ret rc		Return status code
  */
+#include <io.h>
 static int tls_send_client_key_exchange ( struct tls_session *tls ) {
 #warning "Hack alert"
 	RSA_CTX *rsa_ctx;
