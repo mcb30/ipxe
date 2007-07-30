@@ -621,7 +621,6 @@ static int tls_send_client_hello ( struct tls_session *tls ) {
  * @v tls		TLS session
  * @ret rc		Return status code
  */
-#include <io.h>
 static int tls_send_client_key_exchange ( struct tls_session *tls ) {
 #warning "Hack alert"
 	RSA_CTX *rsa_ctx;
