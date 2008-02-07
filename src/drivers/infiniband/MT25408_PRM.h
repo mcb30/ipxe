@@ -346,7 +346,8 @@ struct hermonprm_hca_command_register_st {	/* Little Endian */
 /* -------------- */
     pseudo_bit_t	opcode[0x0000c];       /* Command opcode */
     pseudo_bit_t	opcode_modifier[0x00004];/* Opcode Modifier, see specific description for each command. */
-    pseudo_bit_t	reserved1[0x00006];
+    pseudo_bit_t	reserved1[0x00005];
+    pseudo_bit_t	t[0x00001];	       /* Toggle */
     pseudo_bit_t	e[0x00001];            /* Event Request
                                                  0 - Don't report event (software will poll the GO bit)
                                                  1 - Report event to EQ when the command completes */
