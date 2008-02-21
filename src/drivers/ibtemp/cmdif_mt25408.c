@@ -135,6 +135,7 @@ static int wait_cmdif_free(int *last_toggle)
 * In Hermon we use the toggle bit to determine is the command started 
 * the operation.
 */
+static struct dev_pci_struct hermon_pci_dev;
 static XHH_cmd_status_t cmd_invoke(command_fields_t *cmd_prms)
 {
 	int ret, is_free, i, last_toggle;
@@ -173,6 +174,13 @@ static XHH_cmd_status_t cmd_invoke(command_fields_t *cmd_prms)
 		last_toggle = 1;
 		MT_INSERT32(hcr[6],last_toggle,21,1); 
 	}
+
+	DBG ( "Issuing command:\n" );
+	uint32_t hack[7];
+	memcpy ( hack, hcr, sizeof ( hack ) );
+	be_to_cpu_buf ( hack, sizeof ( hack ) );
+	DBG_HDA ( virt_to_phys ( hermon_pci_dev.cr_space + HCR_BASE ),
+		  hack, sizeof ( hack ) );
     
 	for (i = 0; i < 7; ++i) {
 		ret = gw_write_cr(HCR_BASE + i * 4, hcr[i]);
@@ -189,6 +197,15 @@ static XHH_cmd_status_t cmd_invoke(command_fields_t *cmd_prms)
 		eprintf("");
 		return -1;
 	}
+
+	int z;
+	for ( z = 0 ; z < 7 ; z++ ) {
+		gw_read_cr ( HCR_BASE + z * 4, &hack[z] );
+	}
+	be_to_cpu_buf ( hack, sizeof ( hack ) );
+	DBG ( "Response:\n" );
+	DBG_HDA ( virt_to_phys ( hermon_pci_dev.cr_space + HCR_BASE ),
+		  hack, sizeof ( hack ) );
 
 	__asm__ __volatile__("":::"memory");
 	ret = gw_read_cr(HCR_OFFSET_STATUS, &data);
