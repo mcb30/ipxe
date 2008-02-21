@@ -1674,26 +1674,22 @@ static int hermon_get_limits ( struct hermon *hermon ) {
 	hermon->limits.reserved_qps =
 		( 1 << MLX_GET ( &dev_cap, log2_rsvd_qps ) );
 	hermon->limits.qpc_entry_size = MLX_GET ( &dev_cap, qpc_entry_sz );
-	//hermon->limits.eqpc_entry_size = MLX_GET ( &dev_cap, eqpc_entry_sz );
+	hermon->limits.altc_entry_size = MLX_GET ( &dev_cap, altc_entry_sz );
+	hermon->limits.auxc_entry_size = MLX_GET ( &dev_cap, aux_entry_sz );
 	hermon->limits.reserved_srqs =
 		( 1 << MLX_GET ( &dev_cap, log2_rsvd_srqs ) );
 	hermon->limits.srqc_entry_size = MLX_GET ( &dev_cap, srq_entry_sz );
-	//hermon->limits.reserved_ees =
-	//	( 1 << MLX_GET ( &dev_cap, log2_rsvd_ees ) );
-	//hermon->limits.eec_entry_size = MLX_GET ( &dev_cap, eec_entry_sz );
-	//hermon->limits.eeec_entry_size = MLX_GET ( &dev_cap, eeec_entry_sz );
 	hermon->limits.reserved_cqs =
 		( 1 << MLX_GET ( &dev_cap, log2_rsvd_cqs ) );
 	hermon->limits.cqc_entry_size = MLX_GET ( &dev_cap, cqc_entry_sz );
+	hermon->limits.reserved_eqs = MLX_GET ( &dev_cap, num_rsvd_eqs );
+	hermon->limits.eqc_entry_size = MLX_GET ( &dev_cap, eqc_entry_sz );
 	hermon->limits.reserved_mtts =
 		( 1 << MLX_GET ( &dev_cap, log2_rsvd_mtts ) );
 	hermon->limits.mtt_entry_size = MLX_GET ( &dev_cap, mtt_entry_sz );
 	hermon->limits.reserved_mrws =
 		( 1 << MLX_GET ( &dev_cap, log2_rsvd_mrws ) );
-	//hermon->limits.mpt_entry_size = MLX_GET ( &dev_cap, mpt_entry_sz );
-	//hermon->limits.reserved_rdbs =
-	//	( 1 << MLX_GET ( &dev_cap, log2_rsvd_rdbs ) );
-	hermon->limits.eqc_entry_size = MLX_GET ( &dev_cap, eqc_entry_sz );
+	hermon->limits.dmpt_entry_size = MLX_GET ( &dev_cap, d_mpt_entry_sz );
 	hermon->limits.reserved_uars = MLX_GET ( &dev_cap, num_rsvd_uars );
 
 	return 0;
@@ -1723,129 +1719,140 @@ static size_t icm_usage ( unsigned int log_num_entries, size_t entry_size ) {
  */
 static int hermon_alloc_icm ( struct hermon *hermon,
 			      struct hermonprm_init_hca *init_hca ) {
-#if 0
 	struct hermonprm_scalar_parameter icm_size;
 	struct hermonprm_scalar_parameter icm_aux_size;
 	struct hermonprm_virtual_physical_mapping map_icm_aux;
 	struct hermonprm_virtual_physical_mapping map_icm;
 	union hermonprm_doorbell_record *db_rec;
-	size_t icm_offset = 0;
+	uint64_t icm_offset = 0;
 	unsigned int log_num_qps, log_num_srqs, log_num_ees, log_num_cqs;
 	unsigned int log_num_mtts, log_num_mpts, log_num_rdbs, log_num_eqs;
 	int rc;
 
 	icm_offset = ( ( hermon->limits.reserved_uars + 1 ) << 12 );
 
+
+#warning "hack alert"
+	icm_offset = ( 1ULL << 32 );
+
+
 	/* Queue pair contexts */
 	log_num_qps = fls ( hermon->limits.reserved_qps + HERMON_MAX_QPS - 1 );
+	MLX_FILL_1 ( init_hca, 12,
+		     qpc_eec_cqc_eqc_rdb_parameters.qpc_base_addr_h,
+		     ( icm_offset >> 32 ) );
 	MLX_FILL_2 ( init_hca, 13,
 		     qpc_eec_cqc_eqc_rdb_parameters.qpc_base_addr_l,
-		     ( icm_offset >> 7 ),
+		     ( icm_offset >> 5 ),
 		     qpc_eec_cqc_eqc_rdb_parameters.log_num_of_qp,
 		     log_num_qps );
-	DBGC ( hermon, "Hermon %p ICM QPC base = %zx\n", hermon, icm_offset );
+	DBGC ( hermon, "Hermon %p ICM QPC base = %llx\n", hermon, icm_offset );
 	icm_offset += icm_usage ( log_num_qps, hermon->limits.qpc_entry_size );
 
-	/* Extended queue pair contexts */
+	/* Extended alternate path contexts */
+	MLX_FILL_1 ( init_hca, 24,
+		     qpc_eec_cqc_eqc_rdb_parameters.altc_base_addr_h,
+		     ( icm_offset >> 32 ) );
 	MLX_FILL_1 ( init_hca, 25,
-		     qpc_eec_cqc_eqc_rdb_parameters.eqpc_base_addr_l,
+		     qpc_eec_cqc_eqc_rdb_parameters.altc_base_addr_l,
 		     icm_offset );
-	DBGC ( hermon, "Hermon %p ICM EQPC base = %zx\n", hermon, icm_offset );
-	//arbel	icm_offset += icm_usage ( log_num_qps,
-	//arbel				  hermon->limits.eqpc_entry_size );
+	DBGC ( hermon, "Hermon %p ICM ALTC base = %llx\n", hermon, icm_offset);
 	icm_offset += icm_usage ( log_num_qps,
-				  hermon->limits.qpc_entry_size );
+				  hermon->limits.altc_entry_size );
+
+	/* Extended auxiliary contexts */
+	MLX_FILL_1 ( init_hca, 28,
+		     qpc_eec_cqc_eqc_rdb_parameters.auxc_base_addr_h,
+		     ( icm_offset >> 32 ) );
+	MLX_FILL_1 ( init_hca, 29,
+		     qpc_eec_cqc_eqc_rdb_parameters.auxc_base_addr_l,
+		     icm_offset );
+	DBGC ( hermon, "Hermon %p ICM AUXC base = %llx\n", hermon, icm_offset);
+	icm_offset += icm_usage ( log_num_qps,
+				  hermon->limits.auxc_entry_size );
 
 	/* Shared receive queue contexts */
 	log_num_srqs = fls ( hermon->limits.reserved_srqs - 1 );
+	MLX_FILL_1 ( init_hca, 18,
+		     qpc_eec_cqc_eqc_rdb_parameters.srqc_base_addr_h,
+		     ( icm_offset >> 32 ) );
 	MLX_FILL_2 ( init_hca, 19,
 		     qpc_eec_cqc_eqc_rdb_parameters.srqc_base_addr_l,
 		     ( icm_offset >> 5 ),
 		     qpc_eec_cqc_eqc_rdb_parameters.log_num_of_srq,
 		     log_num_srqs );
-	DBGC ( hermon, "Hermon %p ICM SRQC base = %zx\n", hermon, icm_offset );
+	DBGC ( hermon, "Hermon %p ICM SRQC base = %llx\n", hermon, icm_offset);
 	icm_offset += icm_usage ( log_num_srqs,
 				  hermon->limits.srqc_entry_size );
 
-	/* End-to-end contexts */
-	log_num_ees = fls ( hermon->limits.reserved_ees - 1 );
-	MLX_FILL_2 ( init_hca, 17,
-		     qpc_eec_cqc_eqc_rdb_parameters.eec_base_addr_l,
-		     ( icm_offset >> 7 ),
-		     qpc_eec_cqc_eqc_rdb_parameters.log_num_of_ee,
-		     log_num_ees );
-	DBGC ( hermon, "Hermon %p ICM EEC base = %zx\n", hermon, icm_offset );
-	icm_offset += icm_usage ( log_num_ees, hermon->limits.eec_entry_size );
-
-	/* Extended end-to-end contexts */
-	MLX_FILL_1 ( init_hca, 29,
-		     qpc_eec_cqc_eqc_rdb_parameters.eeec_base_addr_l,
-		     icm_offset );
-	DBGC ( hermon, "Hermon %p ICM EEEC base = %zx\n", hermon, icm_offset );
-	icm_offset += icm_usage ( log_num_ees,
-				  hermon->limits.eeec_entry_size );
-
 	/* Completion queue contexts */
 	log_num_cqs = fls ( hermon->limits.reserved_cqs + HERMON_MAX_CQS - 1 );
+	MLX_FILL_1 ( init_hca, 20,
+		     qpc_eec_cqc_eqc_rdb_parameters.cqc_base_addr_h,
+		     ( icm_offset >> 32 ) );
 	MLX_FILL_2 ( init_hca, 21,
 		     qpc_eec_cqc_eqc_rdb_parameters.cqc_base_addr_l,
-		     ( icm_offset >> 6 ),
+		     ( icm_offset >> 5 ),
 		     qpc_eec_cqc_eqc_rdb_parameters.log_num_of_cq,
 		     log_num_cqs );
-	DBGC ( hermon, "Hermon %p ICM CQC base = %zx\n", hermon, icm_offset );
+	DBGC ( hermon, "Hermon %p ICM CQC base = %llx\n", hermon, icm_offset );
 	icm_offset += icm_usage ( log_num_cqs, hermon->limits.cqc_entry_size );
+
+	/* Event queue contexts */
+	log_num_eqs = fls ( hermon->limits.reserved_eqs + HERMON_MAX_EQS - 1 );
+	MLX_FILL_1 ( init_hca, 32,
+		     qpc_eec_cqc_eqc_rdb_parameters.eqc_base_addr_h,
+		     ( icm_offset >> 32 ) );
+	MLX_FILL_2 ( init_hca, 33,
+		     qpc_eec_cqc_eqc_rdb_parameters.eqc_base_addr_l,
+		     ( icm_offset >> 5 ),
+		     qpc_eec_cqc_eqc_rdb_parameters.log_num_of_eq,
+		     log_num_eqs );
+	DBGC ( hermon, "Hermon %p ICM EQC base = %llx\n", hermon, icm_offset );
+	icm_offset += icm_usage ( log_num_eqs, hermon->limits.eqc_entry_size );
 
 	/* Memory translation table */
 	log_num_mtts = fls ( hermon->limits.reserved_mtts - 1 );
+	MLX_FILL_1 ( init_hca, 64,
+		     tpt_parameters.mtt_base_addr_h, ( icm_offset >> 32 ) );
 	MLX_FILL_1 ( init_hca, 65,
 		     tpt_parameters.mtt_base_addr_l, icm_offset );
-	DBGC ( hermon, "Hermon %p ICM MTT base = %zx\n", hermon, icm_offset );
+	DBGC ( hermon, "Hermon %p ICM MTT base = %llx\n", hermon, icm_offset );
 	icm_offset += icm_usage ( log_num_mtts,
 				  hermon->limits.mtt_entry_size );
 
 	/* Memory protection table */
 	log_num_mpts = fls ( hermon->limits.reserved_mrws + 1 - 1 );
+	MLX_FILL_1 ( init_hca, 60,
+		     tpt_parameters.dmpt_base_adr_h, ( icm_offset >> 32 ) );
 	MLX_FILL_1 ( init_hca, 61,
-		     tpt_parameters.mpt_base_adr_l, icm_offset );
+		     tpt_parameters.dmpt_base_adr_l, icm_offset );
 	MLX_FILL_1 ( init_hca, 62,
-		     tpt_parameters.log_mpt_sz, log_num_mpts );
-	DBGC ( hermon, "Hermon %p ICM MTT base = %zx\n", hermon, icm_offset );
+		     tpt_parameters.log_dmpt_sz, log_num_mpts );
+	DBGC ( hermon, "Hermon %p ICM DMPT base = %llx\n", hermon, icm_offset);
 	icm_offset += icm_usage ( log_num_mpts,
-				  hermon->limits.mpt_entry_size );
-
-	/* RDMA something or other */
-	log_num_rdbs = fls ( hermon->limits.reserved_rdbs - 1 );
-	MLX_FILL_1 ( init_hca, 37,
-		     qpc_eec_cqc_eqc_rdb_parameters.rdb_base_addr_l,
-		     icm_offset );
-	DBGC ( hermon, "Hermon %p ICM RDB base = %zx\n", hermon, icm_offset );
-	icm_offset += icm_usage ( log_num_rdbs, 32 );
-
-	/* Event queue contexts */
-	log_num_eqs = 6;
-	MLX_FILL_2 ( init_hca, 33,
-		     qpc_eec_cqc_eqc_rdb_parameters.eqc_base_addr_l,
-		     ( icm_offset >> 6 ),
-		     qpc_eec_cqc_eqc_rdb_parameters.log_num_eq,
-		     log_num_eqs );
-	DBGC ( hermon, "Hermon %p ICM EQ base = %zx\n", hermon, icm_offset );
-	icm_offset += ( ( 1 << log_num_eqs ) * hermon->limits.eqc_entry_size );
+				  hermon->limits.dmpt_entry_size );
 
 	/* Multicast table */
+	MLX_FILL_1 ( init_hca, 48,
+		     multicast_parameters.mc_base_addr_h,
+		     ( icm_offset >> 32 ) );
 	MLX_FILL_1 ( init_hca, 49,
 		     multicast_parameters.mc_base_addr_l, icm_offset );
 	MLX_FILL_1 ( init_hca, 52,
 		     multicast_parameters.log_mc_table_entry_sz,
 		     fls ( sizeof ( struct hermonprm_mgm_entry ) - 1 ) );
 	MLX_FILL_1 ( init_hca, 53,
-		     multicast_parameters.mc_table_hash_sz, 8 );
+		     multicast_parameters.log_mc_table_hash_sz, 3 );
 	MLX_FILL_1 ( init_hca, 54,
 		     multicast_parameters.log_mc_table_sz, 3 );
-	DBGC ( hermon, "Hermon %p ICM MC base = %zx\n", hermon, icm_offset );
+	DBGC ( hermon, "Hermon %p ICM MC base = %llx\n", hermon, icm_offset );
 	icm_offset += ( 8 * sizeof ( struct hermonprm_mgm_entry ) );
 
 	hermon->icm_len = icm_offset;
 	hermon->icm_len = ( ( hermon->icm_len + 4095 ) & ~4095 );
+
+#if 0
 
 	/* Get ICM auxiliary area size */
 	memset ( &icm_size, 0, sizeof ( icm_size ) );
@@ -1911,7 +1918,7 @@ static int hermon_alloc_icm ( struct hermon *hermon,
  err_set_icm_size:
 	return rc;
 #endif
-	return -ENOSYS;
+	return -ENOTSUP;
 }
 
 /**

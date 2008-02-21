@@ -193,34 +193,30 @@ struct hermon_dev_limits {
 	unsigned int reserved_qps;
 	/** QP context entry size */
 	size_t qpc_entry_size;
-	/** Extended QP context entry size */
-	//	size_t eqpc_entry_size;
+	/** Alternate path context entry size */
+	size_t altc_entry_size;
+	/** Auxiliary context entry size */
+	size_t auxc_entry_size;
 	/** Number of reserved SRQs */
 	unsigned int reserved_srqs;
 	/** SRQ context entry size */
 	size_t srqc_entry_size;
-	/** Number of reserved EEs */
-	//	unsigned int reserved_ees;
-	/** EE context entry size */
-	//	size_t eec_entry_size;
-	/** Extended EE context entry size */
-	//	size_t eeec_entry_size;
 	/** Number of reserved CQs */
 	unsigned int reserved_cqs;
 	/** CQ context entry size */
 	size_t cqc_entry_size;
+	/** Number of reserved EQs */
+	unsigned int reserved_eqs;
+	/** EQ context entry size */
+	size_t eqc_entry_size;
 	/** Number of reserved MTTs */
 	unsigned int reserved_mtts;
 	/** MTT entry size */
 	size_t mtt_entry_size;
 	/** Number of reserved MRWs */
 	unsigned int reserved_mrws;
-	/** MPT entry size */
-	//	size_t mpt_entry_size;
-	/** Number of reserved RDBs */
-	//	unsigned int reserved_rdbs;
-	/** EQ context entry size */
-	size_t eqc_entry_size;
+	/** DMPT entry size */
+	size_t dmpt_entry_size;
 	/** Number of reserved UARs */
 	unsigned int reserved_uars;
 };
@@ -305,6 +301,12 @@ struct hermon_completion_queue {
 	/** Size of completion queue */
 	size_t cqe_size;
 };
+
+/** Maximum number of allocatable event queues
+ *
+ * This is a policy decision, not a device limit.
+ */
+#define HERMON_MAX_EQS		8
 
 /** A Hermon resource bitmask */
 typedef uint32_t hermon_bitmask_t;
