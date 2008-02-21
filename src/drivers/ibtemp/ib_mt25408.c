@@ -621,6 +621,8 @@ static int setup_hca(__u8 port, void **eq_p)
 	init_dev_data();
 	inprm = get_inprm_buf();
 
+
+#if 0
 	rc = reset_hca();
 	if (rc) {
 		eprintf("");
@@ -636,6 +638,7 @@ static int setup_hca(__u8 port, void **eq_p)
 		eprintf("");
 		return rc;
 	}
+#endif
 
 	dev_ib_data.pd = GLOBAL_PD;
 	dev_ib_data.port = port;
@@ -751,6 +754,7 @@ static int setup_hca(__u8 port, void **eq_p)
 	eq_cmpt_size = (tmp << 12);
 	/* End of cMPT table allocation */
 	
+	DBG ( "Hermon ICM QPC base = %llx\n", icm_start );
 	tmp = get_req_icm_pages(dev_cap.log2_rsvd_qps,
 				MAX_APP_QPS,
 				dev_cap.qpc_entry_sz, &log2_entries);
@@ -758,18 +762,24 @@ static int setup_hca(__u8 port, void **eq_p)
 	init_hca.qpc_base_addr_h = icm_start >> 32;
 	init_hca.log_num_of_qp = log2_entries;
 	icm_start += (tmp << 12);
+
+	DBG ( "Hermon ICM ALTC base = %llx\n", icm_start );
 	tmp = get_req_icm_pages(dev_cap.log2_rsvd_qps,
                             MAX_APP_QPS,
                             dev_cap.altc_entry_size, &log2_entries);
 	init_hca.altc_base_addr_l = icm_start & F_MASK;
 	init_hca.altc_base_addr_h = icm_start >> 32;
 	icm_start += (tmp << 12);
+
+	DBG ( "Hermon ICM AUXC base = %llx\n", icm_start );
 	tmp = get_req_icm_pages(dev_cap.log2_rsvd_qps,
                             MAX_APP_QPS,
                             dev_cap.auxc_entry_size, &log2_entries);
 	init_hca.auxc_base_addr_l = icm_start & F_MASK;
 	init_hca.auxc_base_addr_h = icm_start >> 32;
 	icm_start += (tmp << 12);
+
+	DBG ( "Hermon ICM SRQC base = %llx\n", icm_start );
 	tmp = get_req_icm_pages(dev_cap.log2_rsvd_srqs,
                             0, dev_cap.srq_entry_sz, &log2_entries);
 	init_hca.srqc_base_addr_l = icm_start & F_MASK;
@@ -777,6 +787,7 @@ static int setup_hca(__u8 port, void **eq_p)
 	init_hca.log_num_of_srq = log2_entries;
 	icm_start += (tmp << 12);
 
+	DBG ( "Hermon ICM CQC base = %llx\n", icm_start );
 	tmp = get_req_icm_pages(dev_cap.log2_rsvd_cqs,
 				MAX_APP_CQS,
 				dev_cap.cqc_entry_sz, &log2_entries);
@@ -785,6 +796,7 @@ static int setup_hca(__u8 port, void **eq_p)
         init_hca.log_num_of_cq = log2_entries;
 	icm_start += (tmp << 12);
 
+	DBG ( "Hermon ICM EQC base = %llx\n", icm_start );
 	tmp = get_req_icm_pages(0, dev_cap.num_rsvd_eqs + eqn,
 				dev_cap.eqc_entry_sz, &log2_entries);
 	init_hca.eqc_base_addr_l = icm_start & F_MASK;
@@ -792,7 +804,7 @@ static int setup_hca(__u8 port, void **eq_p)
 	init_hca.log_num_of_eq = log2_entries;
 	icm_start += (tmp << 12);
 
-
+	DBG ( "Hermon ICM MTT base = %llx\n", icm_start );
         tmp = get_req_icm_pages(dev_cap.log2_rsvd_mtts,
 				NUM_RESOURCES_MTTS + 
 				get_num_pages(sizeof(ib_buffers),&ib_buffers),
@@ -801,7 +813,7 @@ static int setup_hca(__u8 port, void **eq_p)
 	init_hca.mtt_base_addr_h = icm_start >> 32;
 	icm_start += (tmp << 12);
 
-
+	DBG ( "Hermon ICM DMPT base = %llx\n", icm_start );
 	tmp = get_req_icm_pages(dev_cap.log2_rsvd_mrws,
                             1, dev_cap.d_mpt_entry_sz, &log2_entries);
 	init_hca.dmpt_base_addr_l = icm_start & F_MASK;
@@ -809,6 +821,7 @@ static int setup_hca(__u8 port, void **eq_p)
 	init_hca.log_dmpt_sz = log2_entries;
 	icm_start += (tmp << 12);
 
+	DBG ( "Hermon ICM MC base = %llx\n", icm_start );
 	init_hca.mc_base_addr_l = icm_start & F_MASK;
 	init_hca.mc_base_addr_h = icm_start >> 32;
 	init_hca.log_mc_table_entry_sz =
