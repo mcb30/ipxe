@@ -184,7 +184,8 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 		     opcode_modifier, op_mod,
 		     go, 1,
 		     t, ( 1 - toggle ) );
-	DBGC2_HD ( hermon, &hcr, sizeof ( hcr ) );
+	DBGC2_HDA ( hermon, virt_to_phys ( hermon->config + HERMON_HCR_BASE ),
+		    &hcr, sizeof ( hcr ) );
 	if ( in_len ) {
 		DBGC2 ( hermon, "Input:\n" );
 		DBGC2_HD ( hermon, in, ( ( in_len < 512 ) ? in_len : 512 ) );
@@ -192,7 +193,8 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 
 
 	DBGC ( hermon, "Issuing command:\n" );
-	DBGC_HD ( hermon, &hcr, sizeof ( hcr ) );
+	DBGC_HDA ( hermon, virt_to_phys ( hermon->config + HERMON_HCR_BASE ),
+		   &hcr, sizeof ( hcr ) );
 
 	/* Issue command */
 	for ( i = 0 ; i < ( sizeof ( hcr ) / sizeof ( hcr.u.dwords[0] ) ) ;
@@ -206,7 +208,9 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 	if ( ( rc = hermon_cmd_wait ( hermon, &hcr ) ) != 0 ) {
 		DBGC ( hermon, "Hermon %p timed out waiting for command:\n",
 		       hermon );
-		DBGC_HD ( hermon, &hcr, sizeof ( hcr ) );
+		DBGC_HDA ( hermon,
+			   virt_to_phys ( hermon->config + HERMON_HCR_BASE ),
+			   &hcr, sizeof ( hcr ) );
 		return rc;
 	}
 
@@ -215,7 +219,9 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 	if ( status != 0 ) {
 		DBGC ( hermon, "Hermon %p command failed with status %02x:\n",
 		       hermon, status );
-		DBGC_HD ( hermon, &hcr, sizeof ( hcr ) );
+		DBGC_HDA ( hermon,
+			   virt_to_phys ( hermon->config + HERMON_HCR_BASE ),
+			   &hcr, sizeof ( hcr ) );
 		return -EIO;
 	}
 
