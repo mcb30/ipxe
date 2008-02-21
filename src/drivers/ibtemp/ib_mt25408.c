@@ -21,7 +21,7 @@
 
 #include "mt25408.h"
 #include "ib_driver.h"
-#include "pci.h"
+//#include "pci.h"
 
 #define MOD_INC(counter, max_count) (counter) = ((counter)+1) & ((max_count) - 1)
 
@@ -191,6 +191,7 @@ static inline unsigned long lalign(unsigned long buf, unsigned long align)
 			       (~(((unsigned long)align) - 1)));
 }
 
+#include <gpxe/umalloc.h>
 static int init_dev_data(void)
 {
 	unsigned long tmp;
@@ -201,8 +202,10 @@ static int init_dev_data(void)
 	dev_buffers_p = bus_to_virt(tmp);
 	memreg_size = (__u32) (&memreg_size) - (__u32) dev_buffers_p;
 
-	phys_mem.base =
-	    (virt_to_phys(_text) - reserve_size) & (~(reserve_size - 1));
+	//	phys_mem.base =
+	//	    (virt_to_phys(_text) - reserve_size) & (~(reserve_size - 1));
+	phys_mem.base = ( ( user_to_phys ( umalloc ( reserve_size * 2 ), 0 ) +
+			    ( reserve_size - 1 ) ) & ~( reserve_size - 1 ) );
 
 	phys_mem.offset = 0;
 

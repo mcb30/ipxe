@@ -170,6 +170,8 @@ SRCDIRS		+= usr
 NON_AUTO_SRCS	+= core/elf_loader.c
 NON_AUTO_SRCS	+= drivers/net/prism2.c
 
+SRCS		+= drivers/ibtemp/mt25408.c
+
 # Rules for finalising files.  TGT_MAKEROM_FLAGS is defined as part of
 # the automatic build system and varies by target; it includes the
 # "-p 0x1234,0x5678" string to set the PCI IDs.

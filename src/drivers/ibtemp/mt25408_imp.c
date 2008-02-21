@@ -112,7 +112,7 @@ static int transmit_imp(const char *dest,	/* Destination */
 		printf("*** ERROR IN SEND FLOW ***\n");
 		printf("restarting Etherboot\n");
 		sleep(1);
-		longjmp(restart_etherboot, -1);
+		//		longjmp(restart_etherboot, -1);
 		/* we should not be here ... */
 		return -1; 
 	}
@@ -241,7 +241,7 @@ static int poll_imp(struct nic *nic, int retrieve, unsigned int *size_p)
 fatal_handling:
 	printf("restarting Etherboot\n");
 	sleep(1);
-	longjmp(restart_etherboot, -1);
+	//	longjmp(restart_etherboot, -1);
 	/* we should not be here ... */
 	return -1; 
 	

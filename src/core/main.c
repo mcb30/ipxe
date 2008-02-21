@@ -33,6 +33,8 @@ __cdecl int main ( void ) {
 		shell();
 	else
 		autoboot();
+
+	shell();
 	
 	shutdown();
 

@@ -15,9 +15,9 @@ Skeleton NIC driver for Etherboot
 /* to get the interface to the body of the program */
 #include "nic.h"
 /* to get the PCI support functions, if this is a PCI NIC */
-#include "pci.h"
+//#include "pci.h"
 /* to get the ISA support functions, if this is an ISA NIC */
-#include "isa.h"
+//#include "isa.h"
 
 #include "mt_version.c"
 #include "mt25408_imp.c"
@@ -154,7 +154,7 @@ static void mt25408_transmit(struct nic *nic, const char *dest,	/* Destination *
 /**************************************************************************
 DISABLE - Turn off ethernet interface
 ***************************************************************************/
-static void mt25408_disable(struct dev *dev)
+static void mt25408_disable(struct nic *nic)
 {
 	/* put the card in its initial state */
 	/* This function serves 3 purposes.
@@ -166,7 +166,7 @@ static void mt25408_disable(struct dev *dev)
 	 * This allows etherboot to reinitialize the interface
 	 *  if something is something goes wrong.
 	 */
-	if (dev || 1) {		// ????
+	if (nic || 1) {		// ????
 		disable_imp();
 	}
 }
@@ -175,9 +175,15 @@ static void mt25408_disable(struct dev *dev)
 PROBE - Look for an adapter, this routine's visible to the outside
 ***************************************************************************/
 
-static int mt25408_probe(struct dev *dev, struct pci_device *pci)
+static struct nic_operations mt25408_operations = {
+	.connect	= dummy_connect,
+	.poll		= mt25408_poll,
+	.transmit	= mt25408_transmit,
+	.irq		= mt25408_irq,
+};
+
+static int mt25408_probe(struct nic *nic, struct pci_device *pci)
 {
-	struct nic *nic = (struct nic *)dev;
 	int rc;
 	unsigned char user_request;
 
@@ -227,10 +233,7 @@ static int mt25408_probe(struct dev *dev, struct pci_device *pci)
 		nic->ioaddr = pci->ioaddr & ~3;
 		nic->irqno = pci->irq;
 		/* point to NIC specific routines */
-		dev->disable = mt25408_disable;
-		nic->poll = mt25408_poll;
-		nic->transmit = mt25408_transmit;
-		nic->irq = mt25408_irq;
+		nic->nic_op = &mt25408_operations;
 
 		return 1;
 	}
@@ -239,17 +242,12 @@ static int mt25408_probe(struct dev *dev, struct pci_device *pci)
 }
 
 
-static struct pci_id mt25408_nics[] = {
+static struct pci_device_id mt25408_nics[] = {
     PCI_ROM(0x15b3, 0x6340, "MT25408", "MT25408 HCA driver"),
     PCI_ROM(0x15b3, 0x634a, "MT25418", "MT25418 HCA driver"),
     
 };
 
-static struct pci_driver mt25408_driver __pci_driver = {
-	.type = NIC_DRIVER,
-	.name = "MT25408",
-	.probe = mt25408_probe,
-	.ids = mt25408_nics,
-	.id_count = sizeof(mt25408_nics) / sizeof(mt25408_nics[0]),
-	.class = 0,
-};
+PCI_DRIVER ( mt25408_driver, mt25408_nics, PCI_NO_CLASS );
+DRIVER ( "MT25048", nic_driver, pci_driver, mt25408_driver,
+	 mt25408_probe, mt25408_disable );
