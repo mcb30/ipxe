@@ -107,6 +107,7 @@ static void hermon_free_qn_offset ( hermon_bitmask_t *q_inuse,
  * Wait for Hermon command completion
  *
  * @v hermon		Hermon device
+ * @v hcr		HCA command registers
  * @ret rc		Return status code
  */
 static int hermon_cmd_wait ( struct hermon *hermon,
@@ -116,7 +117,8 @@ static int hermon_cmd_wait ( struct hermon *hermon,
 	for ( wait = HERMON_HCR_MAX_WAIT_MS ; wait ; wait-- ) {
 		hcr->u.dwords[6] =
 			readl ( hermon->config + HERMON_HCR_REG ( 6 ) );
-		if ( MLX_GET ( hcr, go ) == 0 )
+		if ( ( MLX_GET ( hcr, go ) == 0 ) &&
+		     ( MLX_GET ( hcr, t ) == hermon->toggle ) )
 			return 0;
 		mdelay ( 1 );
 	}
@@ -143,7 +145,6 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 	size_t out_len = HERMON_HCR_OUT_LEN ( command );
 	void *in_buffer;
 	void *out_buffer;
-	unsigned int toggle;
 	unsigned int status;
 	unsigned int i;
 	int rc;
@@ -162,7 +163,9 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 		       hermon );
 		return rc;
 	}
-	toggle = MLX_GET ( &hcr, t );
+
+	/* Flip HCR toggle */
+	hermon->toggle = ( 1 - hermon->toggle );
 
 	/* Prepare HCR */
 	memset ( &hcr, 0, sizeof ( hcr ) );
@@ -183,7 +186,7 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 		     opcode, opcode,
 		     opcode_modifier, op_mod,
 		     go, 1,
-		     t, ( 1 - toggle ) );
+		     t, hermon->toggle );
 	DBGC2_HDA ( hermon, virt_to_phys ( hermon->config + HERMON_HCR_BASE ),
 		    &hcr, sizeof ( hcr ) );
 	if ( in_len ) {

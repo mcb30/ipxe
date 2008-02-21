@@ -321,6 +321,8 @@ struct hermon {
 	/** PCI user Access Region */
 	void *uar;
 
+	/** Command toggle */
+	unsigned int toggle;
 	/** Command input mailbox */
 	void *mailbox_in;
 	/** Command output mailbox */
