@@ -610,7 +610,8 @@ static int cmd_mad_ifc(void *inprm, struct ib_mad_st *mad, __u8 port)
 
 	memset(&cmd_desc, 0, sizeof cmd_desc);
 	cmd_desc.opcode = XDEV_CMD_MAD_IFC;
-	cmd_desc.opcode_modifier = 1;	/* no mkey/bkey validation */
+	//	cmd_desc.opcode_modifier = 1;	/* no mkey/bkey validation */
+	cmd_desc.opcode_modifier = 3;	/* no mkey/bkey validation */
 	cmd_desc.input_modifier = port;
 	cmd_desc.in_trans = TRANS_MAILBOX;
 	cmd_desc.in_param_size = 256;
