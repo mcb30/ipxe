@@ -23,6 +23,8 @@
 #include "ib_driver.h"
 //#include "pci.h"
 
+#define SKIP_OPTIONAL_CMDS 1
+
 #define MOD_INC(counter, max_count) (counter) = ((counter)+1) & ((max_count) - 1)
 
 #define MAX(a, b) (a > b ? a : b)
@@ -408,8 +410,13 @@ static void prep_sw2hw_mpt_buf(void *buf, __u32 mkey)
 
 	ptr[2] = mkey;
 	ptr[3] = GLOBAL_PD;
+
+
+	ptr[10] = 0x00400000UL; /* bit64 */
+#if 0
 	ptr[5] = virt_to_bus(dev_buffers_p);
 	ptr[7] = memreg_size;
+#endif
 }
 
 static void prep_sw2hw_eq_buf(void *buf, __u32 page_offset, __u32 mtt_offset)
@@ -707,11 +714,13 @@ static int setup_hca(__u8 port, void **eq_p)
 		goto undo_map_fa;
 	}
 
+#if ! SKIP_OPTIONAL_CMDS
 	rc = cmd_mod_stat_cfg();
 	if (rc) {
 		eprintf("");
 		goto undo_map_fa;
 	}
+#endif
 
 
 	/* actually query_dev_cap */
@@ -931,12 +940,14 @@ static int setup_hca(__u8 port, void **eq_p)
 		goto undo_map_fa;
 	}
 
+#if ! SKIP_OPTIONAL_CMDS
 	rc = cmd_query_adapter(&qa);
 	if (rc) {
 		eprintf("");
 		return rc;
 	}
 	dev_ib_data.clr_int_data = 1 << qa.intapin;
+#endif
 
 	mkey_idx = 1 << dev_cap.log2_rsvd_mrws;
 	mem_key = (mkey_idx << 8) | (MKEY_PREFIX >> 24);
@@ -951,6 +962,7 @@ static int setup_hca(__u8 port, void **eq_p)
 	  
         dev_ib_data.mkey = mem_key;
 
+#if ! SKIP_OPTIONAL_CMDS
 	/* TODO: check it */
 	uar_eq = ioremap((unsigned long)hermon_pci_dev.uar + (uar_eqn << 12), 4096);
 
@@ -995,6 +1007,7 @@ static int setup_hca(__u8 port, void **eq_p)
 	dev_ib_data.eq.cons_counter = 0;
 	dev_ib_data.eq.eq_size = 1 << LOG2_EQ_SZ;
 	dev_ib_data.eq.eq_doorbell = uar_eq;
+#endif
 
 	prep_set_port(inprm);
 	rc = cmd_init_ib(port,inprm,SET_PORT_IBUF_SZ);
