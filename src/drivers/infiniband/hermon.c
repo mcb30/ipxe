@@ -1730,9 +1730,15 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	unsigned int log_num_mtts, log_num_mpts;
 	size_t cmpt_max_len;
 	size_t qp_cmpt_len, srq_cmpt_len, cq_cmpt_len, eq_cmpt_len;
-	size_t icm_len, icm_aux_len, icm_mapped;
+	size_t icm_len, icm_aux_len;
+	physaddr_t icm_phys;
 	int i;
 	int rc;
+
+	/*
+	 * Start by carving up the ICM virtual address space
+	 *
+	 */
 
 	/* Calculate number of each object type within ICM */
 	log_num_qps = fls ( hermon->cap.reserved_qps + HERMON_MAX_QPS - 1 );
@@ -1875,6 +1881,15 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	hermon->icm_map[HERMON_ICM_OTHER].len =
 		( icm_offset - hermon->icm_map[HERMON_ICM_OTHER].offset );
 
+	/*
+	 * Allocate and map physical memory for (portions of) ICM
+	 *
+	 * Map is:
+	 *   ICM AUX area (aligned to its own size)
+	 *   cMPT areas
+	 *   Other areas
+	 */
+
 	/* Calculate physical memory required for ICM */
 	icm_len = 0;
 	for ( i = 0 ; i < HERMON_ICM_NUM_REGIONS ; i++ ) {
@@ -1898,26 +1913,29 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	/* Allocate ICM data and auxiliary area */
 	DBGC ( hermon, "Hermon %p requires %zd kB ICM and %zd kB AUX ICM\n",
 	       hermon, ( icm_len / 1024 ), ( icm_aux_len / 1024 ) );
-	hermon->icm = umalloc ( icm_len + icm_aux_len );
+	hermon->icm = umalloc ( 2 * icm_aux_len + icm_len );
 	if ( ! hermon->icm ) {
 		rc = -ENOMEM;
 		goto err_alloc;
 	}
+	icm_phys = user_to_phys ( hermon->icm, 0 );
 
 	/* Map ICM auxiliary area */
+	icm_phys = ( ( icm_phys + icm_aux_len - 1 ) & ~( icm_aux_len - 1 ) );
 	memset ( &map_icm_aux, 0, sizeof ( map_icm_aux ) );
 	MLX_FILL_2 ( &map_icm_aux, 3,
 		     log2size, fls ( ( icm_aux_len / 4096 ) - 1 ),
-		     pa_l,
-		     ( user_to_phys ( hermon->icm, icm_len ) >> 12 ) );
+		     pa_l, ( icm_phys >> 12 ) );
+	DBGC ( hermon, "Hermon %p mapping ICM AUX (2^%d pages) => %08lx\n",
+	       hermon, fls ( ( icm_aux_len / 4096 ) - 1 ), icm_phys );
 	if ( ( rc = hermon_cmd_map_icm_aux ( hermon, &map_icm_aux ) ) != 0 ) {
 		DBGC ( hermon, "Hermon %p could not map AUX ICM: %s\n",
 		       hermon, strerror ( rc ) );
 		goto err_map_icm_aux;
 	}
+	icm_phys += icm_aux_len;
 
 	/* MAP ICM area */
-	icm_mapped = 0;
 	for ( i = 0 ; i < HERMON_ICM_NUM_REGIONS ; i++ ) {
 		memset ( &map_icm, 0, sizeof ( map_icm ) );
 		MLX_FILL_1 ( &map_icm, 0,
@@ -1926,21 +1944,19 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		MLX_FILL_2 ( &map_icm, 3,
 			     log2size,
 			     fls ( ( hermon->icm_map[i].len / 4096 ) - 1 ),
-			     pa_l, ( user_to_phys ( hermon->icm,
-						    icm_mapped ) >> 12 ) );
+			     pa_l, ( icm_phys >> 12 ) );
 		DBGC ( hermon, "Hermon %p mapping ICM %llx+%zx (2^%d pages) "
-		       "=> %08zx (%08lx)\n", hermon,
-		       hermon->icm_map[i].offset, hermon->icm_map[i].len,
+		       "=> %08lx\n", hermon, hermon->icm_map[i].offset,
+		       hermon->icm_map[i].len,
 		       fls ( ( hermon->icm_map[i].len / 4096 ) - 1 ),
-		       icm_mapped, user_to_phys ( hermon->icm, icm_mapped ) );
+		       icm_phys );
 		if ( ( rc = hermon_cmd_map_icm ( hermon, &map_icm ) ) != 0 ) {
 			DBGC ( hermon, "Hermon %p could not map ICM: %s\n",
 			       hermon, strerror ( rc ) );
 			goto err_map_icm;
 		}
-		icm_mapped += hermon->icm_map[i].len;
+		icm_phys += hermon->icm_map[i].len;
 	}
-	assert ( icm_mapped == icm_len );
 
 #if 0
 	/* Initialise UAR context */
@@ -2012,7 +2028,7 @@ static int hermon_init_port ( struct hermon *hermon ) {
 		     port_width_cap, 3,
 		     vl_cap, 1 );
 	MLX_FILL_2 ( &init_port, 1,
-		     mtu, 2048,
+		     mtu, HERMON_MTU_2048,
 		     max_gid, 1 );
 	MLX_FILL_1 ( &init_port, 2, max_pkey, 64 );
 	if ( ( rc = hermon_cmd_init_port ( hermon, PXE_IB_PORT,
@@ -2149,7 +2165,9 @@ static int hermon_probe ( struct pci_device *pci,
 		goto err_alloc_icm;
 
 	/* Initialise HCA */
-	MLX_FILL_1 ( &init_hca, 74, uar_parameters.log_max_uars, 1 );
+	MLX_FILL_1 ( &init_hca, 0, version, 0x02 /* "Must be 0x02" */ );
+	MLX_FILL_1 ( &init_hca, 5, udp, 1 );
+	MLX_FILL_1 ( &init_hca, 74, uar_parameters.log_max_uars, 8 );
 	if ( ( rc = hermon_cmd_init_hca ( hermon, &init_hca ) ) != 0 ) {
 		DBGC ( hermon, "Hermon %p could not initialise HCA: %s\n",
 		       hermon, strerror ( rc ) );

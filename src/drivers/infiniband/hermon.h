@@ -72,6 +72,9 @@
 /* Service types */
 #define HERMON_ST_UD			0x03
 
+/* MTUs */
+#define HERMON_MTU_2048			0x04
+
 #define HERMON_NO_EQ			64
 
 #define HERMON_INVALID_LKEY		0x00000100UL
@@ -329,7 +332,7 @@ struct hermon_completion_queue {
  *
  * This is a policy decision, not a device limit.
  */
-#define HERMON_MAX_EQS		8
+#define HERMON_MAX_EQS		4
 
 /** A Hermon resource bitmask */
 typedef uint32_t hermon_bitmask_t;
