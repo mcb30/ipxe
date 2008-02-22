@@ -187,17 +187,14 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 		     opcode_modifier, op_mod,
 		     go, 1,
 		     t, hermon->toggle );
-	DBGC2_HDA ( hermon, virt_to_phys ( hermon->config + HERMON_HCR_BASE ),
-		    &hcr, sizeof ( hcr ) );
-	if ( in_len ) {
-		DBGC2 ( hermon, "Input:\n" );
-		DBGC2_HD ( hermon, in, ( ( in_len < 512 ) ? in_len : 512 ) );
-	}
-
-
 	DBGC ( hermon, "Issuing command:\n" );
 	DBGC_HDA ( hermon, virt_to_phys ( hermon->config + HERMON_HCR_BASE ),
 		   &hcr, sizeof ( hcr ) );
+	if ( in_len && ( command & HERMON_HCR_IN_MBOX ) ) {
+		DBGC2 ( hermon, "Input mailbox:\n" );
+		DBGC2_HDA ( hermon, virt_to_phys ( in ), in,
+			    ( ( in_len < 512 ) ? in_len : 512 ) );
+	}
 
 	/* Issue command */
 	for ( i = 0 ; i < ( sizeof ( hcr ) / sizeof ( hcr.u.dwords[0] ) ) ;
@@ -233,9 +230,10 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 	hcr.u.dwords[4] = readl ( hermon->config + HERMON_HCR_REG ( 4 ) );
 	memcpy ( out, out_buffer, out_len );
 	if ( out_len ) {
-		DBGC2 ( hermon, "Output:\n" );
-		DBGC2_HD ( hermon, out,
-			   ( ( out_len < 512 ) ? out_len : 512 ) );
+		DBGC2 ( hermon, "Output%s:\n",
+			( command & HERMON_HCR_OUT_MBOX ) ? " mailbox" : "" );
+		DBGC2_HDA ( hermon, virt_to_phys ( out ), out,
+			    ( ( out_len < 512 ) ? out_len : 512 ) );
 	}
 
 	return 0;

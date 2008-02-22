@@ -181,6 +181,11 @@ static XHH_cmd_status_t cmd_invoke(command_fields_t *cmd_prms)
 	be_to_cpu_buf ( hack, sizeof ( hack ) );
 	DBG_HDA ( virt_to_phys ( hermon_pci_dev.cr_space + HCR_BASE ),
 		  hack, sizeof ( hack ) );
+	if ( cmd_prms->in_trans == TRANS_MAILBOX ) {
+		DBG2 ( "Input mailbox:\n" );
+		DBG2_HDA ( virt_to_phys ( cmd_prms->in_param ),
+			   cmd_prms->in_param, cmd_prms->in_param_size );
+	}
     
 	for (i = 0; i < 7; ++i) {
 		ret = gw_write_cr(HCR_BASE + i * 4, hcr[i]);
@@ -198,6 +203,7 @@ static XHH_cmd_status_t cmd_invoke(command_fields_t *cmd_prms)
 		return -1;
 	}
 
+#if 0
 	int z;
 	for ( z = 0 ; z < 7 ; z++ ) {
 		gw_read_cr ( HCR_BASE + z * 4, &hack[z] );
@@ -206,6 +212,7 @@ static XHH_cmd_status_t cmd_invoke(command_fields_t *cmd_prms)
 	DBG ( "Response:\n" );
 	DBG_HDA ( virt_to_phys ( hermon_pci_dev.cr_space + HCR_BASE ),
 		  hack, sizeof ( hack ) );
+#endif
 
 	__asm__ __volatile__("":::"memory");
 	ret = gw_read_cr(HCR_OFFSET_STATUS, &data);
@@ -219,13 +226,22 @@ static XHH_cmd_status_t cmd_invoke(command_fields_t *cmd_prms)
 	if (status) 
 		return status;
 
-	if (cmd_prms->out_trans == TRANS_MAILBOX)
+	if (cmd_prms->out_trans == TRANS_MAILBOX) {
+		DBG2 ( "Output mailbox:\n" );
+		DBG2_HDA ( virt_to_phys ( cmd_prms->out_param ),
+			   cmd_prms->out_param, cmd_prms->out_param_size );
 		be_to_cpu_buf(cmd_prms->out_param, cmd_prms->out_param_size);
-	else if (cmd_prms->out_trans == TRANS_IMMEDIATE) {
+	} else if (cmd_prms->out_trans == TRANS_IMMEDIATE) {
 		if (gw_read_cr(HCR_OFFSET_OUTPRM_H, &cmd_prms->out_param[0]))
 			return -1;
 		if (gw_read_cr(HCR_OFFSET_OUTPRM_L, &cmd_prms->out_param[1]))
 			return -1;
+		DBG2 ( "Output:\n" );
+		uint32_t x[2];
+		x[0] = ntohl ( cmd_prms->out_param[0] );
+		x[1] = ntohl ( cmd_prms->out_param[1] );
+		DBG2_HDA ( virt_to_phys ( hermon_pci_dev.cr_space +
+					  HCR_BASE + 3*4 ), x, 8 );
 	}
 
 	return 0;
