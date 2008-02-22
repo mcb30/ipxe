@@ -86,6 +86,8 @@ static void edit_hcr(command_fields_t *cmd_prms, __u32 *buf)
 		break;
 
 	case TRANS_IMMEDIATE:
+		buf[3] = 0;
+		buf[4] = 0;
 		break;
 	case TRANS_MAILBOX:
 		buf[3] = 0;
