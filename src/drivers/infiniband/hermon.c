@@ -412,10 +412,12 @@ hermon_cmd_run_fw ( struct hermon *hermon ) {
 }
 
 static inline int
-hermon_cmd_unmap_icm ( struct hermon *hermon, unsigned int page_count ) {
+hermon_cmd_unmap_icm ( struct hermon *hermon, unsigned int page_count,
+		       const struct hermonprm_scalar_parameter *offset ) {
 	return hermon_cmd ( hermon,
-			    HERMON_HCR_VOID_CMD ( HERMON_HCR_UNMAP_ICM ),
-			    0, NULL, page_count, NULL );
+			    HERMON_HCR_IN_CMD ( HERMON_HCR_UNMAP_ICM,
+						0, sizeof ( *offset ) ),
+			    0, offset, page_count, NULL );
 }
 
 static inline int
@@ -505,7 +507,7 @@ static int hermon_create_cq ( struct ib_device *ibdev,
 		rc = cqn_offset;
 		goto err_cqn_offset;
 	}
-	cq->cqn = ( hermon->limits.reserved_cqs + cqn_offset );
+	cq->cqn = ( hermon->cap.reserved_cqs + cqn_offset );
 
 	/* Allocate control structures */
 	hermon_cq = zalloc ( sizeof ( *hermon_cq ) );
@@ -548,7 +550,7 @@ static int hermon_create_cq ( struct ib_device *ibdev,
 	MLX_FILL_1 ( &cqctx, 2, start_address_l,
 		     virt_to_bus ( hermon_cq->cqe ) );
 	MLX_FILL_2 ( &cqctx, 3,
-		     usr_page, hermon->limits.reserved_uars,
+		     usr_page, hermon->cap.reserved_uars,
 		     log_cq_size, fls ( cq->num_cqes - 1 ) );
 	MLX_FILL_1 ( &cqctx, 5, c_eqn, HERMON_NO_EQ );
 	MLX_FILL_1 ( &cqctx, 6, pd, HERMON_GLOBAL_PD );
@@ -620,7 +622,7 @@ static void hermon_destroy_cq ( struct ib_device *ibdev,
 	free ( hermon_cq );
 
 	/* Mark queue number as free */
-	cqn_offset = ( cq->cqn - hermon->limits.reserved_cqs );
+	cqn_offset = ( cq->cqn - hermon->cap.reserved_cqs );
 	hermon_free_qn_offset ( hermon->cq_inuse, cqn_offset );
 
 	cq->dev_priv = NULL;
@@ -746,7 +748,7 @@ static int hermon_create_qp ( struct ib_device *ibdev,
 		rc = qpn_offset;
 		goto err_qpn_offset;
 	}
-	qp->qpn = ( HERMON_QPN_BASE + hermon->limits.reserved_qps +
+	qp->qpn = ( HERMON_QPN_BASE + hermon->cap.reserved_qps +
 		    qpn_offset );
 
 	/* Allocate control structures */
@@ -794,7 +796,7 @@ static int hermon_create_qp ( struct ib_device *ibdev,
 		     qpc_eec_data.log_sq_stride,
 		     ( fls ( sizeof ( hermon_qp->send.wqe[0] ) - 1 ) - 4 ) );
 	MLX_FILL_1 ( &qpctx, 5,
-		     qpc_eec_data.usr_page, hermon->limits.reserved_uars );
+		     qpc_eec_data.usr_page, hermon->cap.reserved_uars );
 	MLX_FILL_1 ( &qpctx, 10, qpc_eec_data.primary_address_path.port_number,
 		     PXE_IB_PORT );
 	MLX_FILL_1 ( &qpctx, 27, qpc_eec_data.pd, HERMON_GLOBAL_PD );
@@ -902,7 +904,7 @@ static void hermon_destroy_qp ( struct ib_device *ibdev,
 
 	/* Mark queue number as free */
 	qpn_offset = ( qp->qpn - HERMON_QPN_BASE -
-		       hermon->limits.reserved_qps );
+		       hermon->cap.reserved_qps );
 	hermon_free_qn_offset ( hermon->qp_inuse, qpn_offset );
 
 	qp->dev_priv = NULL;
@@ -1671,26 +1673,27 @@ static int hermon_get_limits ( struct hermon *hermon ) {
 		return rc;
 	}
 
-	hermon->limits.reserved_qps =
+	hermon->cap.cmpt_entry_size = MLX_GET ( &dev_cap, c_mpt_entry_sz );
+	hermon->cap.reserved_qps =
 		( 1 << MLX_GET ( &dev_cap, log2_rsvd_qps ) );
-	hermon->limits.qpc_entry_size = MLX_GET ( &dev_cap, qpc_entry_sz );
-	hermon->limits.altc_entry_size = MLX_GET ( &dev_cap, altc_entry_sz );
-	hermon->limits.auxc_entry_size = MLX_GET ( &dev_cap, aux_entry_sz );
-	hermon->limits.reserved_srqs =
+	hermon->cap.qpc_entry_size = MLX_GET ( &dev_cap, qpc_entry_sz );
+	hermon->cap.altc_entry_size = MLX_GET ( &dev_cap, altc_entry_sz );
+	hermon->cap.auxc_entry_size = MLX_GET ( &dev_cap, aux_entry_sz );
+	hermon->cap.reserved_srqs =
 		( 1 << MLX_GET ( &dev_cap, log2_rsvd_srqs ) );
-	hermon->limits.srqc_entry_size = MLX_GET ( &dev_cap, srq_entry_sz );
-	hermon->limits.reserved_cqs =
+	hermon->cap.srqc_entry_size = MLX_GET ( &dev_cap, srq_entry_sz );
+	hermon->cap.reserved_cqs =
 		( 1 << MLX_GET ( &dev_cap, log2_rsvd_cqs ) );
-	hermon->limits.cqc_entry_size = MLX_GET ( &dev_cap, cqc_entry_sz );
-	hermon->limits.reserved_eqs = MLX_GET ( &dev_cap, num_rsvd_eqs );
-	hermon->limits.eqc_entry_size = MLX_GET ( &dev_cap, eqc_entry_sz );
-	hermon->limits.reserved_mtts =
+	hermon->cap.cqc_entry_size = MLX_GET ( &dev_cap, cqc_entry_sz );
+	hermon->cap.reserved_eqs = MLX_GET ( &dev_cap, num_rsvd_eqs );
+	hermon->cap.eqc_entry_size = MLX_GET ( &dev_cap, eqc_entry_sz );
+	hermon->cap.reserved_mtts =
 		( 1 << MLX_GET ( &dev_cap, log2_rsvd_mtts ) );
-	hermon->limits.mtt_entry_size = MLX_GET ( &dev_cap, mtt_entry_sz );
-	hermon->limits.reserved_mrws =
+	hermon->cap.mtt_entry_size = MLX_GET ( &dev_cap, mtt_entry_sz );
+	hermon->cap.reserved_mrws =
 		( 1 << MLX_GET ( &dev_cap, log2_rsvd_mrws ) );
-	hermon->limits.dmpt_entry_size = MLX_GET ( &dev_cap, d_mpt_entry_sz );
-	hermon->limits.reserved_uars = MLX_GET ( &dev_cap, num_rsvd_uars );
+	hermon->cap.dmpt_entry_size = MLX_GET ( &dev_cap, d_mpt_entry_sz );
+	hermon->cap.reserved_uars = MLX_GET ( &dev_cap, num_rsvd_uars );
 
 	return 0;
 }
@@ -1725,19 +1728,43 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	struct hermonprm_virtual_physical_mapping map_icm;
 	union hermonprm_doorbell_record *db_rec;
 	uint64_t icm_offset = 0;
-	unsigned int log_num_qps, log_num_srqs, log_num_ees, log_num_cqs;
-	unsigned int log_num_mtts, log_num_mpts, log_num_rdbs, log_num_eqs;
+	unsigned int log_num_qps, log_num_srqs, log_num_cqs, log_num_eqs;
+	unsigned int log_num_mtts, log_num_mpts;
+	size_t cmpt_max_len;
+	size_t qp_cmpt_len, srq_cmpt_len, cq_cmpt_len, eq_cmpt_len;
+	size_t icm_len, icm_aux_len, icm_mapped;
+	int i;
 	int rc;
 
-	icm_offset = ( ( hermon->limits.reserved_uars + 1 ) << 12 );
+	/* Calculate number of each object type within ICM */
+	log_num_qps = fls ( hermon->cap.reserved_qps + HERMON_MAX_QPS - 1 );
+	log_num_srqs = fls ( hermon->cap.reserved_srqs - 1 );
+	log_num_cqs = fls ( hermon->cap.reserved_cqs + HERMON_MAX_CQS - 1 );
+	log_num_eqs = fls ( hermon->cap.reserved_eqs + HERMON_MAX_EQS - 1 );
 
+	/* ICM starts with the cMPT tables, which are sparse */
+	cmpt_max_len = ( HERMON_CMPT_MAX_ENTRIES *
+			 ( ( uint64_t ) hermon->cap.cmpt_entry_size ) );
+	qp_cmpt_len = icm_usage ( log_num_qps, hermon->cap.cmpt_entry_size );
+	hermon->icm_map[HERMON_ICM_QP_CMPT].offset = icm_offset;
+	hermon->icm_map[HERMON_ICM_QP_CMPT].len = qp_cmpt_len;
+	icm_offset += cmpt_max_len;
+	srq_cmpt_len = icm_usage ( log_num_srqs, hermon->cap.cmpt_entry_size );
+	hermon->icm_map[HERMON_ICM_SRQ_CMPT].offset = icm_offset;
+	hermon->icm_map[HERMON_ICM_SRQ_CMPT].len = srq_cmpt_len;
+	icm_offset += cmpt_max_len;
+	cq_cmpt_len = icm_usage ( log_num_cqs, hermon->cap.cmpt_entry_size );
+	hermon->icm_map[HERMON_ICM_CQ_CMPT].offset = icm_offset;
+	hermon->icm_map[HERMON_ICM_CQ_CMPT].len = cq_cmpt_len;
+	icm_offset += cmpt_max_len;
+	eq_cmpt_len = icm_usage ( log_num_eqs, hermon->cap.cmpt_entry_size );
+	hermon->icm_map[HERMON_ICM_EQ_CMPT].offset = icm_offset;
+	hermon->icm_map[HERMON_ICM_EQ_CMPT].len = eq_cmpt_len;
+	icm_offset += cmpt_max_len;
 
-#warning "hack alert"
-	icm_offset = ( 1ULL << 32 );
-
+	hermon->icm_map[HERMON_ICM_OTHER].offset = icm_offset;
 
 	/* Queue pair contexts */
-	log_num_qps = fls ( hermon->limits.reserved_qps + HERMON_MAX_QPS - 1 );
 	MLX_FILL_1 ( init_hca, 12,
 		     qpc_eec_cqc_eqc_rdb_parameters.qpc_base_addr_h,
 		     ( icm_offset >> 32 ) );
@@ -1747,7 +1774,7 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		     qpc_eec_cqc_eqc_rdb_parameters.log_num_of_qp,
 		     log_num_qps );
 	DBGC ( hermon, "Hermon %p ICM QPC base = %llx\n", hermon, icm_offset );
-	icm_offset += icm_usage ( log_num_qps, hermon->limits.qpc_entry_size );
+	icm_offset += icm_usage ( log_num_qps, hermon->cap.qpc_entry_size );
 
 	/* Extended alternate path contexts */
 	MLX_FILL_1 ( init_hca, 24,
@@ -1758,7 +1785,7 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		     icm_offset );
 	DBGC ( hermon, "Hermon %p ICM ALTC base = %llx\n", hermon, icm_offset);
 	icm_offset += icm_usage ( log_num_qps,
-				  hermon->limits.altc_entry_size );
+				  hermon->cap.altc_entry_size );
 
 	/* Extended auxiliary contexts */
 	MLX_FILL_1 ( init_hca, 28,
@@ -1769,10 +1796,9 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		     icm_offset );
 	DBGC ( hermon, "Hermon %p ICM AUXC base = %llx\n", hermon, icm_offset);
 	icm_offset += icm_usage ( log_num_qps,
-				  hermon->limits.auxc_entry_size );
+				  hermon->cap.auxc_entry_size );
 
 	/* Shared receive queue contexts */
-	log_num_srqs = fls ( hermon->limits.reserved_srqs - 1 );
 	MLX_FILL_1 ( init_hca, 18,
 		     qpc_eec_cqc_eqc_rdb_parameters.srqc_base_addr_h,
 		     ( icm_offset >> 32 ) );
@@ -1783,10 +1809,9 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		     log_num_srqs );
 	DBGC ( hermon, "Hermon %p ICM SRQC base = %llx\n", hermon, icm_offset);
 	icm_offset += icm_usage ( log_num_srqs,
-				  hermon->limits.srqc_entry_size );
+				  hermon->cap.srqc_entry_size );
 
 	/* Completion queue contexts */
-	log_num_cqs = fls ( hermon->limits.reserved_cqs + HERMON_MAX_CQS - 1 );
 	MLX_FILL_1 ( init_hca, 20,
 		     qpc_eec_cqc_eqc_rdb_parameters.cqc_base_addr_h,
 		     ( icm_offset >> 32 ) );
@@ -1796,10 +1821,9 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		     qpc_eec_cqc_eqc_rdb_parameters.log_num_of_cq,
 		     log_num_cqs );
 	DBGC ( hermon, "Hermon %p ICM CQC base = %llx\n", hermon, icm_offset );
-	icm_offset += icm_usage ( log_num_cqs, hermon->limits.cqc_entry_size );
+	icm_offset += icm_usage ( log_num_cqs, hermon->cap.cqc_entry_size );
 
 	/* Event queue contexts */
-	log_num_eqs = fls ( hermon->limits.reserved_eqs + HERMON_MAX_EQS - 1 );
 	MLX_FILL_1 ( init_hca, 32,
 		     qpc_eec_cqc_eqc_rdb_parameters.eqc_base_addr_h,
 		     ( icm_offset >> 32 ) );
@@ -1809,20 +1833,20 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		     qpc_eec_cqc_eqc_rdb_parameters.log_num_of_eq,
 		     log_num_eqs );
 	DBGC ( hermon, "Hermon %p ICM EQC base = %llx\n", hermon, icm_offset );
-	icm_offset += icm_usage ( log_num_eqs, hermon->limits.eqc_entry_size );
+	icm_offset += icm_usage ( log_num_eqs, hermon->cap.eqc_entry_size );
 
 	/* Memory translation table */
-	log_num_mtts = fls ( hermon->limits.reserved_mtts - 1 );
+	log_num_mtts = fls ( hermon->cap.reserved_mtts - 1 );
 	MLX_FILL_1 ( init_hca, 64,
 		     tpt_parameters.mtt_base_addr_h, ( icm_offset >> 32 ) );
 	MLX_FILL_1 ( init_hca, 65,
 		     tpt_parameters.mtt_base_addr_l, icm_offset );
 	DBGC ( hermon, "Hermon %p ICM MTT base = %llx\n", hermon, icm_offset );
 	icm_offset += icm_usage ( log_num_mtts,
-				  hermon->limits.mtt_entry_size );
+				  hermon->cap.mtt_entry_size );
 
 	/* Memory protection table */
-	log_num_mpts = fls ( hermon->limits.reserved_mrws + 1 - 1 );
+	log_num_mpts = fls ( hermon->cap.reserved_mrws + 1 - 1 );
 	MLX_FILL_1 ( init_hca, 60,
 		     tpt_parameters.dmpt_base_adr_h, ( icm_offset >> 32 ) );
 	MLX_FILL_1 ( init_hca, 61,
@@ -1831,7 +1855,7 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		     tpt_parameters.log_dmpt_sz, log_num_mpts );
 	DBGC ( hermon, "Hermon %p ICM DMPT base = %llx\n", hermon, icm_offset);
 	icm_offset += icm_usage ( log_num_mpts,
-				  hermon->limits.dmpt_entry_size );
+				  hermon->cap.dmpt_entry_size );
 
 	/* Multicast table */
 	MLX_FILL_1 ( init_hca, 48,
@@ -1847,29 +1871,36 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	MLX_FILL_1 ( init_hca, 54,
 		     multicast_parameters.log_mc_table_sz, 3 );
 	DBGC ( hermon, "Hermon %p ICM MC base = %llx\n", hermon, icm_offset );
-	icm_offset += ( 8 * sizeof ( struct hermonprm_mgm_entry ) );
+	icm_offset += ( ( 8 * sizeof ( struct hermonprm_mgm_entry ) + 4095 )
+			& ~4095 );
 
-	hermon->icm_len = icm_offset;
-	hermon->icm_len = ( ( hermon->icm_len + 4095 ) & ~4095 );
+	hermon->icm_map[HERMON_ICM_OTHER].len =
+		( icm_offset - hermon->icm_map[HERMON_ICM_OTHER].offset );
 
-#if 0
+	/* Calculate physical memory required for ICM */
+	icm_len = 0;
+	for ( i = 0 ; i < HERMON_ICM_NUM_REGIONS ; i++ ) {
+		icm_len += hermon->icm_map[i].len;
+	}
 
 	/* Get ICM auxiliary area size */
 	memset ( &icm_size, 0, sizeof ( icm_size ) );
-	MLX_FILL_1 ( &icm_size, 1, value, hermon->icm_len );
+	MLX_FILL_1 ( &icm_size, 0, value_hi, ( icm_offset >> 32 ) );
+	MLX_FILL_1 ( &icm_size, 1, value, icm_offset );
 	if ( ( rc = hermon_cmd_set_icm_size ( hermon, &icm_size,
 					      &icm_aux_size ) ) != 0 ) {
 		DBGC ( hermon, "Hermon %p could not set ICM size: %s\n",
 		       hermon, strerror ( rc ) );
 		goto err_set_icm_size;
 	}
-	hermon->icm_aux_len = ( MLX_GET ( &icm_aux_size, value ) * 4096 );
+	icm_aux_len = ( MLX_GET ( &icm_aux_size, value ) * 4096 );
+	/* Must round up to nearest power of two :( */
+	icm_aux_len = ( 1 << fls ( icm_aux_len - 1 ) );
 
 	/* Allocate ICM data and auxiliary area */
 	DBGC ( hermon, "Hermon %p requires %zd kB ICM and %zd kB AUX ICM\n",
-	       hermon, ( hermon->icm_len / 1024 ),
-	       ( hermon->icm_aux_len / 1024 ) );
-	hermon->icm = umalloc ( hermon->icm_len + hermon->icm_aux_len );
+	       hermon, ( icm_len / 1024 ), ( icm_aux_len / 1024 ) );
+	hermon->icm = umalloc ( icm_len + icm_aux_len );
 	if ( ! hermon->icm ) {
 		rc = -ENOMEM;
 		goto err_alloc;
@@ -1878,9 +1909,9 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	/* Map ICM auxiliary area */
 	memset ( &map_icm_aux, 0, sizeof ( map_icm_aux ) );
 	MLX_FILL_2 ( &map_icm_aux, 3,
-		     log2size, fls ( ( hermon->icm_aux_len / 4096 ) - 1 ),
+		     log2size, fls ( ( icm_aux_len / 4096 ) - 1 ),
 		     pa_l,
-		     ( user_to_phys ( hermon->icm, hermon->icm_len ) >> 12 ) );
+		     ( user_to_phys ( hermon->icm, icm_len ) >> 12 ) );
 	if ( ( rc = hermon_cmd_map_icm_aux ( hermon, &map_icm_aux ) ) != 0 ) {
 		DBGC ( hermon, "Hermon %p could not map AUX ICM: %s\n",
 		       hermon, strerror ( rc ) );
@@ -1888,28 +1919,45 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	}
 
 	/* MAP ICM area */
-	memset ( &map_icm, 0, sizeof ( map_icm ) );
-	MLX_FILL_2 ( &map_icm, 3,
-		     log2size, fls ( ( hermon->icm_len / 4096 ) - 1 ),
-		     pa_l, ( user_to_phys ( hermon->icm, 0 ) >> 12 ) );
-	if ( ( rc = hermon_cmd_map_icm ( hermon, &map_icm ) ) != 0 ) {
-		DBGC ( hermon, "Hermon %p could not map ICM: %s\n",
-		       hermon, strerror ( rc ) );
-		goto err_map_icm;
+	icm_mapped = 0;
+	for ( i = 0 ; i < HERMON_ICM_NUM_REGIONS ; i++ ) {
+		memset ( &map_icm, 0, sizeof ( map_icm ) );
+		MLX_FILL_1 ( &map_icm, 0,
+			     va_h, ( hermon->icm_map[i].offset >> 32 ) );
+		MLX_FILL_1 ( &map_icm, 1, va_l, hermon->icm_map[i].offset );
+		MLX_FILL_2 ( &map_icm, 3,
+			     log2size,
+			     fls ( ( hermon->icm_map[i].len / 4096 ) - 1 ),
+			     pa_l, ( user_to_phys ( hermon->icm,
+						    icm_mapped ) >> 12 ) );
+		DBGC ( hermon, "Hermon %p mapping ICM %llx+%zx (2^%d pages) "
+		       "=> %08zx (%08lx)\n", hermon,
+		       hermon->icm_map[i].offset, hermon->icm_map[i].len,
+		       fls ( ( hermon->icm_map[i].len / 4096 ) - 1 ),
+		       icm_mapped, user_to_phys ( hermon->icm, icm_mapped ) );
+		if ( ( rc = hermon_cmd_map_icm ( hermon, &map_icm ) ) != 0 ) {
+			DBGC ( hermon, "Hermon %p could not map ICM: %s\n",
+			       hermon, strerror ( rc ) );
+			goto err_map_icm;
+		}
+		icm_mapped += hermon->icm_map[i].len;
 	}
+	assert ( icm_mapped == icm_len );
 
+#if 0
 	/* Initialise UAR context */
 	hermon->db_rec = phys_to_virt ( user_to_phys ( hermon->icm, 0 ) +
-					( hermon->limits.reserved_uars *
+					( hermon->cap.reserved_uars *
 					  HERMON_PAGE_SIZE ) );
 	memset ( hermon->db_rec, 0, HERMON_PAGE_SIZE );
 	db_rec = &hermon->db_rec[HERMON_GROUP_SEPARATOR_DOORBELL];
 	MLX_FILL_1 ( &db_rec->qp, 1, res, HERMON_UAR_RES_GROUP_SEP );
+#endif
 
 	return 0;
 
-	hermon_cmd_unmap_icm ( hermon, ( hermon->icm_len / 4096 ) );
  err_map_icm:
+	assert ( i == 0 ); /* We don't handle partial failure at present */
 	hermon_cmd_unmap_icm_aux ( hermon );
  err_map_icm_aux:
 	ufree ( hermon->icm );
@@ -1917,8 +1965,6 @@ static int hermon_alloc_icm ( struct hermon *hermon,
  err_alloc:
  err_set_icm_size:
 	return rc;
-#endif
-	return -ENOTSUP;
 }
 
 /**
@@ -1927,7 +1973,20 @@ static int hermon_alloc_icm ( struct hermon *hermon,
  * @v hermon		Hermon device
  */
 static void hermon_free_icm ( struct hermon *hermon ) {
-	hermon_cmd_unmap_icm ( hermon, ( hermon->icm_len / 4096 ) );
+	struct hermonprm_scalar_parameter unmap_icm;
+	int i;
+
+	for ( i = ( HERMON_ICM_NUM_REGIONS - 1 ) ; i >= 0 ; i-- ) {
+		memset ( &unmap_icm, 0, sizeof ( unmap_icm ) );
+		MLX_FILL_1 ( &unmap_icm, 0, value_hi,
+			     ( hermon->icm_map[i].offset >> 32 ) );
+		MLX_FILL_1 ( &unmap_icm, 1, value,
+			     hermon->icm_map[i].offset );
+		hermon_cmd_unmap_icm ( hermon,
+				       ( 1 << fls ( ( hermon->icm_map[i].len /
+						      4096 ) - 1 ) ),
+				       &unmap_icm );
+	}
 	hermon_cmd_unmap_icm_aux ( hermon );
 	ufree ( hermon->icm );
 	hermon->icm = UNULL;
@@ -2002,7 +2061,7 @@ static int hermon_setup_mpt ( struct hermon *hermon ) {
 	int rc;
 
 	/* Derive key */
-	key = ( hermon->limits.reserved_mrws | HERMON_MKEY_PREFIX );
+	key = ( hermon->cap.reserved_mrws | HERMON_MKEY_PREFIX );
 	hermon->reserved_lkey = ( ( key << 8 ) | ( key >> 24 ) );
 
 	/* Initialise memory protection table */
@@ -2016,7 +2075,7 @@ static int hermon_setup_mpt ( struct hermon *hermon ) {
 	MLX_FILL_1 ( &mpt, 3, pd, HERMON_GLOBAL_PD );
 	MLX_FILL_1 ( &mpt, 10, len64, 1 );
 	if ( ( rc = hermon_cmd_sw2hw_mpt ( hermon,
-					   hermon->limits.reserved_mrws,
+					   hermon->cap.reserved_mrws,
 					   &mpt ) ) != 0 ) {
 		DBGC ( hermon, "Hermon %p could not set up MPT: %s\n",
 		       hermon, strerror ( rc ) );

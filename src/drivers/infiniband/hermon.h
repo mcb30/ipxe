@@ -92,7 +92,7 @@ struct hermonprm_mgm_hash_st {
 } __attribute__ (( packed ));
 
 struct hermonprm_scalar_parameter_st {
-	pseudo_bit_t reserved0[0x00020];
+	pseudo_bit_t value_hi[0x00020];
 /* -------------- */
 	pseudo_bit_t value[0x00020];
 } __attribute__ (( packed ));
@@ -187,8 +187,10 @@ union hermonprm_mad {
  *
  */
 
-/** Hermon device limits */
-struct hermon_dev_limits {
+/** Hermon device capabilitiess */
+struct hermon_dev_cap {
+	/** CMPT entry size */
+	size_t cmpt_entry_size;
 	/** Number of reserved QPs */
 	unsigned int reserved_qps;
 	/** QP context entry size */
@@ -219,6 +221,27 @@ struct hermon_dev_limits {
 	size_t dmpt_entry_size;
 	/** Number of reserved UARs */
 	unsigned int reserved_uars;
+};
+
+/** Number of cMPT entries of each type */
+#define HERMON_CMPT_MAX_ENTRIES ( 1 << 24 )
+
+/** Hermon ICM memory map entry */
+struct hermon_icm_map {
+	/** Offset (virtual address within ICM) */
+	uint64_t offset;
+	/** Length */
+	size_t len;
+};
+
+/** Discontiguous regions within Hermon ICM */
+enum hermon_icm_map_regions {
+	HERMON_ICM_QP_CMPT = 0,
+	HERMON_ICM_SRQ_CMPT,
+	HERMON_ICM_CQ_CMPT,
+	HERMON_ICM_EQ_CMPT,
+	HERMON_ICM_OTHER,
+	HERMON_ICM_NUM_REGIONS
 };
 
 #if 0
@@ -332,10 +355,8 @@ struct hermon {
 
 	/** Firmware area in external memory */
 	userptr_t firmware_area;
-	/** ICM size */
-	size_t icm_len;
-	/** ICM AUX size */
-	size_t icm_aux_len;
+	/** ICM map */
+	struct hermon_icm_map icm_map[HERMON_ICM_NUM_REGIONS];
 	/** ICM area */
 	userptr_t icm;
 
@@ -352,8 +373,8 @@ struct hermon {
 	/** Queue pair in-use bitmask */
 	hermon_bitmask_t qp_inuse[ HERMON_BITMASK_SIZE ( HERMON_MAX_QPS ) ];
 
-	/** Device limits */
-	struct hermon_dev_limits limits;
+	/** Device capabilities */
+	struct hermon_dev_cap cap;
 };
 
 /** Global protection domain */
