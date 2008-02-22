@@ -225,6 +225,12 @@ static int map_icm_wrapper(unsigned long long icm_virtual_start, unsigned long e
 	tmp_map_obj.vpm_arr[0].va_h = icm_virtual_start >> 32;
 	tmp_map_obj.vpm_arr[0].pa_l = phys_mem.base + phys_mem.offset;
 	tmp_map_obj.vpm_arr[0].log2_size = my_log2((entry_size + 4095) >> 12);
+
+	DBG ( "Hermon mapping ICM %llx+%lx (2^%d pages) => %08lx (%08lx)\n",
+	      icm_virtual_start, entry_size,
+	      my_log2((entry_size + 4095) >> 12), phys_mem.offset,
+	      ( phys_mem.base + phys_mem.offset ) );
+
         rc = cmd_map_icm(&tmp_map_obj);
 	return rc;
 }
@@ -686,6 +692,8 @@ static int setup_hca(__u8 port, void **eq_p)
 	map_obj.num_vpm = 1;
 	map_obj.vpm_arr[0].log2_size = log2_pages;
 	map_obj.vpm_arr[0].pa_l = phys_mem.base + phys_mem.offset;
+	DBG ( "Hermon mapping FA (2^%d pages) to %08lx (%08lx)\n", log2_pages,
+	      phys_mem.offset, ( phys_mem.base + phys_mem.offset ) );
 	rc = cmd_map_fa(&map_obj);
 	if (rc) {
                 eprintf("");
@@ -848,6 +856,9 @@ static int setup_hca(__u8 port, void **eq_p)
 	map_obj.num_vpm = 1;
 	map_obj.vpm_arr[0].pa_l = phys_mem.base + phys_mem.offset;
 	map_obj.vpm_arr[0].log2_size = my_log2(aux_pages);
+	DBG ( "Hermon mapping ICM AUX (2^%d pages) to %08lx (%08lx)\n",
+	      my_log2(aux_pages),
+	      phys_mem.offset, ( phys_mem.base + phys_mem.offset ) );
 	rc = cmd_map_icm_aux(&map_obj);
 	if (rc) {
 		eprintf("");
