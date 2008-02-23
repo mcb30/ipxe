@@ -690,12 +690,9 @@ static int hermon_create_cq ( struct ib_device *ibdev,
  */
 static void hermon_destroy_cq ( struct ib_device *ibdev,
 				struct ib_completion_queue *cq ) {
-#if 0
 	struct hermon *hermon = ibdev->dev_priv;
 	struct hermon_completion_queue *hermon_cq = cq->dev_priv;
 	struct hermonprm_completion_queue_context cqctx;
-	struct hermonprm_cq_ci_db_record *ci_db_rec;
-	struct hermonprm_cq_arm_db_record *arm_db_rec;
 	int cqn_offset;
 	int rc;
 
@@ -707,11 +704,8 @@ static void hermon_destroy_cq ( struct ib_device *ibdev,
 		return;
 	}
 
-	/* Clear doorbell records */
-	ci_db_rec = &hermon->db_rec[hermon_cq->ci_doorbell_idx].cq_ci;
-	arm_db_rec = &hermon->db_rec[hermon_cq->arm_doorbell_idx].cq_arm;
-	MLX_FILL_1 ( ci_db_rec, 1, res, HERMON_UAR_RES_NONE );
-	MLX_FILL_1 ( arm_db_rec, 1, res, HERMON_UAR_RES_NONE );
+	/* Free MTT entries */
+	hermon_free_mtt ( hermon, &hermon_cq->mtt );
 
 	/* Free memory */
 	free_dma ( hermon_cq->cqe, hermon_cq->cqe_size );
@@ -722,7 +716,6 @@ static void hermon_destroy_cq ( struct ib_device *ibdev,
 	hermon_bitmask_free ( hermon->cq_inuse, cqn_offset, 1 );
 
 	cq->dev_priv = NULL;
-#endif
 }
 
 /***************************************************************************
