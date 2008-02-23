@@ -69,10 +69,6 @@ static int hermon_bitmask_alloc ( hermon_bitmask_t *bits,
 	hermon_bitmask_t mask = 1;
 	unsigned int found = 0;
 
-	DBG ( "Hermon bitmask %p searching for %d free bits\n",
-	      bits, num_bits );
-	DBG_HD ( bits, ( ( bits_len + 7 ) / 8 ) );
-
 	/* Search bits for num_bits contiguous free bits */
 	while ( bit < bits_len ) {
 		if ( ( mask & *bits ) == 0 ) {
@@ -96,8 +92,6 @@ static int hermon_bitmask_alloc ( hermon_bitmask_t *bits,
 			bits--;
 		mask = ( mask >> 1 ) | ( mask << ( 8 * sizeof ( mask ) - 1 ) );
 	} while ( --found );
-
-	DBG ( "Using bits [%d,%d)\n", ( bit - num_bits + 1 ), bit );
 
 	return ( bit - num_bits + 1 );
 }
@@ -215,7 +209,7 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 		   &hcr, sizeof ( hcr ) );
 	if ( in_len && ( command & HERMON_HCR_IN_MBOX ) ) {
 		DBGC2 ( hermon, "Input mailbox:\n" );
-		DBGC2_HDA ( hermon, virt_to_phys ( in ), in,
+		DBGC2_HDA ( hermon, virt_to_phys ( in_buffer ), in_buffer,
 			    ( ( in_len < 512 ) ? in_len : 512 ) );
 	}
 
@@ -255,7 +249,7 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 	if ( out_len ) {
 		DBGC2 ( hermon, "Output%s:\n",
 			( command & HERMON_HCR_OUT_MBOX ) ? " mailbox" : "" );
-		DBGC2_HDA ( hermon, virt_to_phys ( out ), out,
+		DBGC2_HDA ( hermon, virt_to_phys ( out_buffer ), out_buffer,
 			    ( ( out_len < 512 ) ? out_len : 512 ) );
 	}
 
@@ -610,8 +604,6 @@ static int hermon_create_cq ( struct ib_device *ibdev,
 	struct hermon *hermon = ibdev->dev_priv;
 	struct hermon_completion_queue *hermon_cq;
 	struct hermonprm_completion_queue_context cqctx;
-	struct hermonprm_cq_ci_db_record *ci_db_rec;
-	struct hermonprm_cq_arm_db_record *arm_db_rec;
 	int cqn_offset;
 	unsigned int i;
 	int rc;
@@ -633,10 +625,6 @@ static int hermon_create_cq ( struct ib_device *ibdev,
 		rc = -ENOMEM;
 		goto err_hermon_cq;
 	}
-#if 0
-	hermon_cq->ci_doorbell_idx = hermon_cq_ci_doorbell_idx ( cqn_offset );
-	hermon_cq->arm_doorbell_idx = hermon_cq_arm_doorbell_idx( cqn_offset );
-#endif
 
 	/* Allocate completion queue itself */
 	hermon_cq->cqe_size = ( cq->num_cqes * sizeof ( hermon_cq->cqe[0] ) );
@@ -658,36 +646,19 @@ static int hermon_create_cq ( struct ib_device *ibdev,
 				       &hermon_cq->mtt ) ) != 0 )
 		goto err_alloc_mtt;
 
-#if 0
-
-	/* Initialise doorbell records */
-	ci_db_rec = &hermon->db_rec[hermon_cq->ci_doorbell_idx].cq_ci;
-	MLX_FILL_1 ( ci_db_rec, 0, counter, 0 );
-	MLX_FILL_2 ( ci_db_rec, 1,
-		     res, HERMON_UAR_RES_CQ_CI,
-		     cq_number, cq->cqn );
-	arm_db_rec = &hermon->db_rec[hermon_cq->arm_doorbell_idx].cq_arm;
-	MLX_FILL_1 ( arm_db_rec, 0, counter, 0 );
-	MLX_FILL_2 ( arm_db_rec, 1,
-		     res, HERMON_UAR_RES_CQ_ARM,
-		     cq_number, cq->cqn );
-
 	/* Hand queue over to hardware */
 	memset ( &cqctx, 0, sizeof ( cqctx ) );
 	MLX_FILL_1 ( &cqctx, 0, st, 0xa /* "Event fired" */ );
-	MLX_FILL_1 ( &cqctx, 2, start_address_l,
-		     virt_to_bus ( hermon_cq->cqe ) );
+	MLX_FILL_1 ( &cqctx, 2,
+		     page_offset, ( hermon_cq->mtt.page_offset >> 5 ) );
 	MLX_FILL_2 ( &cqctx, 3,
-		     usr_page, hermon->cap.reserved_uars,
+#warning "hack alert"
+		     usr_page, 0x80, //hermon->cap.reserved_uars,
 		     log_cq_size, fls ( cq->num_cqes - 1 ) );
-	MLX_FILL_1 ( &cqctx, 5, c_eqn, HERMON_NO_EQ );
-	MLX_FILL_1 ( &cqctx, 6, pd, HERMON_GLOBAL_PD );
-	MLX_FILL_1 ( &cqctx, 7, l_key, hermon->reserved_lkey );
-	MLX_FILL_1 ( &cqctx, 12, cqn, cq->cqn );
-	MLX_FILL_1 ( &cqctx, 13,
-		     cq_ci_db_record, hermon_cq->ci_doorbell_idx );
-	MLX_FILL_1 ( &cqctx, 14,
-		     cq_state_db_record, hermon_cq->arm_doorbell_idx );
+	MLX_FILL_1 ( &cqctx, 7, mtt_base_addr_l,
+		     ( hermon_cq->mtt.mtt_base_addr >> 3 ) );
+	MLX_FILL_1 ( &cqctx, 15, db_record_addr_l,
+		     ( virt_to_phys ( &hermon_cq->doorbell ) >> 3 ) );
 	if ( ( rc = hermon_cmd_sw2hw_cq ( hermon, cq->cqn, &cqctx ) ) != 0 ) {
 		DBGC ( hermon, "Hermon %p SW2HW_CQ failed: %s\n",
 		       hermon, strerror ( rc ) );
@@ -701,12 +672,6 @@ static int hermon_create_cq ( struct ib_device *ibdev,
 	return 0;
 
  err_sw2hw_cq:
-	MLX_FILL_1 ( ci_db_rec, 1, res, HERMON_UAR_RES_NONE );
-	MLX_FILL_1 ( arm_db_rec, 1, res, HERMON_UAR_RES_NONE );
-#endif
-
-	rc = -ENOTSUP;
-
 	hermon_free_mtt ( hermon, &hermon_cq->mtt );
  err_alloc_mtt:
 	free_dma ( hermon_cq->cqe, hermon_cq->cqe_size );
@@ -2076,7 +2041,8 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		memset ( &map_icm, 0, sizeof ( map_icm ) );
 		MLX_FILL_1 ( &map_icm, 0,
 			     va_h, ( hermon->icm_map[i].offset >> 32 ) );
-		MLX_FILL_1 ( &map_icm, 1, va_l, hermon->icm_map[i].offset );
+		MLX_FILL_1 ( &map_icm, 1,
+			     va_l, ( hermon->icm_map[i].offset >> 12 ) );
 		MLX_FILL_2 ( &map_icm, 3,
 			     log2size,
 			     fls ( ( hermon->icm_map[i].len /
@@ -2094,16 +2060,6 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		}
 		icm_phys += hermon->icm_map[i].len;
 	}
-
-#if 0
-	/* Initialise UAR context */
-	hermon->db_rec = phys_to_virt ( user_to_phys ( hermon->icm, 0 ) +
-					( hermon->cap.reserved_uars *
-					  HERMON_PAGE_SIZE ) );
-	memset ( hermon->db_rec, 0, HERMON_PAGE_SIZE );
-	db_rec = &hermon->db_rec[HERMON_GROUP_SEPARATOR_DOORBELL];
-	MLX_FILL_1 ( &db_rec->qp, 1, res, HERMON_UAR_RES_GROUP_SEP );
-#endif
 
 	return 0;
 
@@ -2268,8 +2224,6 @@ static int hermon_probe ( struct pci_device *pci,
 	/* Get PCI BARs */
 	hermon->config = ioremap ( pci_bar_start ( pci, HERMON_PCI_CONFIG_BAR),
 				   HERMON_PCI_CONFIG_BAR_SIZE );
-	DBG ( "Config at %p (phys %08lx)\n", hermon->config,
-	      virt_to_phys ( hermon->config ) );
 	hermon->uar = ioremap ( ( pci_bar_start ( pci, HERMON_PCI_UAR_BAR ) +
 				  HERMON_PCI_UAR_IDX * HERMON_PCI_UAR_SIZE ),
 				HERMON_PCI_UAR_SIZE );

@@ -24,14 +24,6 @@
 #define HERMON_PCI_UAR_IDX		1
 #define HERMON_PCI_UAR_SIZE		0x1000
 
-/* UAR context table (UCE) resource types */
-#define HERMON_UAR_RES_NONE		0x00
-#define HERMON_UAR_RES_CQ_CI		0x01
-#define HERMON_UAR_RES_CQ_ARM		0x02
-#define HERMON_UAR_RES_SQ		0x03
-#define HERMON_UAR_RES_RQ		0x04
-#define HERMON_UAR_RES_GROUP_SEP	0x07
-
 /* Work queue entry and completion queue entry opcodes */
 #define HERMON_OPCODE_SEND		0x0a
 #define HERMON_OPCODE_RECV_ERROR	0xfe
@@ -76,8 +68,6 @@
 /* MTUs */
 #define HERMON_MTU_2048			0x04
 
-#define HERMON_NO_EQ			64
-
 #define HERMON_INVALID_LKEY		0x00000100UL
 
 #define HERMON_PAGE_SIZE		4096
@@ -95,6 +85,17 @@ struct hermonprm_mgm_hash_st {
 	pseudo_bit_t reserved1[0x00010];
 } __attribute__ (( packed ));
 
+struct hermonprm_cq_doorbell_st {
+	pseudo_bit_t update_ci[0x00018];
+	pseudo_bit_t reserved0[0x00008];
+/* -------------- */
+	pseudo_bit_t arm_ci[0x00018];
+	pseudo_bit_t cmd[0x00003];
+	pseudo_bit_t reserved1[0x00001];
+	pseudo_bit_t cmd_sn[0x00002];
+	pseudo_bit_t reserved2[0x00002];
+} __attribute__ (( packed ));
+
 struct hermonprm_scalar_parameter_st {
 	pseudo_bit_t value_hi[0x00020];
 /* -------------- */
@@ -109,8 +110,7 @@ struct hermonprm_scalar_parameter_st {
 struct MLX_DECLARE_STRUCT ( hermonprm_completion_queue_context );
 struct MLX_DECLARE_STRUCT ( hermonprm_completion_queue_entry );
 struct MLX_DECLARE_STRUCT ( hermonprm_completion_with_error );
-struct MLX_DECLARE_STRUCT ( hermonprm_cq_arm_db_record );
-struct MLX_DECLARE_STRUCT ( hermonprm_cq_ci_db_record );
+struct MLX_DECLARE_STRUCT ( hermonprm_cq_doorbell );
 struct MLX_DECLARE_STRUCT ( hermonprm_eqc );
 struct MLX_DECLARE_STRUCT ( hermonprm_hca_command_register );
 struct MLX_DECLARE_STRUCT ( hermonprm_init_hca );
@@ -180,12 +180,6 @@ struct hermonprm_recv_wqe {
 union hermonprm_completion_entry {
 	struct hermonprm_completion_queue_entry normal;
 	struct hermonprm_completion_with_error error;
-} __attribute__ (( packed ));
-
-union hermonprm_doorbell_record {
-	struct hermonprm_cq_arm_db_record cq_arm;
-	struct hermonprm_cq_ci_db_record cq_ci;
-	struct hermonprm_qp_db_record qp;
 } __attribute__ (( packed ));
 
 union hermonprm_doorbell_register {
@@ -341,16 +335,14 @@ struct hermon_queue_pair {
 
 /** A Hermon completion queue */
 struct hermon_completion_queue {
-	/** Consumer counter doorbell record number */
-	unsigned int ci_doorbell_idx;
-	/** Arm queue doorbell record number */
-	unsigned int arm_doorbell_idx;
 	/** Completion queue entries */
 	union hermonprm_completion_entry *cqe;
 	/** Size of completion queue */
 	size_t cqe_size;
 	/** MTT descriptor */
 	struct hermon_mtt mtt;
+	/** Doorbell */
+	struct hermonprm_cq_doorbell doorbell __attribute__ (( aligned (8) ));
 };
 
 /** Maximum number of allocatable event queues
