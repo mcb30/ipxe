@@ -652,8 +652,7 @@ static int hermon_create_cq ( struct ib_device *ibdev,
 	MLX_FILL_1 ( &cqctx, 2,
 		     page_offset, ( hermon_cq->mtt.page_offset >> 5 ) );
 	MLX_FILL_2 ( &cqctx, 3,
-#warning "hack alert"
-		     usr_page, 0x80, //hermon->cap.reserved_uars,
+		     usr_page, HERMON_UAR_PAGE,
 		     log_cq_size, fls ( cq->num_cqes - 1 ) );
 	MLX_FILL_1 ( &cqctx, 7, mtt_base_addr_l,
 		     ( hermon_cq->mtt.mtt_base_addr >> 3 ) );
@@ -1760,7 +1759,7 @@ static void hermon_stop_firmware ( struct hermon *hermon ) {
  * @v hermon		Hermon device
  * @ret rc		Return status code
  */
-static int hermon_get_limits ( struct hermon *hermon ) {
+static int hermon_get_cap ( struct hermon *hermon ) {
 	struct hermonprm_query_dev_cap dev_cap;
 	int rc;
 
@@ -2247,8 +2246,8 @@ static int hermon_probe ( struct pci_device *pci,
 		goto err_start_firmware;
 
 	/* Get device limits */
-	if ( ( rc = hermon_get_limits ( hermon ) ) != 0 )
-		goto err_get_limits;
+	if ( ( rc = hermon_get_cap ( hermon ) ) != 0 )
+		goto err_get_cap;
 
 	/* Allocate ICM */
 	memset ( &init_hca, 0, sizeof ( init_hca ) );
@@ -2306,7 +2305,7 @@ static int hermon_probe ( struct pci_device *pci,
  err_init_hca:
 	hermon_free_icm ( hermon );
  err_alloc_icm:
- err_get_limits:
+ err_get_cap:
 	hermon_stop_firmware ( hermon );
  err_start_firmware:
 	free_dma ( hermon->mailbox_out, HERMON_MBOX_SIZE );

@@ -254,6 +254,13 @@ enum hermon_icm_map_regions {
 	HERMON_ICM_NUM_REGIONS
 };
 
+/** UAR page for doorbell accesses
+ *
+ * Pages 0-127 are reserved for event queue doorbells only, so we use
+ * page 128.
+ */
+#define HERMON_UAR_PAGE		128
+
 /** Maximum number of allocatable MTT entries
  *
  * This is a policy decision, not a device limit.
@@ -380,8 +387,6 @@ struct hermon {
 	/** ICM area */
 	userptr_t icm;
 
-	/** Doorbell records */
-	union hermonprm_doorbell_record *db_rec;
 	/** Reserved LKey
 	 *
 	 * Used to get unrestricted memory access.
