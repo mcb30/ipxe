@@ -401,21 +401,21 @@ hermon_cmd_mad_ifc ( struct hermon *hermon, union hermonprm_mad *mad ) {
 }
 
 static inline int
-hermon_cmd_read_mgm ( struct hermon *hermon, unsigned int index,
-		      struct hermonprm_mgm_entry *mgm ) {
+hermon_cmd_read_mcg ( struct hermon *hermon, unsigned int index,
+		      struct hermonprm_mcg_entry *mcg ) {
 	return hermon_cmd ( hermon,
-			    HERMON_HCR_OUT_CMD ( HERMON_HCR_READ_MGM,
-						 1, sizeof ( *mgm ) ),
-			    0, NULL, index, mgm );
+			    HERMON_HCR_OUT_CMD ( HERMON_HCR_READ_MCG,
+						 1, sizeof ( *mcg ) ),
+			    0, NULL, index, mcg );
 }
 
 static inline int
-hermon_cmd_write_mgm ( struct hermon *hermon, unsigned int index,
-		       const struct hermonprm_mgm_entry *mgm ) {
+hermon_cmd_write_mcg ( struct hermon *hermon, unsigned int index,
+		       const struct hermonprm_mcg_entry *mcg ) {
 	return hermon_cmd ( hermon,
-			    HERMON_HCR_IN_CMD ( HERMON_HCR_WRITE_MGM,
-						1, sizeof ( *mgm ) ),
-			    0, mgm, index, NULL );
+			    HERMON_HCR_IN_CMD ( HERMON_HCR_WRITE_MCG,
+						1, sizeof ( *mcg ) ),
+			    0, mcg, index, NULL );
 }
 
 static inline int
@@ -907,28 +907,6 @@ static void hermon_destroy_qp ( struct ib_device *ibdev,
  ***************************************************************************
  */
 
-#if 0
-/**
- * Ring doorbell register in UAR
- *
- * @v hermon		Hermon device
- * @v db_reg		Doorbell register structure
- * @v offset		Address of doorbell
- */
-static void hermon_ring_doorbell ( struct hermon *hermon,
-				   union hermonprm_doorbell_register *db_reg,
-				   unsigned int offset ) {
-	DBGC2 ( hermon, "Hermon %p ringing doorbell %08lx:%08lx at %lx\n",
-		hermon, db_reg->dword[0], db_reg->dword[1],
-		virt_to_phys ( hermon->uar + offset ) );
-
-	barrier();
-	writel ( db_reg->dword[0], ( hermon->uar + offset + 0 ) );
-	barrier();
-	writel ( db_reg->dword[1], ( hermon->uar + offset + 4 ) );
-}
-#endif
-
 /** GID used for GID-less send work queue entries */
 static const struct ib_gid hermon_no_gid = {
 	{ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } }
@@ -963,7 +941,8 @@ static int hermon_post_send ( struct ib_device *ibdev,
 		return -ENOBUFS;
 	}
 	wq->iobufs[wq->next_idx & wqe_idx_mask] = iobuf;
-	wqe = &hermon_send_wq->wqe[wq->next_idx & wqe_idx_mask].ud;
+	wqe = &hermon_send_wq->wqe[ wq->next_idx &
+				    ( hermon_send_wq->num_wqes - 1 ) ].ud;
 
 	/* Construct work queue entry */
 	memset ( ( ( ( void * ) wqe ) + 4 /* avoid ctrl.owner */ ), 0,
@@ -1050,7 +1029,7 @@ static int hermon_post_recv ( struct ib_device *ibdev,
 	/* Update doorbell record */
 	barrier();
 	MLX_FILL_1 ( &hermon_recv_wq->doorbell, 0, receive_wqe_counter,
-		     ( ( wq->next_idx + 1 ) & 0xffff ) );
+		     ( wq->next_idx & 0xffff ) );
 
 	return 0;
 }
@@ -1205,7 +1184,7 @@ static int hermon_mcast_attach ( struct ib_device *ibdev,
 				 struct ib_gid *gid ) {
 	struct hermon *hermon = ibdev->dev_priv;
 	struct hermonprm_mgm_hash hash;
-	struct hermonprm_mgm_entry mgm;
+	struct hermonprm_mcg_entry mcg;
 	unsigned int index;
 	int rc;
 
@@ -1218,12 +1197,12 @@ static int hermon_mcast_attach ( struct ib_device *ibdev,
 	index = MLX_GET ( &hash, hash );
 
 	/* Check for existing hash table entry */
-	if ( ( rc = hermon_cmd_read_mgm ( hermon, index, &mgm ) ) != 0 ) {
-		DBGC ( hermon, "Hermon %p could not read MGM %#x: %s\n",
+	if ( ( rc = hermon_cmd_read_mcg ( hermon, index, &mcg ) ) != 0 ) {
+		DBGC ( hermon, "Hermon %p could not read MCG %#x: %s\n",
 		       hermon, index, strerror ( rc ) );
 		return rc;
 	}
-	if ( MLX_GET ( &mgm, mgmqp_0.qi ) != 0 ) {
+	if ( MLX_GET ( &mcg, hdr.members_count ) != 0 ) {
 		/* FIXME: this implementation allows only a single QP
 		 * per multicast group, and doesn't handle hash
 		 * collisions.  Sufficient for IPoIB but may need to
@@ -1235,12 +1214,11 @@ static int hermon_mcast_attach ( struct ib_device *ibdev,
 	}
 
 	/* Update hash table entry */
-	MLX_FILL_2 ( &mgm, 8,
-		     mgmqp_0.qpn_i, qp->qpn,
-		     mgmqp_0.qi, 1 );
-	memcpy ( &mgm.u.dwords[4], gid, sizeof ( *gid ) );
-	if ( ( rc = hermon_cmd_write_mgm ( hermon, index, &mgm ) ) != 0 ) {
-		DBGC ( hermon, "Hermon %p could not write MGM %#x: %s\n",
+	MLX_FILL_1 ( &mcg, 1, hdr.members_count, 1 );
+	MLX_FILL_1 ( &mcg, 8, qp[0].qpn, qp->qpn );
+	memcpy ( &mcg.u.dwords[4], gid, sizeof ( *gid ) );
+	if ( ( rc = hermon_cmd_write_mcg ( hermon, index, &mcg ) ) != 0 ) {
+		DBGC ( hermon, "Hermon %p could not write MCG %#x: %s\n",
 		       hermon, index, strerror ( rc ) );
 		return rc;
 	}
@@ -1260,7 +1238,7 @@ static void hermon_mcast_detach ( struct ib_device *ibdev,
 				  struct ib_gid *gid ) {
 	struct hermon *hermon = ibdev->dev_priv;
 	struct hermonprm_mgm_hash hash;
-	struct hermonprm_mgm_entry mgm;
+	struct hermonprm_mcg_entry mcg;
 	unsigned int index;
 	int rc;
 
@@ -1273,9 +1251,9 @@ static void hermon_mcast_detach ( struct ib_device *ibdev,
 	index = MLX_GET ( &hash, hash );
 
 	/* Clear hash table entry */
-	memset ( &mgm, 0, sizeof ( mgm ) );
-	if ( ( rc = hermon_cmd_write_mgm ( hermon, index, &mgm ) ) != 0 ) {
-		DBGC ( hermon, "Hermon %p could not write MGM %#x: %s\n",
+	memset ( &mcg, 0, sizeof ( mcg ) );
+	if ( ( rc = hermon_cmd_write_mcg ( hermon, index, &mcg ) ) != 0 ) {
+		DBGC ( hermon, "Hermon %p could not write MCG %#x: %s\n",
 		       hermon, index, strerror ( rc ) );
 		return;
 	}
@@ -1808,13 +1786,13 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		     multicast_parameters.mc_base_addr_l, icm_offset );
 	MLX_FILL_1 ( init_hca, 52,
 		     multicast_parameters.log_mc_table_entry_sz,
-		     fls ( sizeof ( struct hermonprm_mgm_entry ) - 1 ) );
+		     fls ( sizeof ( struct hermonprm_mcg_entry ) - 1 ) );
 	MLX_FILL_1 ( init_hca, 53,
 		     multicast_parameters.log_mc_table_hash_sz, 3 );
 	MLX_FILL_1 ( init_hca, 54,
 		     multicast_parameters.log_mc_table_sz, 3 );
 	DBGC ( hermon, "Hermon %p ICM MC base = %llx\n", hermon, icm_offset );
-	icm_offset += ( ( 8 * sizeof ( struct hermonprm_mgm_entry ) +
+	icm_offset += ( ( 8 * sizeof ( struct hermonprm_mcg_entry ) +
 			  HERMON_PAGE_SIZE - 1 ) & ~( HERMON_PAGE_SIZE - 1 ) );
 
 	hermon->icm_map[HERMON_ICM_OTHER].len =

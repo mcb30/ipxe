@@ -46,8 +46,8 @@
 #define HERMON_HCR_RTR2RTS_QP		0x001b
 #define HERMON_HCR_2RST_QP		0x0021
 #define HERMON_HCR_MAD_IFC		0x0024
-#define HERMON_HCR_READ_MGM		0x0025
-#define HERMON_HCR_WRITE_MGM		0x0026
+#define HERMON_HCR_READ_MCG		0x0025
+#define HERMON_HCR_WRITE_MCG		0x0026
 #define HERMON_HCR_MGID_HASH		0x0027
 #define HERMON_HCR_RUN_FW		0x0ff6
 #define HERMON_HCR_DISABLE_LAM		0x0ff7
@@ -81,6 +81,11 @@ struct hermonprm_mgm_hash_st {
 /* -------------- */
 	pseudo_bit_t hash[0x00010];
 	pseudo_bit_t reserved1[0x00010];
+} __attribute__ (( packed ));
+
+struct hermonprm_mcg_entry_st {
+	struct hermonprm_mcg_hdr_st hdr;
+	struct hermonprm_mcg_qp_dw_st qp[8];
 } __attribute__ (( packed ));
 
 struct hermonprm_cq_db_record_st {
@@ -119,7 +124,7 @@ struct MLX_DECLARE_STRUCT ( hermonprm_hca_command_register );
 struct MLX_DECLARE_STRUCT ( hermonprm_init_hca );
 struct MLX_DECLARE_STRUCT ( hermonprm_init_port );
 struct MLX_DECLARE_STRUCT ( hermonprm_mad_ifc );
-struct MLX_DECLARE_STRUCT ( hermonprm_mgm_entry );
+struct MLX_DECLARE_STRUCT ( hermonprm_mcg_entry );
 struct MLX_DECLARE_STRUCT ( hermonprm_mgm_hash );
 struct MLX_DECLARE_STRUCT ( hermonprm_mpt );
 struct MLX_DECLARE_STRUCT ( hermonprm_mtt );
@@ -274,7 +279,12 @@ union hermon_send_wqe {
 
 /** A Hermon send work queue */
 struct hermon_send_work_queue {
-	/** Number of work queue entries, including headroom */
+	/** Number of work queue entries, including headroom
+	 *
+	 * Hermon requires us to leave unused space within the send
+	 * WQ, so we create a send WQ with more entries than are
+	 * requested in the create_qp() call.
+	 */
 	unsigned int num_wqes;
 	/** Work queue entries */
 	union hermon_send_wqe *wqe;
