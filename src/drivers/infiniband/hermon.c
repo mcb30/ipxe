@@ -358,36 +358,36 @@ hermon_cmd_hw2sw_cq ( struct hermon *hermon, unsigned long cqn,
 }
 
 static inline int
-hermon_cmd_rst2init_qpee ( struct hermon *hermon, unsigned long qpn,
-			const struct hermonprm_qp_ee_state_transitions *ctx ) {
+hermon_cmd_rst2init_qp ( struct hermon *hermon, unsigned long qpn,
+			 const struct hermonprm_qp_ee_state_transitions *ctx ){
 	return hermon_cmd ( hermon,
-			    HERMON_HCR_IN_CMD ( HERMON_HCR_RST2INIT_QPEE,
+			    HERMON_HCR_IN_CMD ( HERMON_HCR_RST2INIT_QP,
 						1, sizeof ( *ctx ) ),
 			    0, ctx, qpn, NULL );
 }
 
 static inline int
-hermon_cmd_init2rtr_qpee ( struct hermon *hermon, unsigned long qpn,
-			const struct hermonprm_qp_ee_state_transitions *ctx ) {
+hermon_cmd_init2rtr_qp ( struct hermon *hermon, unsigned long qpn,
+			 const struct hermonprm_qp_ee_state_transitions *ctx ){
 	return hermon_cmd ( hermon,
-			    HERMON_HCR_IN_CMD ( HERMON_HCR_INIT2RTR_QPEE,
+			    HERMON_HCR_IN_CMD ( HERMON_HCR_INIT2RTR_QP,
 						1, sizeof ( *ctx ) ),
 			    0, ctx, qpn, NULL );
 }
 
 static inline int
-hermon_cmd_rtr2rts_qpee ( struct hermon *hermon, unsigned long qpn,
+hermon_cmd_rtr2rts_qp ( struct hermon *hermon, unsigned long qpn,
 			const struct hermonprm_qp_ee_state_transitions *ctx ) {
 	return hermon_cmd ( hermon,
-			    HERMON_HCR_IN_CMD ( HERMON_HCR_RTR2RTS_QPEE,
+			    HERMON_HCR_IN_CMD ( HERMON_HCR_RTR2RTS_QP,
 						1, sizeof ( *ctx ) ),
 			    0, ctx, qpn, NULL );
 }
 
 static inline int
-hermon_cmd_2rst_qpee ( struct hermon *hermon, unsigned long qpn ) {
+hermon_cmd_2rst_qp ( struct hermon *hermon, unsigned long qpn ) {
 	return hermon_cmd ( hermon,
-			    HERMON_HCR_VOID_CMD ( HERMON_HCR_2RST_QPEE ),
+			    HERMON_HCR_VOID_CMD ( HERMON_HCR_2RST_QP ),
 			    0x03, NULL, qpn, NULL );
 }
 
@@ -726,92 +726,6 @@ static void hermon_destroy_cq ( struct ib_device *ibdev,
  */
 
 /**
- * Create send work queue
- *
- * @v hermon_send_wq	Send work queue
- * @v num_wqes		Number of work queue entries
- * @ret rc		Return status code
- */
-#if 0
-static int
-hermon_create_send_wq ( struct hermon_send_work_queue *hermon_send_wq,
-			unsigned int num_wqes ) {
-	struct hermonprm_ud_send_wqe *wqe;
-	struct hermonprm_ud_send_wqe *next_wqe;
-	unsigned int wqe_idx_mask;
-	unsigned int i;
-
-	/* Allocate work queue */
-	hermon_send_wq->wqe_size = ( num_wqes *
-				     sizeof ( hermon_send_wq->wqe[0] ) );
-	hermon_send_wq->wqe = malloc_dma ( hermon_send_wq->wqe_size,
-					   sizeof ( hermon_send_wq->wqe[0] ) );
-	if ( ! hermon_send_wq->wqe )
-		return -ENOMEM;
-	memset ( hermon_send_wq->wqe, 0, hermon_send_wq->wqe_size );
-
-	/* Link work queue entries */
-	wqe_idx_mask = ( num_wqes - 1 );
-	for ( i = 0 ; i < num_wqes ; i++ ) {
-		wqe = &hermon_send_wq->wqe[i].ud;
-		next_wqe = &hermon_send_wq->wqe[ ( i + 1 ) & wqe_idx_mask ].ud;
-		MLX_FILL_1 ( &wqe->next, 0, nda_31_6,
-			     ( virt_to_bus ( next_wqe ) >> 6 ) );
-	}
-
-	return 0;
-}
-#endif
-
-/**
- * Create receive work queue
- *
- * @v hermon_recv_wq	Receive work queue
- * @v num_wqes		Number of work queue entries
- * @ret rc		Return status code
- */
-#if 0
-static int
-hermon_create_recv_wq ( struct hermon_recv_work_queue *hermon_recv_wq,
-			unsigned int num_wqes ) {
-	struct hermonprm_recv_wqe *wqe;
-	struct hermonprm_recv_wqe *next_wqe;
-	unsigned int wqe_idx_mask;
-	size_t nds;
-	unsigned int i;
-	unsigned int j;
-
-	/* Allocate work queue */
-	hermon_recv_wq->wqe_size = ( num_wqes *
-				     sizeof ( hermon_recv_wq->wqe[0] ) );
-	hermon_recv_wq->wqe = malloc_dma ( hermon_recv_wq->wqe_size,
-					   sizeof ( hermon_recv_wq->wqe[0] ) );
-	if ( ! hermon_recv_wq->wqe )
-		return -ENOMEM;
-	memset ( hermon_recv_wq->wqe, 0, hermon_recv_wq->wqe_size );
-
-	/* Link work queue entries */
-	wqe_idx_mask = ( num_wqes - 1 );
-	nds = ( ( offsetof ( typeof ( *wqe ), data ) +
-		  sizeof ( wqe->data[0] ) ) >> 4 );
-	for ( i = 0 ; i < num_wqes ; i++ ) {
-		wqe = &hermon_recv_wq->wqe[i].recv;
-		next_wqe = &hermon_recv_wq->wqe[( i + 1 ) & wqe_idx_mask].recv;
-		MLX_FILL_1 ( &wqe->next, 0, nda_31_6,
-			     ( virt_to_bus ( next_wqe ) >> 6 ) );
-		MLX_FILL_1 ( &wqe->next, 1, nds, ( sizeof ( *wqe ) / 16 ) );
-		for ( j = 0 ; ( ( ( void * ) &wqe->data[j] ) <
-				( ( void * ) ( wqe + 1 ) ) ) ; j++ ) {
-			MLX_FILL_1 ( &wqe->data[j], 1,
-				     l_key, HERMON_INVALID_LKEY );
-		}
-	}
-
-	return 0;
-}
-#endif
-
-/**
  * Create queue pair
  *
  * @v ibdev		Infiniband device
@@ -820,12 +734,9 @@ hermon_create_recv_wq ( struct hermon_recv_work_queue *hermon_recv_wq,
  */
 static int hermon_create_qp ( struct ib_device *ibdev,
 			      struct ib_queue_pair *qp ) {
-#if 0
 	struct hermon *hermon = ibdev->dev_priv;
 	struct hermon_queue_pair *hermon_qp;
 	struct hermonprm_qp_ee_state_transitions qpctx;
-	struct hermonprm_qp_db_record *send_db_rec;
-	struct hermonprm_qp_db_record *recv_db_rec;
 	int qpn_offset;
 	int rc;
 
@@ -846,86 +757,86 @@ static int hermon_create_qp ( struct ib_device *ibdev,
 		rc = -ENOMEM;
 		goto err_hermon_qp;
 	}
-	hermon_qp->send.doorbell_idx = hermon_send_doorbell_idx ( qpn_offset );
-	hermon_qp->recv.doorbell_idx = hermon_recv_doorbell_idx ( qpn_offset );
 
-	/* Create send and receive work queues */
-	if ( ( rc = hermon_create_send_wq ( &hermon_qp->send,
-					    qp->send.num_wqes ) ) != 0 )
-		goto err_create_send_wq;
-	if ( ( rc = hermon_create_recv_wq ( &hermon_qp->recv,
-					    qp->recv.num_wqes ) ) != 0 )
-		goto err_create_recv_wq;
+	/* Allocate work queue buffer */
+	hermon_qp->send.num_wqes = ( qp->send.num_wqes /* headroom */ + 1 +
+				( 2048 / sizeof ( hermon_qp->send.wqe[0] ) ) );
+	hermon_qp->send.num_wqes =
+		( 1 << fls ( hermon_qp->send.num_wqes - 1 ) ); /* round up */
+	hermon_qp->send.wqe_size = ( hermon_qp->send.num_wqes *
+				     sizeof ( hermon_qp->send.wqe[0] ) );
+	hermon_qp->recv.wqe_size = ( qp->recv.num_wqes *
+				     sizeof ( hermon_qp->recv.wqe[0] ) );
+	hermon_qp->wqe_size = ( hermon_qp->send.wqe_size +
+				hermon_qp->recv.wqe_size );
+	hermon_qp->wqe = malloc_dma ( hermon_qp->wqe_size,
+				      sizeof ( hermon_qp->send.wqe[0] ) );
+	if ( ! hermon_qp->wqe ) {
+		rc = -ENOMEM;
+		goto err_alloc_wqe;
+	}
+	hermon_qp->send.wqe = hermon_qp->wqe;
+	memset ( hermon_qp->send.wqe, 0xff, hermon_qp->send.wqe_size );
+	hermon_qp->recv.wqe = ( hermon_qp->wqe + hermon_qp->send.wqe_size );
+	memset ( hermon_qp->recv.wqe, 0, hermon_qp->recv.wqe_size );
 
-	/* Initialise doorbell records */
-	send_db_rec = &hermon->db_rec[hermon_qp->send.doorbell_idx].qp;
-	MLX_FILL_1 ( send_db_rec, 0, counter, 0 );
-	MLX_FILL_2 ( send_db_rec, 1,
-		     res, HERMON_UAR_RES_SQ,
-		     qp_number, qp->qpn );
-	recv_db_rec = &hermon->db_rec[hermon_qp->recv.doorbell_idx].qp;
-	MLX_FILL_1 ( recv_db_rec, 0, counter, 0 );
-	MLX_FILL_2 ( recv_db_rec, 1,
-		     res, HERMON_UAR_RES_RQ,
-		     qp_number, qp->qpn );
+	/* Allocate MTT entries */
+	if ( ( rc = hermon_alloc_mtt ( hermon, hermon_qp->wqe,
+				       hermon_qp->wqe_size,
+				       &hermon_qp->mtt ) ) != 0 ) {
+		goto err_alloc_mtt;
+	}
 
 	/* Hand queue over to hardware */
 	memset ( &qpctx, 0, sizeof ( qpctx ) );
-	MLX_FILL_3 ( &qpctx, 2,
-		     qpc_eec_data.de, 1,
+	MLX_FILL_2 ( &qpctx, 2,
 		     qpc_eec_data.pm_state, 0x03 /* Always 0x03 for UD */,
 		     qpc_eec_data.st, HERMON_ST_UD );
-	MLX_FILL_6 ( &qpctx, 4,
-		     qpc_eec_data.mtu, HERMON_MTU_2048,
-		     qpc_eec_data.msg_max, 11 /* 2^11 = 2048 */,
+	MLX_FILL_1 ( &qpctx, 3, qpc_eec_data.pd, HERMON_GLOBAL_PD );
+	MLX_FILL_4 ( &qpctx, 4,
 		     qpc_eec_data.log_rq_size, fls ( qp->recv.num_wqes - 1 ),
 		     qpc_eec_data.log_rq_stride,
 		     ( fls ( sizeof ( hermon_qp->recv.wqe[0] ) - 1 ) - 4 ),
-		     qpc_eec_data.log_sq_size, fls ( qp->send.num_wqes - 1 ),
+		     qpc_eec_data.log_sq_size,
+		     fls ( hermon_qp->send.num_wqes - 1 ),
 		     qpc_eec_data.log_sq_stride,
 		     ( fls ( sizeof ( hermon_qp->send.wqe[0] ) - 1 ) - 4 ) );
 	MLX_FILL_1 ( &qpctx, 5,
-		     qpc_eec_data.usr_page, hermon->cap.reserved_uars );
-	MLX_FILL_1 ( &qpctx, 10, qpc_eec_data.primary_address_path.port_number,
-		     PXE_IB_PORT );
-	MLX_FILL_1 ( &qpctx, 27, qpc_eec_data.pd, HERMON_GLOBAL_PD );
-	MLX_FILL_1 ( &qpctx, 29, qpc_eec_data.wqe_lkey,
-		     hermon->reserved_lkey );
-	MLX_FILL_1 ( &qpctx, 30, qpc_eec_data.ssc, 1 );
+		     qpc_eec_data.usr_page, HERMON_UAR_PAGE );
 	MLX_FILL_1 ( &qpctx, 33, qpc_eec_data.cqn_snd, qp->send.cq->cqn );
-	MLX_FILL_1 ( &qpctx, 34, qpc_eec_data.snd_wqe_base_adr_l,
-		     ( virt_to_bus ( hermon_qp->send.wqe ) >> 6 ) );
-	MLX_FILL_1 ( &qpctx, 35, qpc_eec_data.snd_db_record_index,
-		     hermon_qp->send.doorbell_idx );
-	MLX_FILL_1 ( &qpctx, 38, qpc_eec_data.rsc, 1 );
+	MLX_FILL_1 ( &qpctx, 38, qpc_eec_data.page_offset,
+		     ( hermon_qp->mtt.page_offset >> 5 ) );
 	MLX_FILL_1 ( &qpctx, 41, qpc_eec_data.cqn_rcv, qp->recv.cq->cqn );
-	MLX_FILL_1 ( &qpctx, 42, qpc_eec_data.rcv_wqe_base_adr_l,
-		     ( virt_to_bus ( hermon_qp->recv.wqe ) >> 6 ) );
-	MLX_FILL_1 ( &qpctx, 43, qpc_eec_data.rcv_db_record_index,
-		     hermon_qp->recv.doorbell_idx );
+	MLX_FILL_1 ( &qpctx, 43, qpc_eec_data.db_record_addr_l,
+		     ( virt_to_phys ( &hermon_qp->recv.doorbell ) >> 2 ) );
 	MLX_FILL_1 ( &qpctx, 44, qpc_eec_data.q_key, qp->qkey );
-	if ( ( rc = hermon_cmd_rst2init_qpee ( hermon, qp->qpn,
-					       &qpctx ) ) != 0 ) {
-		DBGC ( hermon, "Hermon %p RST2INIT_QPEE failed: %s\n",
+	MLX_FILL_1 ( &qpctx, 53, qpc_eec_data.mtt_base_addr_l,
+		     ( hermon_qp->mtt.mtt_base_addr >> 3 ) );
+	if ( ( rc = hermon_cmd_rst2init_qp ( hermon, qp->qpn,
+					     &qpctx ) ) != 0 ) {
+		DBGC ( hermon, "Hermon %p RST2INIT_QP failed: %s\n",
 		       hermon, strerror ( rc ) );
-		goto err_rst2init_qpee;
+		goto err_rst2init_qp;
 	}
+
 	memset ( &qpctx, 0, sizeof ( qpctx ) );
 	MLX_FILL_2 ( &qpctx, 4,
 		     qpc_eec_data.mtu, HERMON_MTU_2048,
 		     qpc_eec_data.msg_max, 11 /* 2^11 = 2048 */ );
-	if ( ( rc = hermon_cmd_init2rtr_qpee ( hermon, qp->qpn,
-					       &qpctx ) ) != 0 ) {
-		DBGC ( hermon, "Hermon %p INIT2RTR_QPEE failed: %s\n",
+	MLX_FILL_1 ( &qpctx, 16,
+		     qpc_eec_data.primary_address_path.sched_queue,
+		     ( 0x83 /* default policy */ | ( PXE_IB_PORT << 6 ) ) );
+	if ( ( rc = hermon_cmd_init2rtr_qp ( hermon, qp->qpn,
+					     &qpctx ) ) != 0 ) {
+		DBGC ( hermon, "Hermon %p INIT2RTR_QP failed: %s\n",
 		       hermon, strerror ( rc ) );
-		goto err_init2rtr_qpee;
+		goto err_init2rtr_qp;
 	}
 	memset ( &qpctx, 0, sizeof ( qpctx ) );
-	if ( ( rc = hermon_cmd_rtr2rts_qpee ( hermon, qp->qpn,
-					      &qpctx ) ) != 0 ) {
-		DBGC ( hermon, "Hermon %p RTR2RTS_QPEE failed: %s\n",
+	if ( ( rc = hermon_cmd_rtr2rts_qp ( hermon, qp->qpn, &qpctx ) ) != 0 ){
+		DBGC ( hermon, "Hermon %p RTR2RTS_QP failed: %s\n",
 		       hermon, strerror ( rc ) );
-		goto err_rtr2rts_qpee;
+		goto err_rtr2rts_qp;
 	}
 
 	DBGC ( hermon, "Hermon %p QPN %#lx send ring at [%p,%p)\n",
@@ -937,23 +848,19 @@ static int hermon_create_qp ( struct ib_device *ibdev,
 	qp->dev_priv = hermon_qp;
 	return 0;
 
- err_rtr2rts_qpee:
- err_init2rtr_qpee:
-	hermon_cmd_2rst_qpee ( hermon, qp->qpn );
- err_rst2init_qpee:
-	MLX_FILL_1 ( send_db_rec, 1, res, HERMON_UAR_RES_NONE );
-	MLX_FILL_1 ( recv_db_rec, 1, res, HERMON_UAR_RES_NONE );
-	free_dma ( hermon_qp->recv.wqe, hermon_qp->recv.wqe_size );
- err_create_recv_wq:
-	free_dma ( hermon_qp->send.wqe, hermon_qp->send.wqe_size );
- err_create_send_wq:
+ err_rtr2rts_qp:
+ err_init2rtr_qp:
+	hermon_cmd_2rst_qp ( hermon, qp->qpn );
+ err_rst2init_qp:
+	hermon_free_mtt ( hermon, &hermon_qp->mtt );
+ err_alloc_mtt:
+	free_dma ( hermon_qp->wqe, hermon_qp->wqe_size );
+ err_alloc_wqe:
 	free ( hermon_qp );
  err_hermon_qp:
 	hermon_bitmask_free ( hermon->qp_inuse, qpn_offset, 1 );
  err_qpn_offset:
 	return rc;
-#endif
-	return -ENOSYS;
 }
 
 /**
@@ -964,31 +871,24 @@ static int hermon_create_qp ( struct ib_device *ibdev,
  */
 static void hermon_destroy_qp ( struct ib_device *ibdev,
 				struct ib_queue_pair *qp ) {
-#if 0
 	struct hermon *hermon = ibdev->dev_priv;
 	struct hermon_queue_pair *hermon_qp = qp->dev_priv;
-	struct hermonprm_qp_db_record *send_db_rec;
-	struct hermonprm_qp_db_record *recv_db_rec;
 	int qpn_offset;
 	int rc;
 
 	/* Take ownership back from hardware */
-	if ( ( rc = hermon_cmd_2rst_qpee ( hermon, qp->qpn ) ) != 0 ) {
-		DBGC ( hermon, "Hermon %p FATAL 2RST_QPEE failed on QPN %#lx: "
+	if ( ( rc = hermon_cmd_2rst_qp ( hermon, qp->qpn ) ) != 0 ) {
+		DBGC ( hermon, "Hermon %p FATAL 2RST_QP failed on QPN %#lx: "
 		       "%s\n", hermon, qp->qpn, strerror ( rc ) );
 		/* Leak memory and return; at least we avoid corruption */
 		return;
 	}
 
-	/* Clear doorbell records */
-	send_db_rec = &hermon->db_rec[hermon_qp->send.doorbell_idx].qp;
-	recv_db_rec = &hermon->db_rec[hermon_qp->recv.doorbell_idx].qp;
-	MLX_FILL_1 ( send_db_rec, 1, res, HERMON_UAR_RES_NONE );
-	MLX_FILL_1 ( recv_db_rec, 1, res, HERMON_UAR_RES_NONE );
+	/* Free MTT entries */
+	hermon_free_mtt ( hermon, &hermon_qp->mtt );
 
 	/* Free memory */
-	free_dma ( hermon_qp->send.wqe, hermon_qp->send.wqe_size );
-	free_dma ( hermon_qp->recv.wqe, hermon_qp->recv.wqe_size );
+	free_dma ( hermon_qp->wqe, hermon_qp->wqe_size );
 	free ( hermon_qp );
 
 	/* Mark queue number as free */
@@ -997,7 +897,6 @@ static void hermon_destroy_qp ( struct ib_device *ibdev,
 	hermon_bitmask_free ( hermon->qp_inuse, qpn_offset, 1 );
 
 	qp->dev_priv = NULL;
-#endif
 }
 
 /***************************************************************************
@@ -1816,7 +1715,6 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	struct hermonprm_scalar_parameter icm_aux_size;
 	struct hermonprm_virtual_physical_mapping map_icm_aux;
 	struct hermonprm_virtual_physical_mapping map_icm;
-	union hermonprm_doorbell_record *db_rec;
 	uint64_t icm_offset = 0;
 	unsigned int log_num_qps, log_num_srqs, log_num_cqs, log_num_eqs;
 	unsigned int log_num_mtts, log_num_mpts;
