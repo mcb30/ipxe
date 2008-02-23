@@ -45,6 +45,7 @@
 #define HERMON_HCR_INIT_PORT		0x0009
 #define HERMON_HCR_CLOSE_PORT		0x000a
 #define HERMON_HCR_SW2HW_MPT		0x000d
+#define HERMON_HCR_WRITE_MTT		0x0011
 #define HERMON_HCR_MAP_EQ		0x0012
 #define HERMON_HCR_SW2HW_EQ		0x0013
 #define HERMON_HCR_HW2SW_EQ		0x0014
@@ -118,6 +119,7 @@ struct MLX_DECLARE_STRUCT ( hermonprm_mad_ifc );
 struct MLX_DECLARE_STRUCT ( hermonprm_mgm_entry );
 struct MLX_DECLARE_STRUCT ( hermonprm_mgm_hash );
 struct MLX_DECLARE_STRUCT ( hermonprm_mpt );
+struct MLX_DECLARE_STRUCT ( hermonprm_mtt );
 struct MLX_DECLARE_STRUCT ( hermonprm_qp_db_record );
 struct MLX_DECLARE_STRUCT ( hermonprm_qp_ee_state_transitions );
 struct MLX_DECLARE_STRUCT ( hermonprm_query_dev_cap );
@@ -135,6 +137,17 @@ struct MLX_DECLARE_STRUCT ( hermonprm_wqe_segment_ud );
  * Composite hardware datatypes
  *
  */
+
+struct hermonprm_write_mtt {
+	struct hermonprm_scalar_parameter mtt_base_addr;
+	struct hermonprm_scalar_parameter reserved;
+	struct hermonprm_mtt mtt;
+} __attribute__ (( packed ));
+
+struct hermonprm_ud_send_wqe {
+};
+struct hermonprm_recv_wqe {
+};
 
 #if 0
 
@@ -247,7 +260,23 @@ enum hermon_icm_map_regions {
 	HERMON_ICM_NUM_REGIONS
 };
 
-#if 0
+/** Maximum number of allocatable MTT entries
+ *
+ * This is a policy decision, not a device limit.
+ */
+#define HERMON_MAX_MTTS		64
+
+/** A Hermon MTT descriptor */
+struct hermon_mtt {
+	/** MTT offset */
+	unsigned int mtt_offset;
+	/** Number of pages */
+	unsigned int num_pages;
+	/** MTT base address */
+	unsigned int mtt_base_addr;
+	/** Offset within page */
+	unsigned int page_offset;
+};
 
 /** Alignment of Hermon send work queue entries */
 #define HERMON_SEND_WQE_ALIGN 128
@@ -287,8 +316,6 @@ struct hermon_recv_work_queue {
 	size_t wqe_size;
 };
 
-#endif
-
 /** Maximum number of allocatable queue pairs
  *
  * This is a policy decision, not a device limit.
@@ -298,8 +325,6 @@ struct hermon_recv_work_queue {
 /** Base queue pair number */
 #define HERMON_QPN_BASE 0x550000
 
-#if 0
-
 /** A Hermon queue pair */
 struct hermon_queue_pair {
 	/** Send work queue */
@@ -307,8 +332,6 @@ struct hermon_queue_pair {
 	/** Receive work queue */
 	struct hermon_recv_work_queue recv;
 };
-
-#endif
 
 /** Maximum number of allocatable completion queues
  *
@@ -326,6 +349,8 @@ struct hermon_completion_queue {
 	union hermonprm_completion_entry *cqe;
 	/** Size of completion queue */
 	size_t cqe_size;
+	/** MTT descriptor */
+	struct hermon_mtt mtt;
 };
 
 /** Maximum number of allocatable event queues
@@ -375,6 +400,8 @@ struct hermon {
 	hermon_bitmask_t cq_inuse[ HERMON_BITMASK_SIZE ( HERMON_MAX_CQS ) ];
 	/** Queue pair in-use bitmask */
 	hermon_bitmask_t qp_inuse[ HERMON_BITMASK_SIZE ( HERMON_MAX_QPS ) ];
+	/** MTT entry in-use bitmask */
+	hermon_bitmask_t mtt_inuse[ HERMON_BITMASK_SIZE ( HERMON_MAX_MTTS ) ];
 
 	/** Device capabilities */
 	struct hermon_dev_cap cap;
@@ -431,65 +458,5 @@ struct hermon {
 
 #define HERMON_HCR_VOID_CMD( _opcode )					     \
 	HERMON_HCR_INOUT_CMD ( _opcode, 0, 0, 0, 0 )
-
-/*
- * Doorbell record allocation
- *
- * The doorbell record map looks like:
- *
- *    HERMON_MAX_CQS * Arm completion queue doorbell
- *    HERMON_MAX_QPS * Send work request doorbell
- *    Group separator
- *    ...(empty space)...
- *    HERMON_MAX_QPS * Receive work request doorbell
- *    HERMON_MAX_CQS * Completion queue consumer counter update doorbell
- */
-
-#define HERMON_MAX_DOORBELL_RECORDS 512
-#define HERMON_GROUP_SEPARATOR_DOORBELL ( HERMON_MAX_CQS + HERMON_MAX_QPS )
-
-/**
- * Get arm completion queue doorbell index
- *
- * @v cqn_offset	Completion queue number offset
- * @ret doorbell_idx	Doorbell index
- */
-static inline unsigned int
-hermon_cq_arm_doorbell_idx ( unsigned int cqn_offset ) {
-	return cqn_offset;
-}
-
-/**
- * Get send work request doorbell index
- *
- * @v qpn_offset	Queue pair number offset
- * @ret doorbell_idx	Doorbell index
- */
-static inline unsigned int
-hermon_send_doorbell_idx ( unsigned int qpn_offset ) {
-	return ( HERMON_MAX_CQS + qpn_offset );
-}
-
-/**
- * Get receive work request doorbell index
- *
- * @v qpn_offset	Queue pair number offset
- * @ret doorbell_idx	Doorbell index
- */
-static inline unsigned int
-hermon_recv_doorbell_idx ( unsigned int qpn_offset ) {
-	return ( HERMON_MAX_DOORBELL_RECORDS - HERMON_MAX_CQS - qpn_offset - 1 );
-}
-
-/**
- * Get completion queue consumer counter doorbell index
- *
- * @v cqn_offset	Completion queue number offset
- * @ret doorbell_idx	Doorbell index
- */
-static inline unsigned int
-hermon_cq_ci_doorbell_idx ( unsigned int cqn_offset ) {
-	return ( HERMON_MAX_DOORBELL_RECORDS - cqn_offset - 1 );
-}
 
 #endif /* _HERMON_H */

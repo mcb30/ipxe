@@ -55,45 +55,68 @@
  */
 
 /**
- * Allocate queue number
+ * Allocate offsets within usage bitmask
  *
- * @v q_inuse		Queue usage bitmask
- * @v max_inuse		Maximum number of in-use queues
- * @ret qn_offset	Free queue number offset, or negative error
+ * @v bits		Usage bitmask
+ * @v bits_len		Length of usage bitmask
+ * @v num_bits		Number of contiguous bits to allocate within bitmask
+ * @ret bit		First free bit within bitmask, or negative error
  */
-static int hermon_alloc_qn_offset ( hermon_bitmask_t *q_inuse,
-				    unsigned int max_inuse ) {
-	unsigned int qn_offset = 0;
+static int hermon_bitmask_alloc ( hermon_bitmask_t *bits,
+				  unsigned int bits_len,
+				  unsigned int num_bits ) {
+	unsigned int bit = 0;
 	hermon_bitmask_t mask = 1;
+	unsigned int found = 0;
 
-	while ( qn_offset < max_inuse ) {
-		if ( ( mask & *q_inuse ) == 0 ) {
-			*q_inuse |= mask;
-			return qn_offset;
+	DBG ( "Hermon bitmask %p searching for %d free bits\n",
+	      bits, num_bits );
+	DBG_HD ( bits, ( ( bits_len + 7 ) / 8 ) );
+
+	/* Search bits for num_bits contiguous free bits */
+	while ( bit < bits_len ) {
+		if ( ( mask & *bits ) == 0 ) {
+			if ( ++found == num_bits )
+				goto found;
+		} else {
+			found = 0;
 		}
-		qn_offset++;
-		mask <<= 1;
-		if ( ! mask ) {
-			mask = 1;
-			q_inuse++;
-		}
+		bit++;
+		mask = ( mask << 1 ) | ( mask >> ( 8 * sizeof ( mask ) - 1 ) );
+		if ( mask == 1 )
+			bits++;
 	}
 	return -ENFILE;
+
+ found:
+	/* Mark bits as in-use */
+	do {
+		*bits |= mask;
+		if ( mask == 1 )
+			bits--;
+		mask = ( mask >> 1 ) | ( mask << ( 8 * sizeof ( mask ) - 1 ) );
+	} while ( --found );
+
+	DBG ( "Using bits [%d,%d)\n", ( bit - num_bits + 1 ), bit );
+
+	return ( bit - num_bits + 1 );
 }
 
 /**
- * Free queue number
+ * Free offsets within usage bitmask
  *
- * @v q_inuse		Queue usage bitmask
- * @v qn_offset		Queue number offset
+ * @v bits		Usage bitmask
+ * @v bit		Starting bit within bitmask
+ * @v num_bits		Number of contiguous bits to free within bitmask
  */
-static void hermon_free_qn_offset ( hermon_bitmask_t *q_inuse,
-				    int qn_offset ) {
+static void hermon_bitmask_free ( hermon_bitmask_t *bits,
+				  int bit, unsigned int num_bits ) {
 	hermon_bitmask_t mask;
 
-	mask = ( 1 << ( qn_offset % ( 8 * sizeof ( mask ) ) ) );
-	q_inuse += ( qn_offset / ( 8 * sizeof ( mask ) ) );
-	*q_inuse &= ~mask;
+	for ( ; num_bits ; bit++, num_bits-- ) {
+		mask = ( 1 << ( bit % ( 8 * sizeof ( mask ) ) ) );
+		bits[ ( bit / ( 8 * sizeof ( mask ) ) ) ] &= ~mask;
+	}
 }
 
 /***************************************************************************
@@ -298,6 +321,15 @@ hermon_cmd_sw2hw_mpt ( struct hermon *hermon, unsigned int index,
 }
 
 static inline int
+hermon_cmd_write_mtt ( struct hermon *hermon,
+		       const struct hermonprm_write_mtt *write_mtt ) {
+	return hermon_cmd ( hermon,
+			    HERMON_HCR_IN_CMD ( HERMON_HCR_WRITE_MTT,
+						1, sizeof ( *write_mtt ) ),
+			    0, write_mtt, 1, NULL );
+}
+
+static inline int
 hermon_cmd_sw2hw_eq ( struct hermon *hermon, unsigned int index,
 		      const struct hermonprm_eqc *eqc ) {
 	return hermon_cmd ( hermon,
@@ -472,6 +504,95 @@ hermon_cmd_map_fa ( struct hermon *hermon,
 
 /***************************************************************************
  *
+ * Memory translation table operations
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Allocate MTT entries
+ *
+ * @v hermon		Hermon device
+ * @v memory		Memory to map into MTT
+ * @v len		Length of memory to map
+ * @v mtt		MTT descriptor to fill in
+ * @ret rc		Return status code
+ */
+static int hermon_alloc_mtt ( struct hermon *hermon,
+			      const void *memory, size_t len,
+			      struct hermon_mtt *mtt ) {
+	struct hermonprm_write_mtt write_mtt;
+	physaddr_t start;
+	unsigned int page_offset;
+	unsigned int num_pages;
+	int mtt_offset;
+	unsigned int mtt_base_addr;
+	unsigned int i;
+	int rc;
+
+	/* Find available MTT entries */
+	start = virt_to_phys ( memory );
+	page_offset = ( start & ( HERMON_PAGE_SIZE - 1 ) );
+	start -= page_offset;
+	len += page_offset;
+	num_pages = ( ( len + HERMON_PAGE_SIZE - 1 ) / HERMON_PAGE_SIZE );
+	mtt_offset = hermon_bitmask_alloc ( hermon->mtt_inuse, HERMON_MAX_MTTS,
+					    num_pages );
+	if ( mtt_offset < 0 ) {
+		DBGC ( hermon, "Hermon %p could not allocate %d MTT entries\n",
+		       hermon, num_pages );
+		rc = mtt_offset;
+		goto err_mtt_offset;
+	}
+	mtt_base_addr = ( ( hermon->cap.reserved_mtts + mtt_offset ) *
+			  hermon->cap.mtt_entry_size );
+
+	/* Fill in MTT structure */
+	mtt->mtt_offset = mtt_offset;
+	mtt->num_pages = num_pages;
+	mtt->mtt_base_addr = mtt_base_addr;
+	mtt->page_offset = page_offset;
+
+	/* Construct and issue WRITE_MTT commands */
+	for ( i = 0 ; i < num_pages ; i++ ) {
+		memset ( &write_mtt, 0, sizeof ( write_mtt ) );
+		MLX_FILL_1 ( &write_mtt.mtt_base_addr, 1,
+			     value, mtt_base_addr );
+		MLX_FILL_2 ( &write_mtt.mtt, 1,
+			     p, 1,
+			     ptag_l, ( start >> 3 ) );
+		if ( ( rc = hermon_cmd_write_mtt ( hermon,
+						   &write_mtt ) ) != 0 ) {
+			DBGC ( hermon, "Hermon %p could not write MTT at %x\n",
+			       hermon, mtt_base_addr );
+			goto err_write_mtt;
+		}
+		start += HERMON_PAGE_SIZE;
+		mtt_base_addr += hermon->cap.mtt_entry_size;
+	}
+
+	return 0;
+
+ err_write_mtt:
+	hermon_bitmask_free ( hermon->mtt_inuse, mtt_offset, num_pages );
+ err_mtt_offset:
+	return rc;
+}
+
+/**
+ * Free MTT entries
+ *
+ * @v hermon		Hermon device
+ * @v mtt		MTT descriptor
+ */
+static void hermon_free_mtt ( struct hermon *hermon,
+			      struct hermon_mtt *mtt ) {
+	hermon_bitmask_free ( hermon->mtt_inuse, mtt->mtt_offset,
+			      mtt->num_pages );
+}
+
+/***************************************************************************
+ *
  * Completion queue operations
  *
  ***************************************************************************
@@ -486,7 +607,6 @@ hermon_cmd_map_fa ( struct hermon *hermon,
  */
 static int hermon_create_cq ( struct ib_device *ibdev,
 			      struct ib_completion_queue *cq ) {
-#if 0
 	struct hermon *hermon = ibdev->dev_priv;
 	struct hermon_completion_queue *hermon_cq;
 	struct hermonprm_completion_queue_context cqctx;
@@ -497,8 +617,8 @@ static int hermon_create_cq ( struct ib_device *ibdev,
 	int rc;
 
 	/* Find a free completion queue number */
-	cqn_offset = hermon_alloc_qn_offset ( hermon->cq_inuse,
-					      HERMON_MAX_CQS );
+	cqn_offset = hermon_bitmask_alloc ( hermon->cq_inuse,
+					    HERMON_MAX_CQS, 1 );
 	if ( cqn_offset < 0 ) {
 		DBGC ( hermon, "Hermon %p out of completion queues\n",
 		       hermon );
@@ -513,8 +633,10 @@ static int hermon_create_cq ( struct ib_device *ibdev,
 		rc = -ENOMEM;
 		goto err_hermon_cq;
 	}
+#if 0
 	hermon_cq->ci_doorbell_idx = hermon_cq_ci_doorbell_idx ( cqn_offset );
 	hermon_cq->arm_doorbell_idx = hermon_cq_arm_doorbell_idx( cqn_offset );
+#endif
 
 	/* Allocate completion queue itself */
 	hermon_cq->cqe_size = ( cq->num_cqes * sizeof ( hermon_cq->cqe[0] ) );
@@ -529,6 +651,14 @@ static int hermon_create_cq ( struct ib_device *ibdev,
 		MLX_FILL_1 ( &hermon_cq->cqe[i].normal, 7, owner, 1 );
 	}
 	barrier();
+
+	/* Allocate MTT entries */
+	if ( ( rc = hermon_alloc_mtt ( hermon, hermon_cq->cqe,
+				       hermon_cq->cqe_size,
+				       &hermon_cq->mtt ) ) != 0 )
+		goto err_alloc_mtt;
+
+#if 0
 
 	/* Initialise doorbell records */
 	ci_db_rec = &hermon->db_rec[hermon_cq->ci_doorbell_idx].cq_ci;
@@ -573,15 +703,19 @@ static int hermon_create_cq ( struct ib_device *ibdev,
  err_sw2hw_cq:
 	MLX_FILL_1 ( ci_db_rec, 1, res, HERMON_UAR_RES_NONE );
 	MLX_FILL_1 ( arm_db_rec, 1, res, HERMON_UAR_RES_NONE );
+#endif
+
+	rc = -ENOTSUP;
+
+	hermon_free_mtt ( hermon, &hermon_cq->mtt );
+ err_alloc_mtt:
 	free_dma ( hermon_cq->cqe, hermon_cq->cqe_size );
  err_cqe:
 	free ( hermon_cq );
  err_hermon_cq:
-	hermon_free_qn_offset ( hermon->cq_inuse, cqn_offset );
+	hermon_bitmask_free ( hermon->cq_inuse, cqn_offset, 1 );
  err_cqn_offset:
 	return rc;
-#endif
-	return -ENOSYS;
 }
 
 /**
@@ -621,7 +755,7 @@ static void hermon_destroy_cq ( struct ib_device *ibdev,
 
 	/* Mark queue number as free */
 	cqn_offset = ( cq->cqn - hermon->cap.reserved_cqs );
-	hermon_free_qn_offset ( hermon->cq_inuse, cqn_offset );
+	hermon_bitmask_free ( hermon->cq_inuse, cqn_offset, 1 );
 
 	cq->dev_priv = NULL;
 #endif
@@ -739,8 +873,8 @@ static int hermon_create_qp ( struct ib_device *ibdev,
 	int rc;
 
 	/* Find a free queue pair number */
-	qpn_offset = hermon_alloc_qn_offset ( hermon->qp_inuse,
-					      HERMON_MAX_QPS );
+	qpn_offset = hermon_bitmask_alloc ( hermon->qp_inuse,
+					    HERMON_MAX_QPS, 1 );
 	if ( qpn_offset < 0 ) {
 		DBGC ( hermon, "Hermon %p out of queue pairs\n", hermon );
 		rc = qpn_offset;
@@ -858,7 +992,7 @@ static int hermon_create_qp ( struct ib_device *ibdev,
  err_create_send_wq:
 	free ( hermon_qp );
  err_hermon_qp:
-	hermon_free_qn_offset ( hermon->qp_inuse, qpn_offset );
+	hermon_bitmask_free ( hermon->qp_inuse, qpn_offset, 1 );
  err_qpn_offset:
 	return rc;
 #endif
@@ -903,7 +1037,7 @@ static void hermon_destroy_qp ( struct ib_device *ibdev,
 	/* Mark queue number as free */
 	qpn_offset = ( qp->qpn - HERMON_QPN_BASE -
 		       hermon->cap.reserved_qps );
-	hermon_free_qn_offset ( hermon->qp_inuse, qpn_offset );
+	hermon_bitmask_free ( hermon->qp_inuse, qpn_offset, 1 );
 
 	qp->dev_priv = NULL;
 #endif
@@ -1590,7 +1724,7 @@ static int hermon_start_firmware ( struct hermon *hermon ) {
 	       hermon, ( fw_pages * 4 ) );
 
 	/* Allocate firmware pages and map firmware area */
-	fw_size = ( fw_pages * 4096 );
+	fw_size = ( fw_pages * HERMON_PAGE_SIZE );
 	hermon->firmware_area = umalloc ( fw_size );
 	if ( ! hermon->firmware_area ) {
 		rc = -ENOMEM;
@@ -1707,7 +1841,8 @@ static size_t icm_usage ( unsigned int log_num_entries, size_t entry_size ) {
 	size_t usage;
 
 	usage = ( ( 1 << log_num_entries ) * entry_size );
-	usage = ( ( usage + 4095 ) & ~4095 );
+	usage = ( ( usage + HERMON_PAGE_SIZE - 1 ) &
+		  ~( HERMON_PAGE_SIZE - 1 ) );
 	return usage;
 }
 
@@ -1745,6 +1880,7 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	log_num_srqs = fls ( hermon->cap.reserved_srqs - 1 );
 	log_num_cqs = fls ( hermon->cap.reserved_cqs + HERMON_MAX_CQS - 1 );
 	log_num_eqs = fls ( hermon->cap.reserved_eqs + HERMON_MAX_EQS - 1 );
+	log_num_mtts = fls ( hermon->cap.reserved_mtts + HERMON_MAX_MTTS - 1 );
 
 	/* ICM starts with the cMPT tables, which are sparse */
 	cmpt_max_len = ( HERMON_CMPT_MAX_ENTRIES *
@@ -1840,7 +1976,6 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	icm_offset += icm_usage ( log_num_eqs, hermon->cap.eqc_entry_size );
 
 	/* Memory translation table */
-	log_num_mtts = fls ( hermon->cap.reserved_mtts - 1 );
 	MLX_FILL_1 ( init_hca, 64,
 		     tpt_parameters.mtt_base_addr_h, ( icm_offset >> 32 ) );
 	MLX_FILL_1 ( init_hca, 65,
@@ -1875,8 +2010,8 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	MLX_FILL_1 ( init_hca, 54,
 		     multicast_parameters.log_mc_table_sz, 3 );
 	DBGC ( hermon, "Hermon %p ICM MC base = %llx\n", hermon, icm_offset );
-	icm_offset += ( ( 8 * sizeof ( struct hermonprm_mgm_entry ) + 4095 )
-			& ~4095 );
+	icm_offset += ( ( 8 * sizeof ( struct hermonprm_mgm_entry ) +
+			  HERMON_PAGE_SIZE - 1 ) & ~( HERMON_PAGE_SIZE - 1 ) );
 
 	hermon->icm_map[HERMON_ICM_OTHER].len =
 		( icm_offset - hermon->icm_map[HERMON_ICM_OTHER].offset );
@@ -1906,7 +2041,7 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		       hermon, strerror ( rc ) );
 		goto err_set_icm_size;
 	}
-	icm_aux_len = ( MLX_GET ( &icm_aux_size, value ) * 4096 );
+	icm_aux_len = ( MLX_GET ( &icm_aux_size, value ) * HERMON_PAGE_SIZE );
 	/* Must round up to nearest power of two :( */
 	icm_aux_len = ( 1 << fls ( icm_aux_len - 1 ) );
 
@@ -1924,10 +2059,11 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 	icm_phys = ( ( icm_phys + icm_aux_len - 1 ) & ~( icm_aux_len - 1 ) );
 	memset ( &map_icm_aux, 0, sizeof ( map_icm_aux ) );
 	MLX_FILL_2 ( &map_icm_aux, 3,
-		     log2size, fls ( ( icm_aux_len / 4096 ) - 1 ),
+		     log2size, fls ( ( icm_aux_len / HERMON_PAGE_SIZE ) - 1 ),
 		     pa_l, ( icm_phys >> 12 ) );
 	DBGC ( hermon, "Hermon %p mapping ICM AUX (2^%d pages) => %08lx\n",
-	       hermon, fls ( ( icm_aux_len / 4096 ) - 1 ), icm_phys );
+	       hermon, fls ( ( icm_aux_len / HERMON_PAGE_SIZE ) - 1 ),
+	       icm_phys );
 	if ( ( rc = hermon_cmd_map_icm_aux ( hermon, &map_icm_aux ) ) != 0 ) {
 		DBGC ( hermon, "Hermon %p could not map AUX ICM: %s\n",
 		       hermon, strerror ( rc ) );
@@ -1943,13 +2079,14 @@ static int hermon_alloc_icm ( struct hermon *hermon,
 		MLX_FILL_1 ( &map_icm, 1, va_l, hermon->icm_map[i].offset );
 		MLX_FILL_2 ( &map_icm, 3,
 			     log2size,
-			     fls ( ( hermon->icm_map[i].len / 4096 ) - 1 ),
+			     fls ( ( hermon->icm_map[i].len /
+				     HERMON_PAGE_SIZE ) - 1 ),
 			     pa_l, ( icm_phys >> 12 ) );
 		DBGC ( hermon, "Hermon %p mapping ICM %llx+%zx (2^%d pages) "
 		       "=> %08lx\n", hermon, hermon->icm_map[i].offset,
 		       hermon->icm_map[i].len,
-		       fls ( ( hermon->icm_map[i].len / 4096 ) - 1 ),
-		       icm_phys );
+		       fls ( ( hermon->icm_map[i].len /
+			       HERMON_PAGE_SIZE ) - 1 ), icm_phys );
 		if ( ( rc = hermon_cmd_map_icm ( hermon, &map_icm ) ) != 0 ) {
 			DBGC ( hermon, "Hermon %p could not map ICM: %s\n",
 			       hermon, strerror ( rc ) );
@@ -1998,7 +2135,7 @@ static void hermon_free_icm ( struct hermon *hermon ) {
 			     hermon->icm_map[i].offset );
 		hermon_cmd_unmap_icm ( hermon,
 				       ( 1 << fls ( ( hermon->icm_map[i].len /
-						      4096 ) - 1 ) ),
+						      HERMON_PAGE_SIZE ) - 1)),
 				       &unmap_icm );
 	}
 	hermon_cmd_unmap_icm_aux ( hermon );
