@@ -1070,37 +1070,31 @@ static int hermon_complete ( struct ib_device *ibdev,
 			     union hermonprm_completion_entry *cqe,
 			     ib_completer_t complete_send,
 			     ib_completer_t complete_recv ) {
-#if 0
 	struct hermon *hermon = ibdev->dev_priv;
 	struct ib_completion completion;
 	struct ib_work_queue *wq;
 	struct ib_queue_pair *qp;
 	struct hermon_queue_pair *hermon_qp;
-	struct hermon_send_work_queue *hermon_send_wq;
-	struct hermon_recv_work_queue *hermon_recv_wq;
-	struct hermonprm_recv_wqe *recv_wqe;
 	struct io_buffer *iobuf;
 	ib_completer_t complete;
 	unsigned int opcode;
 	unsigned long qpn;
 	int is_send;
-	unsigned long wqe_adr;
 	unsigned int wqe_idx;
 	int rc = 0;
 
 	/* Parse completion */
 	memset ( &completion, 0, sizeof ( completion ) );
-	qpn = MLX_GET ( &cqe->normal, my_qpn );
-	is_send = MLX_GET ( &cqe->normal, s );
-	wqe_adr = ( MLX_GET ( &cqe->normal, wqe_adr ) << 6 );
+	qpn = MLX_GET ( &cqe->normal, qpn );
+	is_send = MLX_GET ( &cqe->normal, s_r );
 	opcode = MLX_GET ( &cqe->normal, opcode );
 	if ( opcode >= HERMON_OPCODE_RECV_ERROR ) {
 		/* "s" field is not valid for error opcodes */
 		is_send = ( opcode == HERMON_OPCODE_SEND_ERROR );
 		completion.syndrome = MLX_GET ( &cqe->error, syndrome );
-		DBGC ( hermon, "Hermon %p CPN %lx syndrome %x vendor %lx\n",
+		DBGC ( hermon, "Hermon %p CQN %lx syndrome %x vendor %lx\n",
 		       hermon, cq->cqn, completion.syndrome,
-		       MLX_GET ( &cqe->error, vendor_code ) );
+		       MLX_GET ( &cqe->error, vendor_error_syndrome ) );
 		rc = -EIO;
 		/* Don't return immediately; propagate error to completer */
 	}
@@ -1114,21 +1108,10 @@ static int hermon_complete ( struct ib_device *ibdev,
 	}
 	qp = wq->qp;
 	hermon_qp = qp->dev_priv;
-	hermon_send_wq = &hermon_qp->send;
-	hermon_recv_wq = &hermon_qp->recv;
-
-	/* Identify work queue entry index */
-	if ( is_send ) {
-		wqe_idx = ( ( wqe_adr - virt_to_bus ( hermon_send_wq->wqe ) ) /
-			    sizeof ( hermon_send_wq->wqe[0] ) );
-		assert ( wqe_idx < qp->send.num_wqes );
-	} else {
-		wqe_idx = ( ( wqe_adr - virt_to_bus ( hermon_recv_wq->wqe ) ) /
-			    sizeof ( hermon_recv_wq->wqe[0] ) );
-		assert ( wqe_idx < qp->recv.num_wqes );
-	}
 
 	/* Identify I/O buffer */
+	wqe_idx = ( MLX_GET ( &cqe->normal, wqe_counter ) &
+		    ( wq->num_wqes - 1 ) );
 	iobuf = wq->iobufs[wqe_idx];
 	if ( ! iobuf ) {
 		DBGC ( hermon, "Hermon %p CQN %lx QPN %lx empty WQE %x\n",
@@ -1140,14 +1123,6 @@ static int hermon_complete ( struct ib_device *ibdev,
 	/* Fill in length for received packets */
 	if ( ! is_send ) {
 		completion.len = MLX_GET ( &cqe->normal, byte_cnt );
-		recv_wqe = &hermon_recv_wq->wqe[wqe_idx].recv;
-		assert ( MLX_GET ( &recv_wqe->data[0], local_address_l ) ==
-			 virt_to_bus ( iobuf->data ) );
-		assert ( MLX_GET ( &recv_wqe->data[0], byte_count ) ==
-			 iob_tailroom ( iobuf ) );
-		MLX_FILL_1 ( &recv_wqe->data[0], 0, byte_count, 0 );
-		MLX_FILL_1 ( &recv_wqe->data[0], 1,
-			     l_key, HERMON_INVALID_LKEY );
 		if ( completion.len > iob_tailroom ( iobuf ) ) {
 			DBGC ( hermon, "Hermon %p CQN %lx QPN %lx IDX %x "
 			       "overlength received packet length %zd\n",
@@ -1161,8 +1136,6 @@ static int hermon_complete ( struct ib_device *ibdev,
 	complete ( ibdev, qp, &completion, iobuf );
 
 	return rc;
-#endif
-	return -ENOSYS;
 }
 
 /**
@@ -1179,7 +1152,6 @@ static void hermon_poll_cq ( struct ib_device *ibdev,
 			     ib_completer_t complete_recv ) {
 	struct hermon *hermon = ibdev->dev_priv;
 	struct hermon_completion_queue *hermon_cq = cq->dev_priv;
-	struct hermonprm_cq_ci_db_record *ci_db_rec;
 	union hermonprm_completion_entry *cqe;
 	unsigned int cqe_idx_mask;
 	int rc;
@@ -1188,14 +1160,13 @@ static void hermon_poll_cq ( struct ib_device *ibdev,
 		/* Look for completion entry */
 		cqe_idx_mask = ( cq->num_cqes - 1 );
 		cqe = &hermon_cq->cqe[cq->next_idx & cqe_idx_mask];
-
-		DBG ( "Completion entry:\n" );
-		DBG_HD ( cqe, sizeof ( *cqe ) );
-
-		if ( MLX_GET ( &cqe->normal, owner ) != 0 ) {
+		if ( MLX_GET ( &cqe->normal, owner ) ^
+		     ( ( cq->next_idx & cq->num_cqes ) ? 1 : 0 ) ) {
 			/* Entry still owned by hardware; end of poll */
 			break;
 		}
+		DBGCP ( hermon, "Hermon %p completion:\n", hermon );
+		DBGCP_HD ( hermon, cqe, sizeof ( *cqe ) );
 
 		/* Handle completion */
 		if ( ( rc = hermon_complete ( ibdev, cq, cqe, complete_send,
@@ -1205,17 +1176,12 @@ static void hermon_poll_cq ( struct ib_device *ibdev,
 			DBGC_HD ( hermon, cqe, sizeof ( *cqe ) );
 		}
 
-		/* Return ownership to hardware */
-		MLX_FILL_1 ( &cqe->normal, 7, owner, 1 );
-		barrier();
 		/* Update completion queue's index */
 		cq->next_idx++;
-#if 0
+
 		/* Update doorbell record */
-		ci_db_rec = &hermon->db_rec[hermon_cq->ci_doorbell_idx].cq_ci;
-		MLX_FILL_1 ( ci_db_rec, 0,
-			     counter, ( cq->next_idx & 0xffffffffUL ) );
-#endif
+		MLX_FILL_1 ( &hermon_cq->doorbell, 0, update_ci,
+			     ( cq->next_idx & 0xffffffUL ) );
 	}
 }
 
