@@ -204,7 +204,7 @@ static int hermon_cmd ( struct hermon *hermon, unsigned long command,
 		     opcode_modifier, op_mod,
 		     go, 1,
 		     t, hermon->toggle );
-	DBGC ( hermon, "Issuing command:\n" );
+	DBGC ( hermon, "Hermon %p issuing command:\n", hermon );
 	DBGC_HDA ( hermon, virt_to_phys ( hermon->config + HERMON_HCR_BASE ),
 		   &hcr, sizeof ( hcr ) );
 	if ( in_len && ( command & HERMON_HCR_IN_MBOX ) ) {
@@ -994,19 +994,15 @@ static int hermon_post_send ( struct ib_device *ibdev,
 		     opcode, HERMON_OPCODE_SEND,
 		     owner,
 		     ( ( wq->next_idx & hermon_send_wq->num_wqes ) ? 1 : 0 ) );
+	DBGCP ( hermon, "Hermon %p posting send WQE:\n", hermon );
+	DBGCP_HD ( hermon, wqe, sizeof ( *wqe ) );
 	barrier();
-
-	DBG ( "Posting send WQE:\n" );
-	DBG_HD ( wqe, sizeof ( *wqe ) );
 
 	/* Ring doorbell register */
 	MLX_FILL_1 ( &db_reg.send, 0, qn, qp->qpn );
-
-	DBG ( "Ringing doorbell at %08lx with %08lx\n",
-	      virt_to_phys ( hermon->uar + HERMON_DB_POST_SND_OFFSET ),
-	      db_reg.dword[0] );
-
-
+	DBGCP ( hermon, "Ringing doorbell %08lx with %08lx\n",
+		virt_to_phys ( hermon->uar + HERMON_DB_POST_SND_OFFSET ),
+		db_reg.dword[0] );
 	writel ( db_reg.dword[0], ( hermon->uar + HERMON_DB_POST_SND_OFFSET ));
 
 	/* Update work queue's index */
