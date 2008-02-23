@@ -1176,7 +1176,14 @@ static int post_send_req(void *qph, void *wqeh, __u8 num_gather)
 	hw_owner = ind & qp->max_snd_wqes ? (1 << 31) : 0;
 	wqe->next.owner_opcode = cpu_to_be32(0xa | hw_owner);
 
+	DBGP ( "Posting send WQE:\n" );
+	DBGP_HD ( wqe, 128 );
+
 	wmb();
+
+	DBGP ( "Ringing doorbell at %08lx with %08lx\n",
+	      virt_to_phys ( qp->post_send_dbell ),
+	      htonl (qp->qpn << 8));
 
 	writel(htonl(qp->qpn << 8), qp->post_send_dbell);
 
