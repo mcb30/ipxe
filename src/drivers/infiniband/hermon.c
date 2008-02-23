@@ -805,7 +805,7 @@ static int hermon_create_qp ( struct ib_device *ibdev,
 		     qpc_eec_data.usr_page, HERMON_UAR_PAGE );
 	MLX_FILL_1 ( &qpctx, 33, qpc_eec_data.cqn_snd, qp->send.cq->cqn );
 	MLX_FILL_1 ( &qpctx, 38, qpc_eec_data.page_offset,
-		     ( hermon_qp->mtt.page_offset >> 5 ) );
+		     ( hermon_qp->mtt.page_offset >> 6 ) );
 	MLX_FILL_1 ( &qpctx, 41, qpc_eec_data.cqn_rcv, qp->recv.cq->cqn );
 	MLX_FILL_1 ( &qpctx, 43, qpc_eec_data.db_record_addr_l,
 		     ( virt_to_phys ( &hermon_qp->recv.doorbell ) >> 2 ) );
@@ -825,7 +825,8 @@ static int hermon_create_qp ( struct ib_device *ibdev,
 		     qpc_eec_data.msg_max, 11 /* 2^11 = 2048 */ );
 	MLX_FILL_1 ( &qpctx, 16,
 		     qpc_eec_data.primary_address_path.sched_queue,
-		     ( 0x83 /* default policy */ | ( PXE_IB_PORT << 6 ) ) );
+		     ( 0x83 /* default policy */ |
+		       ( ( PXE_IB_PORT - 1 ) << 6 ) ) );
 	if ( ( rc = hermon_cmd_init2rtr_qp ( hermon, qp->qpn,
 					     &qpctx ) ) != 0 ) {
 		DBGC ( hermon, "Hermon %p INIT2RTR_QP failed: %s\n",
@@ -906,6 +907,7 @@ static void hermon_destroy_qp ( struct ib_device *ibdev,
  ***************************************************************************
  */
 
+#if 0
 /**
  * Ring doorbell register in UAR
  *
@@ -916,7 +918,6 @@ static void hermon_destroy_qp ( struct ib_device *ibdev,
 static void hermon_ring_doorbell ( struct hermon *hermon,
 				   union hermonprm_doorbell_register *db_reg,
 				   unsigned int offset ) {
-#if 0
 	DBGC2 ( hermon, "Hermon %p ringing doorbell %08lx:%08lx at %lx\n",
 		hermon, db_reg->dword[0], db_reg->dword[1],
 		virt_to_phys ( hermon->uar + offset ) );
@@ -925,12 +926,12 @@ static void hermon_ring_doorbell ( struct hermon *hermon,
 	writel ( db_reg->dword[0], ( hermon->uar + offset + 0 ) );
 	barrier();
 	writel ( db_reg->dword[1], ( hermon->uar + offset + 4 ) );
-#endif
 }
+#endif
 
 /** GID used for GID-less send work queue entries */
 static const struct ib_gid hermon_no_gid = {
-	{ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0 } }
+	{ { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } }
 };
 
 /**
@@ -946,18 +947,14 @@ static int hermon_post_send ( struct ib_device *ibdev,
 			      struct ib_queue_pair *qp,
 			      struct ib_address_vector *av,
 			      struct io_buffer *iobuf ) {
-#if 0
 	struct hermon *hermon = ibdev->dev_priv;
 	struct hermon_queue_pair *hermon_qp = qp->dev_priv;
 	struct ib_work_queue *wq = &qp->send;
 	struct hermon_send_work_queue *hermon_send_wq = &hermon_qp->send;
-	struct hermonprm_ud_send_wqe *prev_wqe;
 	struct hermonprm_ud_send_wqe *wqe;
-	struct hermonprm_qp_db_record *qp_db_rec;
-	union hermonprm_doorbell_register db_reg;
 	const struct ib_gid *gid;
+	union hermonprm_doorbell_register db_reg;
 	unsigned int wqe_idx_mask;
-	size_t nds;
 
 	/* Allocate work queue entry */
 	wqe_idx_mask = ( wq->num_wqes - 1 );
@@ -966,24 +963,23 @@ static int hermon_post_send ( struct ib_device *ibdev,
 		return -ENOBUFS;
 	}
 	wq->iobufs[wq->next_idx & wqe_idx_mask] = iobuf;
-	prev_wqe = &hermon_send_wq->wqe[(wq->next_idx - 1) & wqe_idx_mask].ud;
 	wqe = &hermon_send_wq->wqe[wq->next_idx & wqe_idx_mask].ud;
 
 	/* Construct work queue entry */
-	MLX_FILL_1 ( &wqe->next, 1, always1, 1 );
-	memset ( &wqe->ctrl, 0, sizeof ( wqe->ctrl ) );
-	MLX_FILL_1 ( &wqe->ctrl, 0, always1, 1 );
-	memset ( &wqe->ud, 0, sizeof ( wqe->ud ) );
+	memset ( ( ( ( void * ) wqe ) + 4 /* avoid ctrl.owner */ ), 0,
+		   ( sizeof ( *wqe ) - 4 ) );
+	MLX_FILL_1 ( &wqe->ctrl, 1, ds, ( sizeof ( *wqe ) / 16 ) );
+	MLX_FILL_1 ( &wqe->ctrl, 2, c, 0x03 /* generate completion */ );
 	MLX_FILL_2 ( &wqe->ud, 0,
 		     ud_address_vector.pd, HERMON_GLOBAL_PD,
 		     ud_address_vector.port_number, PXE_IB_PORT );
 	MLX_FILL_2 ( &wqe->ud, 1,
 		     ud_address_vector.rlid, av->dlid,
 		     ud_address_vector.g, av->gid_present );
-	MLX_FILL_2 ( &wqe->ud, 2,
+	MLX_FILL_1 ( &wqe->ud, 2,
 		     ud_address_vector.max_stat_rate,
-		     ( ( av->rate >= 3 ) ? 0 : 1 ),
-		     ud_address_vector.msg, 3 );
+		     ( ( ( av->rate < 2 ) || ( av->rate > 10 ) ) ?
+		       8 : ( av->rate + 5 ) ) );
 	MLX_FILL_1 ( &wqe->ud, 3, ud_address_vector.sl, av->sl );
 	gid = ( av->gid_present ? &av->gid : &hermon_no_gid );
 	memcpy ( &wqe->ud.u.dwords[4], gid, sizeof ( *gid ) );
@@ -993,39 +989,30 @@ static int hermon_post_send ( struct ib_device *ibdev,
 	MLX_FILL_1 ( &wqe->data[0], 1, l_key, hermon->reserved_lkey );
 	MLX_FILL_1 ( &wqe->data[0], 3,
 		     local_address_l, virt_to_bus ( iobuf->data ) );
-
-	/* Update previous work queue entry's "next" field */
-	nds = ( ( offsetof ( typeof ( *wqe ), data ) +
-		  sizeof ( wqe->data[0] ) ) >> 4 );
-	MLX_SET ( &prev_wqe->next, nopcode, HERMON_OPCODE_SEND );
-	MLX_FILL_3 ( &prev_wqe->next, 1,
-		     nds, nds,
-		     f, 1,
-		     always1, 1 );
-
-	/* Update doorbell record */
 	barrier();
-	qp_db_rec = &hermon->db_rec[hermon_send_wq->doorbell_idx].qp;
-	MLX_FILL_1 ( qp_db_rec, 0,
-		     counter, ( ( wq->next_idx + 1 ) & 0xffff ) );
+	MLX_FILL_2 ( &wqe->ctrl, 0,
+		     opcode, HERMON_OPCODE_SEND,
+		     owner,
+		     ( ( wq->next_idx & hermon_send_wq->num_wqes ) ? 1 : 0 ) );
+	barrier();
+
+	DBG ( "Posting send WQE:\n" );
+	DBG_HD ( wqe, sizeof ( *wqe ) );
 
 	/* Ring doorbell register */
-	MLX_FILL_4 ( &db_reg.send, 0,
-		     nopcode, HERMON_OPCODE_SEND,
-		     f, 1,
-		     wqe_counter, ( wq->next_idx & 0xffff ),
-		     wqe_cnt, 1 );
-	MLX_FILL_2 ( &db_reg.send, 1,
-		     nds, nds,
-		     qpn, qp->qpn );
-	hermon_ring_doorbell ( hermon, &db_reg, HERMON_DB_POST_SND_OFFSET );
+	MLX_FILL_1 ( &db_reg.send, 0, qn, qp->qpn );
+
+	DBG ( "Ringing doorbell at %08lx with %08lx\n",
+	      virt_to_phys ( hermon->uar + HERMON_DB_POST_SND_OFFSET ),
+	      db_reg.dword[0] );
+
+
+	writel ( db_reg.dword[0], ( hermon->uar + HERMON_DB_POST_SND_OFFSET ));
 
 	/* Update work queue's index */
 	wq->next_idx++;
 
 	return 0;
-#endif
-	return -ENOSYS;
 }
 
 /**
@@ -1039,13 +1026,11 @@ static int hermon_post_send ( struct ib_device *ibdev,
 static int hermon_post_recv ( struct ib_device *ibdev,
 			      struct ib_queue_pair *qp,
 			      struct io_buffer *iobuf ) {
-#if 0
 	struct hermon *hermon = ibdev->dev_priv;
 	struct hermon_queue_pair *hermon_qp = qp->dev_priv;
 	struct ib_work_queue *wq = &qp->recv;
 	struct hermon_recv_work_queue *hermon_recv_wq = &hermon_qp->recv;
 	struct hermonprm_recv_wqe *wqe;
-	union hermonprm_doorbell_record *db_rec;
 	unsigned int wqe_idx_mask;
 
 	/* Allocate work queue entry */
@@ -1063,18 +1048,15 @@ static int hermon_post_recv ( struct ib_device *ibdev,
 	MLX_FILL_1 ( &wqe->data[0], 3,
 		     local_address_l, virt_to_bus ( iobuf->data ) );
 
-	/* Update doorbell record */
-	barrier();
-	db_rec = &hermon->db_rec[hermon_recv_wq->doorbell_idx];
-	MLX_FILL_1 ( &db_rec->qp, 0,
-		     counter, ( ( wq->next_idx + 1 ) & 0xffff ) );
-
 	/* Update work queue's index */
 	wq->next_idx++;
 
+	/* Update doorbell record */
+	barrier();
+	MLX_FILL_1 ( &hermon_recv_wq->doorbell, 0, receive_wqe_counter,
+		     ( ( wq->next_idx + 1 ) & 0xffff ) );
+
 	return 0;
-#endif
-	return -ENOSYS;
 }
 
 /**
@@ -1087,12 +1069,12 @@ static int hermon_post_recv ( struct ib_device *ibdev,
  * @v complete_recv	Receive completion handler
  * @ret rc		Return status code
  */
-#if 0
 static int hermon_complete ( struct ib_device *ibdev,
 			     struct ib_completion_queue *cq,
 			     union hermonprm_completion_entry *cqe,
 			     ib_completer_t complete_send,
 			     ib_completer_t complete_recv ) {
+#if 0
 	struct hermon *hermon = ibdev->dev_priv;
 	struct ib_completion completion;
 	struct ib_work_queue *wq;
@@ -1183,8 +1165,9 @@ static int hermon_complete ( struct ib_device *ibdev,
 	complete ( ibdev, qp, &completion, iobuf );
 
 	return rc;
-}
 #endif
+	return -ENOSYS;
+}
 
 /**
  * Poll completion queue
@@ -1198,7 +1181,6 @@ static void hermon_poll_cq ( struct ib_device *ibdev,
 			     struct ib_completion_queue *cq,
 			     ib_completer_t complete_send,
 			     ib_completer_t complete_recv ) {
-#if 0
 	struct hermon *hermon = ibdev->dev_priv;
 	struct hermon_completion_queue *hermon_cq = cq->dev_priv;
 	struct hermonprm_cq_ci_db_record *ci_db_rec;
@@ -1210,6 +1192,10 @@ static void hermon_poll_cq ( struct ib_device *ibdev,
 		/* Look for completion entry */
 		cqe_idx_mask = ( cq->num_cqes - 1 );
 		cqe = &hermon_cq->cqe[cq->next_idx & cqe_idx_mask];
+
+		DBG ( "Completion entry:\n" );
+		DBG_HD ( cqe, sizeof ( *cqe ) );
+
 		if ( MLX_GET ( &cqe->normal, owner ) != 0 ) {
 			/* Entry still owned by hardware; end of poll */
 			break;
@@ -1228,12 +1214,13 @@ static void hermon_poll_cq ( struct ib_device *ibdev,
 		barrier();
 		/* Update completion queue's index */
 		cq->next_idx++;
+#if 0
 		/* Update doorbell record */
 		ci_db_rec = &hermon->db_rec[hermon_cq->ci_doorbell_idx].cq_ci;
 		MLX_FILL_1 ( ci_db_rec, 0,
 			     counter, ( cq->next_idx & 0xffffffffUL ) );
-	}
 #endif
+	}
 }
 
 /***************************************************************************
@@ -2115,8 +2102,8 @@ static int hermon_probe ( struct pci_device *pci,
 	hermon->config = ioremap ( pci_bar_start ( pci, HERMON_PCI_CONFIG_BAR),
 				   HERMON_PCI_CONFIG_BAR_SIZE );
 	hermon->uar = ioremap ( ( pci_bar_start ( pci, HERMON_PCI_UAR_BAR ) +
-				  HERMON_PCI_UAR_IDX * HERMON_PCI_UAR_SIZE ),
-				HERMON_PCI_UAR_SIZE );
+				  HERMON_UAR_PAGE * HERMON_PAGE_SIZE ),
+				HERMON_PAGE_SIZE );
 
 	/* Allocate space for mailboxes */
 	hermon->mailbox_in = malloc_dma ( HERMON_MBOX_SIZE,
