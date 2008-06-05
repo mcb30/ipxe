@@ -72,13 +72,20 @@ static void downloader_free ( struct refcnt *refcnt ) {
  */
 static void downloader_finished ( struct downloader *downloader, int rc ) {
 
+	/* Sustain existence during close */
+	ref_get ( &downloader->refcnt );
+
 	/* Block further incoming messages */
-	job_nullify ( &downloader->job );
 	xfer_nullify ( &downloader->xfer );
 
 	/* Free resources and close interfaces */
 	xfer_close ( &downloader->xfer, rc );
-	job_done ( &downloader->job, rc );
+
+	/* Finish with interfaces */
+	job_finished ( &downloader->job, rc );
+
+	/* Drop sustaining reference */
+	ref_put ( &downloader->refcnt );
 }
 
 /**
@@ -119,22 +126,22 @@ static int downloader_ensure_size ( struct downloader *downloader,
  */
 
 /**
- * Handle kill() event received via job control interface
+ * Terminate job
  *
  * @v job		Downloader job control interface
+ * @v rc		Overall job status code
  */
-static void downloader_job_kill ( struct job_interface *job ) {
+static void downloader_job_close ( struct job_interface *job, int rc ) {
 	struct downloader *downloader = 
 		container_of ( job, struct downloader, job );
 
 	/* Terminate download */
-	downloader_finished ( downloader, -ECANCELED );
+	downloader_finished ( downloader, rc );
 }
 
 /** Downloader job control interface operations */
 static struct job_interface_operations downloader_job_operations = {
-	.done		= ignore_job_done,
-	.kill		= downloader_job_kill,
+	.close		= downloader_job_close,
 	.progress	= ignore_job_progress,
 };
 

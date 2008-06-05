@@ -341,8 +341,10 @@ static void dhcp_free ( struct refcnt *refcnt ) {
  */
 static void dhcp_finished ( struct dhcp_session *dhcp, int rc ) {
 
+	/* Sustain existence during close */
+	ref_get ( &dhcp->refcnt );
+
 	/* Block futher incoming messages */
-	job_nullify ( &dhcp->job );
 	udp_nullify ( &dhcp->udp );
 
 	/* Stop retry timer */
@@ -350,7 +352,12 @@ static void dhcp_finished ( struct dhcp_session *dhcp, int rc ) {
 
 	/* Free resources and close interfaces */
 	udp_close ( &dhcp->udp, rc );
-	job_done ( &dhcp->job, rc );
+
+	/* Finish with interfaces */
+	job_finished ( &dhcp->job, rc );
+
+	/* Drop sustaining reference */
+	ref_put ( &dhcp->refcnt );
 }
 
 /****************************************************************************
@@ -947,22 +954,22 @@ static void dhcp_timer_expired ( struct retry_timer *timer, int fail ) {
  */
 
 /**
- * Handle kill() event received via job control interface
+ * Terminate DHCP job
  *
  * @v job		DHCP job control interface
+ * @v rc		Overall job status code
  */
-static void dhcp_job_kill ( struct job_interface *job ) {
+static void dhcp_job_close ( struct job_interface *job, int rc ) {
 	struct dhcp_session *dhcp =
 		container_of ( job, struct dhcp_session, job );
 
 	/* Terminate DHCP session */
-	dhcp_finished ( dhcp, -ECANCELED );
+	dhcp_finished ( dhcp, rc );
 }
 
 /** DHCP job control interface operations */
 static struct job_interface_operations dhcp_job_operations = {
-	.done		= ignore_job_done,
-	.kill		= dhcp_job_kill,
+	.close		= dhcp_job_close,
 	.progress	= ignore_job_progress,
 };
 

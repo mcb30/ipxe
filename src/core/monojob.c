@@ -33,25 +33,19 @@
 
 static int monojob_rc;
 
-static void monojob_done ( struct job_interface *job __unused, int rc ) {
+static void monojob_close ( struct job_interface *job, int rc ) {
 	monojob_rc = rc;
+	job_finished ( job, rc );
 }
 
 /** Single foreground job operations */
 static struct job_interface_operations monojob_operations = {
-	.done		= monojob_done,
-	.kill		= ignore_job_kill,
+	.close		= monojob_close,
 	.progress	= ignore_job_progress,
 };
 
 /** Single foreground job */
-struct job_interface monojob = {
-	.intf = {
-		.dest = &null_job.intf,
-		.refcnt = NULL,
-	},
-	.op = &monojob_operations,
-};
+struct job_interface monojob = JOB_INIT ( monojob, &monojob_operations );
 
 /**
  * Wait for single foreground job to complete
@@ -65,14 +59,15 @@ int monojob_wait ( const char *string ) {
 
 	printf ( "%s... ", string );
 	monojob_rc = -EINPROGRESS;
+	monojob.op = &monojob_operations;
 	while ( monojob_rc == -EINPROGRESS ) {
 		step();
 		if ( iskey() ) {
 			key = getchar();
 			switch ( key ) {
 			case CTRL_C:
-				job_kill ( &monojob );
 				rc = -ECANCELED;
+				job_finished ( &monojob, rc );
 				goto done;
 			default:
 				break;

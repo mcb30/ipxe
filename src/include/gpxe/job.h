@@ -33,17 +33,12 @@ struct job_interface;
 
 /** Job control interface operations */
 struct job_interface_operations {
-	/** Job completed
+	/** Terminate job
 	 *
 	 * @v job		Job control interface
 	 * @v rc		Overall job status code
 	 */
-	void ( * done ) ( struct job_interface *job, int rc );
-	/** Abort job
-	 *
-	 * @v job		Job control interface
-	 */
-	void ( * kill ) ( struct job_interface *job );
+	void ( * close ) ( struct job_interface *job, int rc );
 	/** Get job progress
 	 *
 	 * @v job		Job control interface
@@ -64,11 +59,8 @@ struct job_interface {
 extern struct job_interface null_job;
 extern struct job_interface_operations null_job_ops;
 
-extern void job_done ( struct job_interface *job, int rc );
-extern void job_kill ( struct job_interface *job );
-
-extern void ignore_job_done ( struct job_interface *job, int rc );
-extern void ignore_job_kill ( struct job_interface *job );
+extern void job_finished ( struct job_interface *job, int rc );
+extern void ignore_job_close ( struct job_interface *job, int rc );
 extern void ignore_job_progress ( struct job_interface *job,
 				  struct job_progress *progress );
 
@@ -88,6 +80,20 @@ static inline void job_init ( struct job_interface *job,
 }
 
 /**
+ * Initialise a static job control interface
+ *
+ * @v _name		Job control interface
+ * @v _op		Job control interface operations
+ */
+#define JOB_INIT( _name, _op ) {		\
+		.intf = {			\
+			.dest = &null_job.intf,	\
+			.refcnt = NULL,		\
+		},				\
+		.op = _op,			\
+	}
+
+/**
  * Get job control interface from generic object communication interface
  *
  * @v intf		Generic object communication interface
@@ -99,14 +105,25 @@ intf_to_job ( struct interface *intf ) {
 }
 
 /**
- * Get reference to destination job control interface
+ * Get destination job control interface
  *
  * @v job		Job control interface
  * @ret dest		Destination interface
  */
 static inline __attribute__ (( always_inline )) struct job_interface *
-job_get_dest ( struct job_interface *job ) {
-	return intf_to_job ( intf_get ( job->intf.dest ) );
+job_dest ( struct job_interface *job ) {
+	return intf_to_job ( job->intf.dest );
+}
+
+/**
+ * Get reference to job control interface
+ *
+ * @v job		Job control interface
+ */
+static inline __attribute__ (( always_inline )) struct job_interface *
+job_get ( struct job_interface *job ) {
+	intf_get ( &job->intf );
+	return job;
 }
 
 /**
@@ -151,15 +168,37 @@ static inline void job_unplug ( struct job_interface *job ) {
 }
 
 /**
- * Stop using a job control interface
+ * Block further messages on a job control interface
  *
  * @v job		Job control interface
- *
- * After calling this method, no further messages will be received via
- * the interface.
  */
 static inline void job_nullify ( struct job_interface *job ) {
 	job->op = &null_job_ops;
 };
+
+/**
+ * Terminate job
+ *
+ * @v job		Job control interface
+ * @v rc		Overall job status code
+ */
+static inline void job_close ( struct job_interface *job, int rc ) {
+	struct job_interface *dest = job_dest ( job );
+
+	dest->op->close ( dest, rc );
+}
+
+/**
+ * Get job progress
+ *
+ * @v job		Job control interface
+ * @v progress		Progress data to fill in
+ */
+static inline void job_progress ( struct job_interface *job,
+				  struct job_progress *progress ) {
+	struct job_interface *dest = job_dest ( job );
+
+	dest->op->progress ( dest, progress );
+}
 
 #endif /* _GPXE_JOB_H */

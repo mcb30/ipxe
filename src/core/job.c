@@ -26,20 +26,31 @@
  *
  */
 
-void job_done ( struct job_interface *job, int rc ) {
-	struct job_interface *dest = job_get_dest ( job );
+/**
+ * Finish using a job control interface
+ *
+ * @v job		Job control interface
+ * @v rc		Overall job status code
+ *
+ * Blocks all further messages, sends a close() message to the remote
+ * end and unplugs the interface.
+ */
+void job_finished ( struct job_interface *job, int rc ) {
 
+	/* Sustain existence during close */
+	job_get ( job );
+
+	/* Block further incoming messages */
+	job_nullify ( job );
+
+	/* Close interface */
+	job_close ( job, rc );
+
+	/* Unplug interface */
 	job_unplug ( job );
-	dest->op->done ( dest, rc );
-	job_put ( dest );
-}
 
-void job_kill ( struct job_interface *job ) {
-	struct job_interface *dest = job_get_dest ( job );
-
-	job_unplug ( job );
-	dest->op->kill ( dest );
-	job_put ( dest );
+	/* Drop sustaining reference */
+	job_put ( job );
 }
 
 /****************************************************************************
@@ -51,11 +62,7 @@ void job_kill ( struct job_interface *job ) {
  *
  */
 
-void ignore_job_done ( struct job_interface *job __unused, int rc __unused ) {
-	/* Nothing to do */
-}
-
-void ignore_job_kill ( struct job_interface *job __unused ) {
+void ignore_job_close ( struct job_interface *job __unused, int rc __unused ) {
 	/* Nothing to do */
 }
 
@@ -66,8 +73,7 @@ void ignore_job_progress ( struct job_interface *job __unused,
 
 /** Null job control interface operations */
 struct job_interface_operations null_job_ops = {
-	.done		= ignore_job_done,
-	.kill		= ignore_job_kill,
+	.close		= ignore_job_close,
 	.progress	= ignore_job_progress,
 };
 
@@ -78,10 +84,4 @@ struct job_interface_operations null_job_ops = {
  * when unplugged.  It will never generate messages, and will silently
  * absorb all received messages.
  */
-struct job_interface null_job = {
-	.intf = {
-		.dest = &null_job.intf,
-		.refcnt = NULL,
-	},
-	.op = &null_job_ops,
-};
+struct job_interface null_job = JOB_INIT ( null_job, &null_job_ops );
