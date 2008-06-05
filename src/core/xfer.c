@@ -102,28 +102,6 @@ size_t xfer_window ( struct xfer_interface *xfer ) {
 }
 
 /**
- * Allocate I/O buffer
- *
- * @v xfer		Data transfer interface
- * @v len		I/O buffer payload length
- * @ret iobuf		I/O buffer
- */
-struct io_buffer * xfer_alloc_iob ( struct xfer_interface *xfer, size_t len ) {
-	struct xfer_interface *dest = xfer_get_dest ( xfer );
-	struct io_buffer *iobuf;
-
-	DBGC ( xfer, "XFER %p->%p alloc_iob %zd\n", xfer, dest, len );
-
-	iobuf = dest->op->alloc_iob ( dest, len );
-
-	if ( ! iobuf ) {
-		DBGC ( xfer, "XFER %p<-%p alloc_iob failed\n", xfer, dest );
-	}
-	xfer_put ( dest );
-	return iobuf;
-}
-
-/**
  * Deliver datagram as I/O buffer with metadata
  *
  * @v xfer		Data transfer interface
@@ -248,7 +226,7 @@ int xfer_seek ( struct xfer_interface *xfer, off_t offset, int whence ) {
 	       whence_text ( whence ), offset );
 
 	/* Allocate and send a zero-length data buffer */
-	iobuf = xfer_alloc_iob ( xfer, 0 );
+	iobuf = alloc_iob ( 0 );
 	if ( ! iobuf )
 		return -ENOMEM;
 	return xfer_deliver_iob_meta ( xfer, iobuf, &meta );
@@ -314,18 +292,6 @@ size_t no_xfer_window ( struct xfer_interface *xfer __unused ) {
 }
 
 /**
- * Allocate I/O buffer
- *
- * @v xfer		Data transfer interface
- * @v len		I/O buffer payload length
- * @ret iobuf		I/O buffer
- */
-struct io_buffer *
-default_xfer_alloc_iob ( struct xfer_interface *xfer __unused, size_t len ) {
-	return alloc_iob ( len );
-}
-
-/**
  * Deliver datagram as raw data
  *
  * @v xfer		Data transfer interface
@@ -361,7 +327,7 @@ int xfer_deliver_as_iob ( struct xfer_interface *xfer,
 			  const void *data, size_t len ) {
 	struct io_buffer *iobuf;
 
-	iobuf = xfer->op->alloc_iob ( xfer, len );
+	iobuf = alloc_iob ( len );
 	if ( ! iobuf )
 		return -ENOMEM;
 
@@ -390,7 +356,6 @@ struct xfer_interface_operations null_xfer_ops = {
 	.close		= ignore_xfer_close,
 	.vredirect	= ignore_xfer_vredirect,
 	.window		= unlimited_xfer_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= xfer_deliver_as_raw,
 	.deliver_raw	= ignore_xfer_deliver_raw,
 };

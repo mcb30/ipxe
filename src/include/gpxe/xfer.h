@@ -48,14 +48,6 @@ struct xfer_interface_operations {
 	 * bytes.
 	 */
 	size_t ( * window ) ( struct xfer_interface *xfer );
-	/** Allocate I/O buffer
-	 *
-	 * @v xfer		Data transfer interface
-	 * @v len		I/O buffer payload length
-	 * @ret iobuf		I/O buffer
-	 */
-	struct io_buffer * ( * alloc_iob ) ( struct xfer_interface *xfer,
-					     size_t len );
 	/** Deliver datagram as I/O buffer with metadata
 	 *
 	 * @v xfer		Data transfer interface
@@ -138,8 +130,6 @@ extern int xfer_vredirect ( struct xfer_interface *xfer, int type,
 			    va_list args );
 extern int xfer_redirect ( struct xfer_interface *xfer, int type, ... );
 extern size_t xfer_window ( struct xfer_interface *xfer );
-extern struct io_buffer * xfer_alloc_iob ( struct xfer_interface *xfer,
-					   size_t len );
 extern int xfer_deliver_iob ( struct xfer_interface *xfer,
 			      struct io_buffer *iobuf );
 extern int xfer_deliver_iob_meta ( struct xfer_interface *xfer,
@@ -158,8 +148,6 @@ extern int ignore_xfer_vredirect ( struct xfer_interface *xfer,
 				   int type, va_list args );
 extern size_t unlimited_xfer_window ( struct xfer_interface *xfer );
 extern size_t no_xfer_window ( struct xfer_interface *xfer );
-extern struct io_buffer * default_xfer_alloc_iob ( struct xfer_interface *xfer,
-						   size_t len );
 extern int xfer_deliver_as_raw ( struct xfer_interface *xfer,
 				 struct io_buffer *iobuf,
 				 struct xfer_metadata *meta );

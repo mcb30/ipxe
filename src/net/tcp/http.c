@@ -427,7 +427,6 @@ static struct xfer_interface_operations http_socket_operations = {
 	.close		= http_socket_close,
 	.vredirect	= xfer_vopen,
 	.window		= unlimited_xfer_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= http_socket_deliver_iob,
 	.deliver_raw	= xfer_deliver_as_iob,
 };
@@ -453,7 +452,6 @@ static struct xfer_interface_operations http_xfer_operations = {
 	.close		= http_xfer_close,
 	.vredirect	= ignore_xfer_vredirect,
 	.window		= unlimited_xfer_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= xfer_deliver_as_raw,
 	.deliver_raw	= ignore_xfer_deliver_raw,
 };

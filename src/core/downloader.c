@@ -207,7 +207,6 @@ static struct xfer_interface_operations downloader_xfer_operations = {
 	.close		= downloader_xfer_close,
 	.vredirect	= xfer_vopen,
 	.window		= unlimited_xfer_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= downloader_xfer_deliver_iob,
 	.deliver_raw	= xfer_deliver_as_iob,
 };

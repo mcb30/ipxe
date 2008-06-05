@@ -42,8 +42,6 @@ extern void filter_close ( struct xfer_interface *xfer, int rc );
 extern int filter_vredirect ( struct xfer_interface *xfer, int type,
 			      va_list args );
 extern size_t filter_window ( struct xfer_interface *xfer );
-extern struct io_buffer * filter_alloc_iob ( struct xfer_interface *xfer,
-					     size_t len );
 extern int filter_deliver_iob ( struct xfer_interface *xfer,
 				struct io_buffer *iobuf,
 				struct xfer_metadata *meta );

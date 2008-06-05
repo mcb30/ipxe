@@ -177,6 +177,22 @@ static void udp_close ( struct udp_connection *udp, int rc ) {
 }
 
 /**
+ * Allocate I/O buffer for UDP
+ *
+ * @v xfer		Data transfer interface
+ * @v len		Payload size
+ * @ret iobuf		I/O buffer, or NULL
+ */
+struct io_buffer * udp_alloc_iob ( size_t len ) {
+	struct io_buffer *iobuf;
+
+	iobuf = alloc_iob ( UDP_MAX_HLEN + len );
+	if ( iobuf )
+		iob_reserve ( iobuf, UDP_MAX_HLEN );
+	return iobuf;
+}
+
+/**
  * Transmit data via a UDP connection to a specified address
  *
  * @v udp		UDP connection
@@ -356,29 +372,6 @@ static void udp_xfer_close ( struct xfer_interface *xfer, int rc ) {
 }
 
 /**
- * Allocate I/O buffer for UDP
- *
- * @v xfer		Data transfer interface
- * @v len		Payload size
- * @ret iobuf		I/O buffer, or NULL
- */
-static struct io_buffer * udp_alloc_iob ( struct xfer_interface *xfer,
-					  size_t len ) {
-	struct udp_connection *udp =
-		container_of ( xfer, struct udp_connection, xfer );	
-	struct io_buffer *iobuf;
-
-	iobuf = alloc_iob ( UDP_MAX_HLEN + len );
-	if ( ! iobuf ) {
-		DBGC ( udp, "UDP %p cannot allocate buffer of length %zd\n",
-		       udp, len );
-		return NULL;
-	}
-	iob_reserve ( iobuf, UDP_MAX_HLEN );
-	return iobuf;
-}
-
-/**
  * Deliver datagram as I/O buffer
  *
  * @v xfer		Data transfer interface
@@ -411,14 +404,33 @@ static int udp_xfer_deliver_iob ( struct xfer_interface *xfer,
 	return 0;
 }
 
+/**
+ * Deliver datagram as raw data
+ *
+ * @v xfer		Data transfer interface
+ * @v iobuf		Datagram I/O buffer
+ * @v meta		Data transfer metadata, or NULL
+ * @ret rc		Return status code
+ */
+static int udp_xfer_deliver_raw ( struct xfer_interface *xfer,
+				  const void *data, size_t len ) {
+	struct io_buffer *iobuf;
+
+	iobuf = udp_alloc_iob ( len );
+	if ( ! iobuf )
+		return -ENOMEM;
+
+	memcpy ( iob_put ( iobuf, len ), data, len );
+	return udp_xfer_deliver_iob ( xfer, iobuf, NULL );
+}
+
 /** UDP data transfer interface operations */
 static struct xfer_interface_operations udp_xfer_operations = {
 	.close		= udp_xfer_close,
 	.vredirect	= ignore_xfer_vredirect,
 	.window		= unlimited_xfer_window,
-	.alloc_iob	= udp_alloc_iob,
 	.deliver_iob	= udp_xfer_deliver_iob,
-	.deliver_raw	= xfer_deliver_as_iob,
+	.deliver_raw	= udp_xfer_deliver_raw,
 };
 
 /***************************************************************************

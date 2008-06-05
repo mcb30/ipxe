@@ -29,6 +29,7 @@
 #include <gpxe/open.h>
 #include <gpxe/uri.h>
 #include <gpxe/tcpip.h>
+#include <gpxe/udp.h>
 #include <gpxe/retry.h>
 #include <gpxe/features.h>
 #include <gpxe/bitmap.h>
@@ -327,7 +328,7 @@ static int tftp_send_rrq ( struct tftp_request *tftp ) {
 	DBGC ( tftp, "TFTP %p requesting \"%s\"\n", tftp, path );
 
 	/* Allocate buffer */
-	iobuf = xfer_alloc_iob ( &tftp->socket, len );
+	iobuf = udp_alloc_iob ( len );
 	if ( ! iobuf )
 		return -ENOMEM;
 
@@ -373,7 +374,7 @@ static int tftp_send_ack ( struct tftp_request *tftp ) {
 	DBGC2 ( tftp, "TFTP %p sending ACK for block %d\n", tftp, block );
 
 	/* Allocate buffer */
-	iobuf = xfer_alloc_iob ( &tftp->socket, sizeof ( *ack ) );
+	iobuf = udp_alloc_iob ( sizeof ( *ack ) );
 	if ( ! iobuf )
 		return -ENOMEM;
 
@@ -916,7 +917,6 @@ static struct xfer_interface_operations tftp_socket_operations = {
 	.close		= ignore_xfer_close,
 	.vredirect	= xfer_vopen,
 	.window		= unlimited_xfer_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= tftp_socket_deliver_iob,
 	.deliver_raw	= xfer_deliver_as_iob,
 };
@@ -943,7 +943,6 @@ static struct xfer_interface_operations tftp_mc_socket_operations = {
 	.close		= ignore_xfer_close,
 	.vredirect	= xfer_vopen,
 	.window		= unlimited_xfer_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= tftp_mc_socket_deliver_iob,
 	.deliver_raw	= xfer_deliver_as_iob,
 };
@@ -969,7 +968,6 @@ static struct xfer_interface_operations tftp_xfer_operations = {
 	.close		= tftp_xfer_close,
 	.vredirect	= ignore_xfer_vredirect,
 	.window		= unlimited_xfer_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= xfer_deliver_as_raw,
 	.deliver_raw	= ignore_xfer_deliver_raw,
 };

@@ -104,7 +104,6 @@ static struct xfer_interface_operations pxe_udp_xfer_operations = {
 	.close		= ignore_xfer_close,
 	.vredirect	= ignore_xfer_vredirect,
 	.window		= unlimited_xfer_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= pxe_udp_deliver_iob,
 	.deliver_raw	= xfer_deliver_as_iob,
 };
@@ -284,7 +283,7 @@ PXENV_EXIT_t pxenv_udp_write ( struct s_PXENV_UDP_WRITE *pxenv_udp_write ) {
 
 	/* Allocate and fill data buffer */
 	len = pxenv_udp_write->buffer_size;
-	iobuf = xfer_alloc_iob ( &pxe_udp.xfer, len );
+	iobuf = udp_alloc_iob ( len );
 	if ( ! iobuf ) {
 		pxenv_udp_write->Status = PXENV_STATUS_OUT_OF_RESOURCES;
 		return PXENV_EXIT_FAILURE;

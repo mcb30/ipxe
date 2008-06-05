@@ -42,6 +42,7 @@ struct udp_header {
 extern int udp_open_promisc ( struct xfer_interface *xfer );
 extern int udp_open ( struct xfer_interface *xfer, struct sockaddr *peer,
 		      struct sockaddr *local );
+extern struct io_buffer * udp_alloc_iob ( size_t len );
 
 #endif /* _GPXE_UDP_H */
 

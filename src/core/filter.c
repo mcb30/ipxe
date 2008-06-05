@@ -50,13 +50,6 @@ size_t filter_window ( struct xfer_interface *xfer ) {
 	return xfer_window ( other );
 }
 
-struct io_buffer * filter_alloc_iob ( struct xfer_interface *xfer,
-				      size_t len ) {
-	struct xfer_interface *other = filter_other_half ( xfer );
-
-	return xfer_alloc_iob ( other, len );
-}
-
 int filter_deliver_iob ( struct xfer_interface *xfer, struct io_buffer *iobuf,
 			 struct xfer_metadata *meta ) {
 	struct xfer_interface *other = filter_other_half ( xfer );

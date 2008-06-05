@@ -1056,7 +1056,6 @@ static struct xfer_interface_operations tcp_xfer_operations = {
 	.close		= tcp_xfer_close,
 	.vredirect	= ignore_xfer_vredirect,
 	.window		= tcp_xfer_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= tcp_xfer_deliver_iob,
 	.deliver_raw	= xfer_deliver_as_iob,
 };

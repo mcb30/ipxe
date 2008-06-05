@@ -1168,8 +1168,7 @@ static int tls_send_plaintext ( struct tls_session *tls, unsigned int type,
 
 	/* Allocate ciphertext */
 	ciphertext_len = ( sizeof ( *tlshdr ) + plaintext_len );
-	ciphertext = xfer_alloc_iob ( &tls->cipherstream.xfer,
-				      ciphertext_len );
+	ciphertext = alloc_iob ( ciphertext_len );
 	if ( ! ciphertext ) {
 		DBGC ( tls, "TLS %p could not allocate %zd bytes for "
 		       "ciphertext\n", tls, ciphertext_len );
@@ -1461,7 +1460,6 @@ static struct xfer_interface_operations tls_plainstream_operations = {
 	.close		= tls_plainstream_close,
 	.vredirect	= ignore_xfer_vredirect,
 	.window		= tls_plainstream_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= xfer_deliver_as_raw,
 	.deliver_raw	= tls_plainstream_deliver_raw,
 };
@@ -1600,7 +1598,6 @@ static struct xfer_interface_operations tls_cipherstream_operations = {
 	.close		= tls_cipherstream_close,
 	.vredirect	= xfer_vopen,
 	.window		= filter_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= xfer_deliver_as_raw,
 	.deliver_raw	= tls_cipherstream_deliver_raw,
 };

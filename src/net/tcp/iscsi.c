@@ -394,7 +394,7 @@ static int iscsi_tx_data_out ( struct iscsi_session *iscsi ) {
 	assert ( iscsi->command->data_out );
 	assert ( ( offset + len ) <= iscsi->command->data_out_len );
 
-	iobuf = xfer_alloc_iob ( &iscsi->socket, len );
+	iobuf = alloc_iob ( len );
 	if ( ! iobuf )
 		return -ENOMEM;
 	
@@ -554,7 +554,7 @@ static int iscsi_tx_login_request ( struct iscsi_session *iscsi ) {
 	size_t len;
 
 	len = ISCSI_DATA_LEN ( request->lengths );
-	iobuf = xfer_alloc_iob ( &iscsi->socket, len );
+	iobuf = alloc_iob ( len );
 	if ( ! iobuf )
 		return -ENOMEM;
 	iob_put ( iobuf, len );
@@ -1367,7 +1367,6 @@ static struct xfer_interface_operations iscsi_socket_operations = {
 	.close		= iscsi_socket_close,
 	.vredirect	= iscsi_vredirect,
 	.window		= unlimited_xfer_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= xfer_deliver_as_raw,
 	.deliver_raw	= iscsi_socket_deliver_raw,
 };

@@ -30,9 +30,9 @@
 #include <gpxe/job.h>
 #include <gpxe/retry.h>
 #include <gpxe/tcpip.h>
+#include <gpxe/udp.h>
 #include <gpxe/ip.h>
 #include <gpxe/uuid.h>
-#include <gpxe/dhcp.h>
 #include <gpxe/timer.h>
 #include <gpxe/settings.h>
 #include <gpxe/dhcp.h>
@@ -587,7 +587,7 @@ static int dhcp_tx ( struct dhcp_session *dhcp ) {
 	}
 
 	/* Allocate buffer for packet */
-	iobuf = xfer_alloc_iob ( &dhcp->xfer, DHCP_MIN_LEN );
+	iobuf = udp_alloc_iob ( DHCP_MIN_LEN );
 	if ( ! iobuf )
 		return -ENOMEM;
 
@@ -901,7 +901,6 @@ static struct xfer_interface_operations dhcp_xfer_operations = {
 	.close		= ignore_xfer_close,
 	.vredirect	= xfer_vopen,
 	.window		= unlimited_xfer_window,
-	.alloc_iob	= default_xfer_alloc_iob,
 	.deliver_iob	= xfer_deliver_as_raw,
 	.deliver_raw	= dhcp_deliver_raw,
 };
