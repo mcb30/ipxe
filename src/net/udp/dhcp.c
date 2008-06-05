@@ -25,7 +25,6 @@
 #include <gpxe/if_ether.h>
 #include <gpxe/netdevice.h>
 #include <gpxe/device.h>
-#include <gpxe/xfer.h>
 #include <gpxe/open.h>
 #include <gpxe/job.h>
 #include <gpxe/retry.h>
@@ -297,8 +296,8 @@ struct dhcp_session {
 	struct refcnt refcnt;
 	/** Job control interface */
 	struct job_interface job;
-	/** Data transfer interface */
-	struct xfer_interface xfer;
+	/** UDP interface */
+	struct udp_interface udp;
 
 	/** Network device being configured */
 	struct net_device *netdev;
@@ -344,13 +343,13 @@ static void dhcp_finished ( struct dhcp_session *dhcp, int rc ) {
 
 	/* Block futher incoming messages */
 	job_nullify ( &dhcp->job );
-	xfer_nullify ( &dhcp->xfer );
+	udp_nullify ( &dhcp->udp );
 
 	/* Stop retry timer */
 	stop_timer ( &dhcp->timer );
 
 	/* Free resources and close interfaces */
-	xfer_close ( &dhcp->xfer, rc );
+	udp_close ( &dhcp->udp, rc );
 	job_done ( &dhcp->job, rc );
 }
 
@@ -542,9 +541,7 @@ static int dhcp_tx ( struct dhcp_session *dhcp ) {
 		.sin_family = AF_INET,
 		.sin_port = htons ( PROXYDHCP_PORT ),
 	};
-	struct xfer_metadata meta = {
-		.netdev = dhcp->netdev,
-	};
+	struct sockaddr_tcpip *dest = NULL;
 	struct io_buffer *iobuf;
 	struct dhcp_packet dhcppkt;
 	struct dhcp_packet *offer = NULL;
@@ -576,7 +573,7 @@ static int dhcp_tx ( struct dhcp_session *dhcp ) {
 		check_len = dhcppkt_fetch ( offer, DHCP_SERVER_IDENTIFIER,
 					    &proxydhcp_server.sin_addr,
 					    sizeof(proxydhcp_server.sin_addr));
-		meta.dest = ( struct sockaddr * ) &proxydhcp_server;
+		dest = ( struct sockaddr_tcpip * ) &proxydhcp_server;
 		assert ( ciaddr.s_addr != 0 );
 		assert ( proxydhcp_server.sin_addr.s_addr != 0 );
 		assert ( check_len == sizeof ( proxydhcp_server.sin_addr ) );
@@ -602,7 +599,7 @@ static int dhcp_tx ( struct dhcp_session *dhcp ) {
 
 	/* Transmit the packet */
 	iob_put ( iobuf, dhcppkt.len );
-	rc = xfer_deliver_iob_meta ( &dhcp->xfer, iobuf, &meta );
+	rc = udp_deliver ( &dhcp->udp, iobuf, dest, NULL, dhcp->netdev );
 	iobuf = NULL;
 	if ( rc != 0 ) {
 		DBGC ( dhcp, "DHCP %p could not transmit UDP packet: %s\n",
@@ -838,24 +835,31 @@ static void dhcp_rx_proxydhcpack ( struct dhcp_session *dhcp,
 /**
  * Receive new data
  *
- * @v xfer 		Data transfer interface
- * @v data		Received data
- * @v len		Length of received data
+ * @v udp		UDP interface
+ * @v iobuf		Datagram I/O buffer
+ * @v peer		Peer address, or NULL
+ * @v local		Local address, or NULL
+ * @v netdev		TX network device, or NULL
  * @ret rc		Return status code
  */
-static int dhcp_deliver_raw ( struct xfer_interface *xfer,
-			      const void *data, size_t len ) {
+static int dhcp_deliver ( struct udp_interface *udp,
+			  struct io_buffer *iobuf,
+			  struct sockaddr_tcpip *peer __unused,
+			  struct sockaddr_tcpip *local __unused,
+			  struct net_device *netdev __unused ) {
 	struct dhcp_session *dhcp =
-		container_of ( xfer, struct dhcp_session, xfer );
+		container_of ( udp, struct dhcp_session, udp );
 	struct dhcp_settings *dhcpset;
 	struct dhcphdr *dhcphdr;
 	uint8_t msgtype = 0;
+	int rc = 0;
 
 	/* Convert packet into a DHCP settings block */
-	dhcpset = dhcpset_create ( data, len );
+	dhcpset = dhcpset_create ( iobuf->data, iob_len ( iobuf ) );
 	if ( ! dhcpset ) {
 		DBGC ( dhcp, "DHCP %p could not store DHCP packet\n", dhcp );
-		return -ENOMEM;
+		rc = -ENOMEM;
+		goto err_dhcpset;
 	}
 	dhcphdr = dhcpset->dhcppkt.dhcphdr;
 
@@ -869,7 +873,7 @@ static int dhcp_deliver_raw ( struct xfer_interface *xfer,
 	if ( dhcphdr->xid != dhcp_xid ( dhcp->netdev ) ) {
 		DBGC ( dhcp, "DHCP %p received %s %p has bad transaction ID\n",
 		       dhcp, dhcp_msgtype_name ( msgtype ), dhcpset );
-		goto out;
+		goto err_xid;
 	};
 
 	/* Handle packet based on current state */
@@ -891,18 +895,17 @@ static int dhcp_deliver_raw ( struct xfer_interface *xfer,
 		break;
 	}
 
- out:
+ err_xid:
 	dhcpset_put ( dhcpset );
-	return 0;
+ err_dhcpset:
+	free_iob ( iobuf );
+	return rc;
 }
 
-/** DHCP data transfer interface operations */
-static struct xfer_interface_operations dhcp_xfer_operations = {
-	.close		= ignore_xfer_close,
-	.vredirect	= xfer_vopen,
-	.window		= unlimited_xfer_window,
-	.deliver_iob	= xfer_deliver_as_raw,
-	.deliver_raw	= dhcp_deliver_raw,
+/** DHCP UDP interface operations */
+static struct udp_interface_operations dhcp_udp_operations = {
+	.close		= ignore_udp_close,
+	.deliver	= dhcp_deliver,
 };
 
 /**
@@ -1000,15 +1003,15 @@ int start_dhcp ( struct job_interface *job, struct net_device *netdev ) {
 		return -ENOMEM;
 	dhcp->refcnt.free = dhcp_free;
 	job_init ( &dhcp->job, &dhcp_job_operations, &dhcp->refcnt );
-	xfer_init ( &dhcp->xfer, &dhcp_xfer_operations, &dhcp->refcnt );
+	udp_init ( &dhcp->udp, &dhcp_udp_operations, &dhcp->refcnt );
 	dhcp->netdev = netdev_get ( netdev );
 	dhcp->timer.expired = dhcp_timer_expired;
 	dhcp->start = currticks();
 
 	/* Instantiate child objects and attach to our interfaces */
-	if ( ( rc = xfer_open_socket ( &dhcp->xfer, SOCK_DGRAM,
-				       ( struct sockaddr * ) &server,
-				       ( struct sockaddr * ) &client ) ) != 0 )
+	if ( ( rc = udp_open ( &dhcp->udp,
+			       ( struct sockaddr_tcpip * ) &server,
+			       ( struct sockaddr_tcpip * ) &client ) ) != 0 )
 		goto err;
 
 	/* Start timer to initiate initial DHCPREQUEST */

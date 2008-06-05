@@ -6,7 +6,6 @@
 
 #include <string.h>
 #include <byteswap.h>
-#include <gpxe/xfer.h>
 #include <gpxe/udp.h>
 #include <gpxe/uaccess.h>
 #include <gpxe/process.h>
@@ -32,8 +31,8 @@
 
 /** A PXE UDP connection */
 struct pxe_udp_connection {
-	/** Data transfer interface to UDP stack */
-	struct xfer_interface xfer;
+	/** UDP interface */
+	struct udp_interface udp;
 	/** Local address */
 	struct sockaddr_in local;
 	/** Current PXENV_UDP_READ parameter block */
@@ -43,19 +42,23 @@ struct pxe_udp_connection {
 /**
  * Receive PXE UDP data
  *
- * @v xfer			Data transfer interface
- * @v iobuf			I/O buffer
- * @v meta			Data transfer metadata
- * @ret rc			Return status code
+ * @v udp		UDP interface
+ * @v iobuf		Datagram I/O buffer
+ * @v peer		Peer address, or NULL
+ * @v local		Local address, or NULL
+ * @v netdev		TX network device, or NULL
+ * @ret rc		Return status code
  *
  * Receives a packet as part of the current pxenv_udp_read()
  * operation.
  */
-static int pxe_udp_deliver_iob ( struct xfer_interface *xfer,
-				 struct io_buffer *iobuf,
-				 struct xfer_metadata *meta ) {
+static int pxe_udp_deliver ( struct udp_interface *udp,
+			     struct io_buffer *iobuf,
+			     struct sockaddr_tcpip *peer,
+			     struct sockaddr_tcpip *local,
+			     struct net_device *netdev __unused ) {
 	struct pxe_udp_connection *pxe_udp = 
-		container_of ( xfer, struct pxe_udp_connection, xfer );
+		container_of ( udp, struct pxe_udp_connection, udp );
 	struct s_PXENV_UDP_READ *pxenv_udp_read = pxe_udp->pxenv_udp_read;
 	struct sockaddr_in *sin_src;
 	struct sockaddr_in *sin_dest;
@@ -79,13 +82,12 @@ static int pxe_udp_deliver_iob ( struct xfer_interface *xfer,
 	pxenv_udp_read->buffer_size = len;
 
 	/* Fill in source/dest information */
-	assert ( meta );
-	sin_src = ( struct sockaddr_in * ) meta->src;
+	sin_src = ( struct sockaddr_in * ) peer;
 	assert ( sin_src );
 	assert ( sin_src->sin_family == AF_INET );
 	pxenv_udp_read->src_ip = sin_src->sin_addr.s_addr;
 	pxenv_udp_read->s_port = sin_src->sin_port;
-	sin_dest = ( struct sockaddr_in * ) meta->dest;
+	sin_dest = ( struct sockaddr_in * ) local;
 	assert ( sin_dest );
 	assert ( sin_dest->sin_family == AF_INET );
 	pxenv_udp_read->dest_ip = sin_dest->sin_addr.s_addr;
@@ -99,18 +101,15 @@ static int pxe_udp_deliver_iob ( struct xfer_interface *xfer,
 	return rc;
 }
 
-/** PXE UDP data transfer interface operations */
-static struct xfer_interface_operations pxe_udp_xfer_operations = {
-	.close		= ignore_xfer_close,
-	.vredirect	= ignore_xfer_vredirect,
-	.window		= unlimited_xfer_window,
-	.deliver_iob	= pxe_udp_deliver_iob,
-	.deliver_raw	= xfer_deliver_as_iob,
+/** PXE UDP interface operations */
+static struct udp_interface_operations pxe_udp_operations = {
+	.close		= ignore_udp_close,
+	.deliver	= pxe_udp_deliver,
 };
 
 /** The PXE UDP connection */
 static struct pxe_udp_connection pxe_udp = {
-	.xfer = XFER_INIT ( &pxe_udp_xfer_operations ),
+	.udp = UDP_INIT ( pxe_udp, &pxe_udp_operations ),
 	.local = {
 		.sin_family = AF_INET,
 	},
@@ -167,8 +166,8 @@ PXENV_EXIT_t pxenv_udp_open ( struct s_PXENV_UDP_OPEN *pxenv_udp_open ) {
 	pxe_udp.local.sin_addr.s_addr = pxenv_udp_open->src_ip;
 
 	/* Open promiscuous UDP connection */
-	xfer_close ( &pxe_udp.xfer, 0 );
-	if ( ( rc = udp_open_promisc ( &pxe_udp.xfer ) ) != 0 ) {
+	udp_close ( &pxe_udp.udp, 0 );
+	if ( ( rc = udp_open_promisc ( &pxe_udp.udp ) ) != 0 ) {
 		pxenv_udp_open->Status = PXENV_STATUS ( rc );
 		return PXENV_EXIT_FAILURE;
 	}
@@ -202,7 +201,7 @@ PXENV_EXIT_t pxenv_udp_close ( struct s_PXENV_UDP_CLOSE *pxenv_udp_close ) {
 	DBG ( "PXENV_UDP_CLOSE" );
 
 	/* Close UDP connection */
-	xfer_close ( &pxe_udp.xfer, 0 );
+	udp_close ( &pxe_udp.udp, 0 );
 
 	pxenv_udp_close->Status = PXENV_STATUS_SUCCESS;
 	return PXENV_EXIT_SUCCESS;
@@ -251,10 +250,6 @@ PXENV_EXIT_t pxenv_udp_close ( struct s_PXENV_UDP_CLOSE *pxenv_udp_close ) {
  */
 PXENV_EXIT_t pxenv_udp_write ( struct s_PXENV_UDP_WRITE *pxenv_udp_write ) {
 	struct sockaddr_in dest;
-	struct xfer_metadata meta = {
-		.src = ( struct sockaddr * ) &pxe_udp.local,
-		.dest = ( struct sockaddr * ) &dest,
-	};
 	size_t len;
 	struct io_buffer *iobuf;
 	userptr_t buffer;
@@ -299,8 +294,10 @@ PXENV_EXIT_t pxenv_udp_write ( struct s_PXENV_UDP_WRITE *pxenv_udp_write ) {
 	      ntohs ( pxenv_udp_write->dst_port ) );
 	
 	/* Transmit packet */
-	if ( ( rc = xfer_deliver_iob_meta ( &pxe_udp.xfer, iobuf,
-					    &meta ) ) != 0 ) {
+	if ( ( rc = udp_deliver ( &pxe_udp.udp, iobuf,
+				  ( struct sockaddr_tcpip * ) &dest,
+				  ( struct sockaddr_tcpip * ) &pxe_udp.local,
+				  NULL ) ) != 0 ) {
 		pxenv_udp_write->Status = PXENV_STATUS ( rc );
 		return PXENV_EXIT_FAILURE;
 	}

@@ -60,9 +60,9 @@ struct tftp_request {
 	/** URI being fetched */
 	struct uri *uri;
 	/** Transport layer interface */
-	struct xfer_interface socket;
+	struct udp_interface socket;
 	/** Multicast transport layer interface */
-	struct xfer_interface mc_socket;
+	struct udp_interface mc_socket;
 
 	/** Data block size
 	 *
@@ -157,10 +157,10 @@ static void tftp_done ( struct tftp_request *tftp, int rc ) {
 	stop_timer ( &tftp->timer );
 
 	/* Close all data transfer interfaces */
-	xfer_nullify ( &tftp->socket );
-	xfer_close ( &tftp->socket, rc );
-	xfer_nullify ( &tftp->mc_socket );
-	xfer_close ( &tftp->mc_socket, rc );
+	udp_nullify ( &tftp->socket );
+	udp_close ( &tftp->socket, rc );
+	udp_nullify ( &tftp->mc_socket );
+	udp_close ( &tftp->mc_socket, rc );
 	xfer_nullify ( &tftp->xfer );
 	xfer_close ( &tftp->xfer, rc );
 }
@@ -176,7 +176,7 @@ static int tftp_reopen ( struct tftp_request *tftp ) {
 	int rc;
 
 	/* Close socket */
-	xfer_close ( &tftp->socket, 0 );
+	udp_close ( &tftp->socket, 0 );
 
 	/* Disable ACK sending. */
 	tftp->flags &= ~TFTP_FL_SEND_ACK;
@@ -187,9 +187,8 @@ static int tftp_reopen ( struct tftp_request *tftp ) {
 	/* Open socket */
 	memset ( &server, 0, sizeof ( server ) );
 	server.st_port = htons ( tftp->port );
-	if ( ( rc = xfer_open_named_socket ( &tftp->socket, SOCK_DGRAM,
-					     ( struct sockaddr * ) &server,
-					     tftp->uri->host, NULL ) ) != 0 ) {
+	if ( ( rc = udp_open_named ( &tftp->socket, &server,
+				     tftp->uri->host, NULL ) ) != 0 ) {
 		DBGC ( tftp, "TFTP %p could not open socket: %s\n",
 		       tftp, strerror ( rc ) );
 		return rc;
@@ -207,17 +206,17 @@ static int tftp_reopen ( struct tftp_request *tftp ) {
  */
 static int tftp_reopen_mc ( struct tftp_request *tftp,
 			    struct sockaddr *local ) {
+	struct sockaddr_tcpip *st_local = ( struct sockaddr_tcpip * ) local;
 	int rc;
 
 	/* Close multicast socket */
-	xfer_close ( &tftp->mc_socket, 0 );
+	udp_close ( &tftp->mc_socket, 0 );
 
 	/* Open multicast socket.  We never send via this socket, so
 	 * use the local address as the peer address (since the peer
 	 * address cannot be NULL).
 	 */
-	if ( ( rc = xfer_open_socket ( &tftp->mc_socket, SOCK_DGRAM,
-				       local, local ) ) != 0 ) {
+	if ( ( rc = udp_open ( &tftp->mc_socket, st_local, st_local ) ) != 0 ){
 		DBGC ( tftp, "TFTP %p could not open multicast "
 		       "socket: %s\n", tftp, strerror ( rc ) );
 		return rc;
@@ -352,7 +351,7 @@ static int tftp_send_rrq ( struct tftp_request *tftp ) {
 	/* RRQ always goes to the address specified in the initial
 	 * xfer_open() call
 	 */
-	return xfer_deliver_iob ( &tftp->socket, iobuf );
+	return udp_deliver ( &tftp->socket, iobuf, NULL, NULL, NULL );
 }
 
 /**
@@ -364,9 +363,6 @@ static int tftp_send_rrq ( struct tftp_request *tftp ) {
 static int tftp_send_ack ( struct tftp_request *tftp ) {
 	struct tftp_ack *ack;
 	struct io_buffer *iobuf;
-	struct xfer_metadata meta = {
-		.dest = ( struct sockaddr * ) &tftp->peer,
-	};
 	unsigned int block;
 
 	/* Determine next required block number */
@@ -384,7 +380,7 @@ static int tftp_send_ack ( struct tftp_request *tftp ) {
 	ack->block = htons ( block );
 
 	/* ACK always goes to the peer recorded from the RRQ response */
-	return xfer_deliver_iob_meta ( &tftp->socket, iobuf, &meta );
+	return udp_deliver ( &tftp->socket, iobuf, &tftp->peer, NULL, 0 );
 }
 
 /**
@@ -443,7 +439,7 @@ static void tftp_timer_expired ( struct retry_timer *timer, int fail ) {
 				tftp->flags = TFTP_FL_RRQ_SIZES;
 
 				/* Close multicast socket */
-				xfer_close ( &tftp->mc_socket, 0 );
+				udp_close ( &tftp->mc_socket, 0 );
 
 				/* Reset retry timer */
 				start_timer_nodelay ( &tftp->timer );
@@ -813,14 +809,17 @@ static int tftp_rx_error ( struct tftp_request *tftp, void *buf, size_t len ) {
  * Receive new data
  *
  * @v tftp		TFTP connection
- * @v iobuf		I/O buffer
- * @v meta		Transfer metadata, or NULL
+ * @v udp		UDP interface
+ * @v iobuf		Datagram I/O buffer
+ * @v peer		Peer address, or NULL
+ * @v local		Local address, or NULL
+ * @v netdev		TX network device, or NULL
  * @ret rc		Return status code
  */
-static int tftp_rx ( struct tftp_request *tftp,
-		     struct io_buffer *iobuf,
-		     struct xfer_metadata *meta ) {
-	struct sockaddr_tcpip *st_src;
+static int tftp_rx ( struct tftp_request *tftp, struct io_buffer *iobuf,
+		     struct sockaddr_tcpip *peer,
+		     struct sockaddr_tcpip *local __unused,
+		     struct net_device *netdev __unused ) {
 	struct tftp_common *common = iobuf->data;
 	size_t len = iob_len ( iobuf );
 	int rc = -EINVAL;
@@ -831,27 +830,21 @@ static int tftp_rx ( struct tftp_request *tftp,
 		       "%zd\n", tftp, len );
 		goto done;
 	}
-	if ( ! meta ) {
-		DBGC ( tftp, "TFTP %p received packet without metadata\n",
-		       tftp );
-		goto done;
-	}
-	if ( ! meta->src ) {
-		DBGC ( tftp, "TFTP %p received packet without source port\n",
+	if ( ! peer ) {
+		DBGC ( tftp, "TFTP %p received packet without peer\n",
 		       tftp );
 		goto done;
 	}
 
 	/* Filter by TID.  Set TID on first response received */
-	st_src = ( struct sockaddr_tcpip * ) meta->src;
 	if ( ! tftp->peer.st_family ) {
-		memcpy ( &tftp->peer, st_src, sizeof ( tftp->peer ) );
+		memcpy ( &tftp->peer, peer, sizeof ( tftp->peer ) );
 		DBGC ( tftp, "TFTP %p using remote port %d\n", tftp,
 		       ntohs ( tftp->peer.st_port ) );
-	} else if ( memcmp ( &tftp->peer, st_src,
+	} else if ( memcmp ( &tftp->peer, peer,
 			     sizeof ( tftp->peer ) ) != 0 ) {
 		DBGC ( tftp, "TFTP %p received packet from wrong source (got "
-		       "%d, wanted %d)\n", tftp, ntohs ( st_src->st_port ),
+		       "%d, wanted %d)\n", tftp, ntohs ( peer->st_port ),
 		       ntohs ( tftp->peer.st_port ) );
 		goto done;
 	}
@@ -881,14 +874,18 @@ static int tftp_rx ( struct tftp_request *tftp,
 /**
  * Receive new data via socket
  *
- * @v socket		Transport layer interface
- * @v iobuf		I/O buffer
- * @v meta		Transfer metadata, or NULL
+ * @v socket		UDP interface
+ * @v iobuf		Datagram I/O buffer
+ * @v peer		Peer address, or NULL
+ * @v local		Local address, or NULL
+ * @v netdev		TX network device, or NULL
  * @ret rc		Return status code
  */
-static int tftp_socket_deliver_iob ( struct xfer_interface *socket,
-				     struct io_buffer *iobuf,
-				     struct xfer_metadata *meta ) {
+static int tftp_socket_deliver ( struct udp_interface *socket,
+				 struct io_buffer *iobuf,
+				 struct sockaddr_tcpip *peer,
+				 struct sockaddr_tcpip *local,
+				 struct net_device *netdev ) {
 	struct tftp_request *tftp =
 		container_of ( socket, struct tftp_request, socket );
 
@@ -909,42 +906,40 @@ static int tftp_socket_deliver_iob ( struct xfer_interface *socket,
 	 */
 	tftp->flags |= TFTP_FL_SEND_ACK;
 
-	return tftp_rx ( tftp, iobuf, meta );
+	return tftp_rx ( tftp, iobuf, peer, local, netdev );
 }
 
 /** TFTP socket operations */
-static struct xfer_interface_operations tftp_socket_operations = {
-	.close		= ignore_xfer_close,
-	.vredirect	= xfer_vopen,
-	.window		= unlimited_xfer_window,
-	.deliver_iob	= tftp_socket_deliver_iob,
-	.deliver_raw	= xfer_deliver_as_iob,
+static struct udp_interface_operations tftp_socket_operations = {
+	.close		= ignore_udp_close,
+	.deliver	= tftp_socket_deliver,
 };
 
 /**
  * Receive new data via multicast socket
  *
- * @v mc_socket		Multicast transport layer interface
- * @v iobuf		I/O buffer
- * @v meta		Transfer metadata, or NULL
+ * @v socket		UDP interface
+ * @v iobuf		Datagram I/O buffer
+ * @v peer		Peer address, or NULL
+ * @v local		Local address, or NULL
+ * @v netdev		TX network device, or NULL
  * @ret rc		Return status code
  */
-static int tftp_mc_socket_deliver_iob ( struct xfer_interface *mc_socket,
-					struct io_buffer *iobuf,
-					struct xfer_metadata *meta ) {
+static int tftp_mc_socket_deliver ( struct udp_interface *mc_socket,
+				    struct io_buffer *iobuf,
+				    struct sockaddr_tcpip *peer,
+				    struct sockaddr_tcpip *local,
+				    struct net_device *netdev ) {
 	struct tftp_request *tftp =
 		container_of ( mc_socket, struct tftp_request, mc_socket );
 
-	return tftp_rx ( tftp, iobuf, meta );
+	return tftp_rx ( tftp, iobuf, peer, local, netdev );
 }
 
 /** TFTP multicast socket operations */
-static struct xfer_interface_operations tftp_mc_socket_operations = {
-	.close		= ignore_xfer_close,
-	.vredirect	= xfer_vopen,
-	.window		= unlimited_xfer_window,
-	.deliver_iob	= tftp_mc_socket_deliver_iob,
-	.deliver_raw	= xfer_deliver_as_iob,
+static struct udp_interface_operations tftp_mc_socket_operations = {
+	.close		= ignore_udp_close,
+	.deliver	= tftp_mc_socket_deliver,
 };
 
 /**
@@ -999,9 +994,9 @@ static int tftp_core_open ( struct xfer_interface *xfer, struct uri *uri,
 	tftp->refcnt.free = tftp_free;
 	xfer_init ( &tftp->xfer, &tftp_xfer_operations, &tftp->refcnt );
 	tftp->uri = uri_get ( uri );
-	xfer_init ( &tftp->socket, &tftp_socket_operations, &tftp->refcnt );
-	xfer_init ( &tftp->mc_socket, &tftp_mc_socket_operations,
-		    &tftp->refcnt );
+	udp_init ( &tftp->socket, &tftp_socket_operations, &tftp->refcnt );
+	udp_init ( &tftp->mc_socket, &tftp_mc_socket_operations,
+		   &tftp->refcnt );
 	tftp->blksize = TFTP_DEFAULT_BLKSIZE;
 	tftp->flags = flags;
 	tftp->timer.expired = tftp_timer_expired;

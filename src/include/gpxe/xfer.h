@@ -100,12 +100,6 @@ struct xfer_metadata {
 	 * Must be one of @c SEEK_CUR or @c SEEK_SET.
 	 */
 	int whence;
-	/** Source socket address, or NULL */
-	struct sockaddr *src;
-	/** Destination socket address, or NULL */
-	struct sockaddr *dest;
-	/** Network device, or NULL */
-	struct net_device *netdev;
 };
 
 /**
