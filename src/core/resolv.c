@@ -40,19 +40,29 @@
  */
 
 /**
- * Name resolution completed
+ * Finish using a name resolution interface
  *
  * @v resolv		Name resolution interface
  * @v sa		Completed socket address (if successful)
  * @v rc		Final status code
  */
-void resolv_done ( struct resolv_interface *resolv, struct sockaddr *sa,
-		   int rc ) {
-	struct resolv_interface *dest = resolv_get_dest ( resolv );
+void resolv_finished ( struct resolv_interface *resolv, struct sockaddr *sa,
+		       int rc ) {
 
+	/* Sustain existence during close */
+	resolv_get ( resolv );
+
+	/* Block further incoming messages */
+	resolv_nullify ( resolv );
+
+	/* Close interface */
+	resolv_done ( resolv, sa, rc );
+
+	/* Unplug interface */
 	resolv_unplug ( resolv );
-	dest->op->done ( dest, sa, rc );
-	resolv_put ( dest );
+
+	/* Drop sustaining reference */
+	resolv_put ( resolv );
 }
 
 /**
@@ -73,14 +83,8 @@ struct resolv_interface_operations null_resolv_ops = {
 };
 
 /** Null name resolution interface */
-struct resolv_interface null_resolv = {
-	.intf = {
-		.dest = &null_resolv.intf,
-		.refcnt = NULL,
-	},
-	.op = &null_resolv_ops,
-};
-
+struct resolv_interface null_resolv = RESOLV_INIT ( null_resolv,
+						    &null_resolv_ops );
 /***************************************************************************
  *
  * Numeric name resolver
@@ -106,8 +110,8 @@ static void numeric_step ( struct process *process ) {
 	struct numeric_resolv *numeric =
 		container_of ( process, struct numeric_resolv, process );
 	
-	resolv_done ( &numeric->resolv, &numeric->sa, numeric->rc );
 	process_del ( process );
+	resolv_finished ( &numeric->resolv, &numeric->sa, numeric->rc );
 }
 
 static int numeric_resolv ( struct resolv_interface *resolv,
@@ -234,7 +238,7 @@ static void resolv_mux_done ( struct resolv_interface *resolv,
 	return;
 	
  finished:
-	resolv_done ( &mux->parent, sa, rc );
+	resolv_finished ( &mux->parent, sa, rc );
 }
 
 /** Name resolution multiplexer operations */
@@ -329,6 +333,9 @@ static void named_resolv_done ( struct resolv_interface *resolv,
 	struct named_socket *named =
 		container_of ( resolv, struct named_socket, resolv );
 
+	/* Sustain existence during close */
+	ref_get ( &named->refcnt );
+
 	/* Unplug resolver and nullify data transfer interface */
 	resolv_unplug ( &named->resolv );
 	xfer_nullify ( &named->xfer );
@@ -347,6 +354,9 @@ static void named_resolv_done ( struct resolv_interface *resolv,
 
 	/* Unplug data transfer interface */
 	xfer_unplug ( &named->xfer );
+
+	/* Drop sustaining reference */
+	ref_put ( &named->refcnt );
 }
 
 /** Named socket opener name resolution interface operations */

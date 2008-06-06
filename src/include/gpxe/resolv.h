@@ -53,6 +53,20 @@ static inline void resolv_init ( struct resolv_interface *resolv,
 }
 
 /**
+ * Initialise a static name resolution interface
+ *
+ * @v _name		Name resolution interface
+ * @v _op		Name resolution interface operations
+ */
+#define RESOLV_INIT( _name, _op ) {			\
+		.intf = {				\
+			.dest = &null_resolv.intf,	\
+			.refcnt = NULL,			\
+		},					\
+		.op = _op,				\
+	}
+
+/**
  * Get name resolution interface from generic object communication interface
  *
  * @v intf		Generic object communication interface
@@ -70,14 +84,25 @@ intf_to_resolv ( struct interface *intf ) {
  * @ret dest		Destination interface
  */
 static inline __attribute__ (( always_inline )) struct resolv_interface *
-resolv_get_dest ( struct resolv_interface *resolv ) {
-	return intf_to_resolv ( intf_get ( resolv->intf.dest ) );
+resolv_dest ( struct resolv_interface *resolv ) {
+	return intf_to_resolv ( resolv->intf.dest );
+}
+
+/**
+ * Get reference to name resolution interface
+ *
+ * @v resolv		Name resolution interface
+ */
+static inline __attribute__ (( always_inline )) struct resolv_interface *
+resolv_get ( struct resolv_interface *resolv ) {
+	intf_get ( &resolv->intf );
+	return resolv;
 }
 
 /**
  * Drop reference to name resolution interface
  *
- * @v resolv		name resolution interface
+ * @v resolv		Name resolution interface
  */
 static inline __attribute__ (( always_inline )) void
 resolv_put ( struct resolv_interface *resolv ) {
@@ -91,7 +116,8 @@ resolv_put ( struct resolv_interface *resolv ) {
  * @v dest		New destination interface
  */
 static inline __attribute__ (( always_inline )) void
-resolv_plug ( struct resolv_interface *resolv, struct resolv_interface *dest ) {
+resolv_plug ( struct resolv_interface *resolv,
+	      struct resolv_interface *dest ) {
 	plug ( &resolv->intf, &dest->intf );
 }
 
@@ -117,16 +143,33 @@ resolv_unplug ( struct resolv_interface *resolv ) {
 }
 
 /**
- * Stop using a name resolution interface
+ * Block further messages on a name resolution interface
  *
  * @v resolv		Name resolution interface
- *
- * After calling this method, no further messages will be received via
- * the interface.
  */
 static inline void resolv_nullify ( struct resolv_interface *resolv ) {
 	resolv->op = &null_resolv_ops;
 };
+
+/**
+ * Name resolution completed
+ *
+ * @v resolv		Name resolution interface
+ * @v sa		Completed socket address (if successful)
+ * @v rc		Final status code
+ */
+static inline void resolv_done ( struct resolv_interface *resolv,
+				 struct sockaddr *sa, int rc ) {
+	struct resolv_interface *dest = resolv_dest ( resolv );
+
+	dest->op->done ( dest, sa, rc );
+}
+
+extern void resolv_finished ( struct resolv_interface *resolv,
+			      struct sockaddr *sa, int rc );
+
+extern void ignore_resolv_done ( struct resolv_interface *resolv,
+			  struct sockaddr *sa, int rc );
 
 /** A name resolver */
 struct resolver {
@@ -152,13 +195,6 @@ struct resolver {
 /** Register as a name resolver */
 #define __resolver( resolv_order ) \
 	__table ( struct resolver, resolvers, resolv_order )
-
-extern void resolv_done ( struct resolv_interface *resolv,
-			  struct sockaddr *sa, int rc );
-extern void ignore_resolv_done ( struct resolv_interface *resolv,
-			  struct sockaddr *sa, int rc );
-extern struct resolv_interface_operations null_resolv_ops;
-extern struct resolv_interface null_resolv;
 
 extern int resolv ( struct resolv_interface *resolv, const char *name,
 		    struct sockaddr *sa );

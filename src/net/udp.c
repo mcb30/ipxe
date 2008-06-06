@@ -597,6 +597,9 @@ static void udp_resolv_done ( struct resolv_interface *resolv,
 	struct udp_connection *conn =
 		container_of ( resolv, struct udp_connection, resolv );
 
+	/* Sustain existence during close */
+	ref_get ( &conn->refcnt );
+
 	/* Unplug resolver */
 	resolv_unplug ( &conn->resolv );
 
@@ -607,6 +610,9 @@ static void udp_resolv_done ( struct resolv_interface *resolv,
 		/* Store completed peer address */
 		memcpy ( &conn->peer, sa, sizeof ( conn->peer ) );
 	}
+
+	/* Drop sustaining reference */
+	ref_put ( &conn->refcnt );
 }
 
 /** UDP name resolution operations */
