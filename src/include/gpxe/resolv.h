@@ -92,7 +92,7 @@ resolv_put ( struct resolv_interface *resolv ) {
  */
 static inline __attribute__ (( always_inline )) void
 resolv_plug ( struct resolv_interface *resolv, struct resolv_interface *dest ) {
-	plug ( &resolv->intf, &dest->intf );
+	intf_plug ( &resolv->intf, &dest->intf );
 }
 
 /**
@@ -103,7 +103,7 @@ resolv_plug ( struct resolv_interface *resolv, struct resolv_interface *dest ) {
  */
 static inline __attribute__ (( always_inline )) void
 resolv_plug_plug ( struct resolv_interface *a, struct resolv_interface *b ) {
-	plug_plug ( &a->intf, &b->intf );
+	intf_plug_plug ( &a->intf, &b->intf );
 }
 
 /**
@@ -113,7 +113,7 @@ resolv_plug_plug ( struct resolv_interface *a, struct resolv_interface *b ) {
  */
 static inline __attribute__ (( always_inline )) void
 resolv_unplug ( struct resolv_interface *resolv ) {
-	plug ( &resolv->intf, &null_resolv.intf );
+	intf_plug ( &resolv->intf, &null_resolv.intf );
 }
 
 /**
