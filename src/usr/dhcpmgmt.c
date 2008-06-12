@@ -41,7 +41,7 @@ int dhcp ( struct net_device *netdev ) {
 
 	/* Perform DHCP */
 	printf ( "DHCP (%s %s)", netdev->name, netdev_hwaddr ( netdev ) );
-	if ( ( rc = start_dhcp ( &monojob, netdev ) ) == 0 )
+	if ( ( rc = start_dhcp ( &monojob.intf, netdev ) ) == 0 )
 		rc = monojob_wait ( "" );
 
 	return rc;

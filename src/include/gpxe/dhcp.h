@@ -14,7 +14,7 @@
 #include <gpxe/tables.h>
 
 struct net_device;
-struct job_interface;
+struct interface;
 struct dhcp_options;
 struct dhcp_packet;
 
@@ -463,6 +463,6 @@ extern int dhcp_create_request ( struct dhcp_packet *dhcppkt,
 				 struct in_addr ciaddr,
 				 struct dhcp_packet *dhcpoffer,
 				 void *data, size_t max_len );
-extern int start_dhcp ( struct job_interface *job, struct net_device *netdev );
+extern int start_dhcp ( struct interface *job, struct net_device *netdev );
 
 #endif /* _GPXE_DHCP_H */

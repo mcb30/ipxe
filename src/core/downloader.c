@@ -39,7 +39,7 @@ struct downloader {
 	struct refcnt refcnt;
 
 	/** Job control interface */
-	struct job_interface job;
+	struct interface job;
 	/** Data transfer interface */
 	struct xfer_interface xfer;
 
@@ -72,13 +72,14 @@ static void downloader_free ( struct refcnt *refcnt ) {
  */
 static void downloader_finished ( struct downloader *downloader, int rc ) {
 
-	/* Block further incoming messages */
-	job_nullify ( &downloader->job );
-	xfer_nullify ( &downloader->xfer );
+	/* Register image if download was successful */
+	if ( rc == 0 )
+		rc = downloader->register_image ( downloader->image );
 
-	/* Free resources and close interfaces */
+	/* Shut down interfaces */
+	xfer_nullify ( &downloader->xfer );
 	xfer_close ( &downloader->xfer, rc );
-	job_done ( &downloader->job, rc );
+	intf_shutdown ( &downloader->job, rc );
 }
 
 /**
@@ -111,32 +112,6 @@ static int downloader_ensure_size ( struct downloader *downloader,
 
 	return 0;
 }
-
-/****************************************************************************
- *
- * Job control interface
- *
- */
-
-/**
- * Handle kill() event received via job control interface
- *
- * @v job		Downloader job control interface
- */
-static void downloader_job_kill ( struct job_interface *job ) {
-	struct downloader *downloader = 
-		container_of ( job, struct downloader, job );
-
-	/* Terminate download */
-	downloader_finished ( downloader, -ECANCELED );
-}
-
-/** Downloader job control interface operations */
-static struct job_interface_operations downloader_job_operations = {
-	.done		= ignore_job_done,
-	.kill		= downloader_job_kill,
-	.progress	= ignore_job_progress,
-};
 
 /****************************************************************************
  *
@@ -194,10 +169,6 @@ static void downloader_xfer_close ( struct xfer_interface *xfer, int rc ) {
 	struct downloader *downloader =
 		container_of ( xfer, struct downloader, xfer );
 
-	/* Register image if download was successful */
-	if ( rc == 0 )
-		rc = downloader->register_image ( downloader->image );
-
 	/* Terminate download */
 	downloader_finished ( downloader, rc );
 }
@@ -211,6 +182,21 @@ static struct xfer_interface_operations downloader_xfer_operations = {
 	.deliver_iob	= downloader_xfer_deliver_iob,
 	.deliver_raw	= xfer_deliver_as_iob,
 };
+
+/****************************************************************************
+ *
+ * Job control interface
+ *
+ */
+
+/** Downloader job control interface operations */
+static struct interface_operation downloader_job_op[] = {
+	INTF_OP ( intf_close, struct downloader *, downloader_finished ),
+};
+
+/** Downloader job control interface descriptor */
+static struct interface_descriptor downloader_job_desc =
+	INTF_DESC ( struct downloader, job, downloader_job_op );
 
 /****************************************************************************
  *
@@ -232,7 +218,7 @@ static struct xfer_interface_operations downloader_xfer_operations = {
  * the specified image object.  If the download is successful, the
  * image registration routine @c register_image() will be called.
  */
-int create_downloader ( struct job_interface *job, struct image *image,
+int create_downloader ( struct interface *job, struct image *image,
 			int ( * register_image ) ( struct image *image ),
 			int type, ... ) {
 	struct downloader *downloader;
@@ -244,7 +230,7 @@ int create_downloader ( struct job_interface *job, struct image *image,
 	if ( ! downloader )
 		return -ENOMEM;
 	downloader->refcnt.free = downloader_free;
-	job_init ( &downloader->job, &downloader_job_operations,
+	intf_init ( &downloader->job, &downloader_job_desc,
 		   &downloader->refcnt );
 	xfer_init ( &downloader->xfer, &downloader_xfer_operations,
 		    &downloader->refcnt );
@@ -257,7 +243,7 @@ int create_downloader ( struct job_interface *job, struct image *image,
 		goto err;
 
 	/* Attach parent interface, mortalise self, and return */
-	job_plug_plug ( &downloader->job, job );
+	intf_plug_plug ( &downloader->job, job );
 	ref_put ( &downloader->refcnt );
 	va_end ( args );
 	return 0;

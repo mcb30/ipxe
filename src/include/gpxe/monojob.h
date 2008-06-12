@@ -7,9 +7,15 @@
  *
  */
 
-struct job_interface;
+#include <gpxe/interface.h>
 
-extern struct job_interface monojob;
+struct monojob {
+	struct interface intf;
+	int rc;
+};
+
+extern struct monojob monojob;
+
 extern int monojob_wait ( const char *string );
 
 #endif /* _GPXE_MONOJOB_H */

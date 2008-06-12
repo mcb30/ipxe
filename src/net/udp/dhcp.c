@@ -304,7 +304,7 @@ struct dhcp_session {
 	/** Reference counter */
 	struct refcnt refcnt;
 	/** Job control interface */
-	struct job_interface job;
+	struct interface job;
 	/** Data transfer interface */
 	struct xfer_interface xfer;
 
@@ -350,16 +350,13 @@ static void dhcp_free ( struct refcnt *refcnt ) {
  */
 static void dhcp_finished ( struct dhcp_session *dhcp, int rc ) {
 
-	/* Block futher incoming messages */
-	job_nullify ( &dhcp->job );
-	xfer_nullify ( &dhcp->xfer );
-
 	/* Stop retry timer */
 	stop_timer ( &dhcp->timer );
 
-	/* Free resources and close interfaces */
+	/* Shut down interfaces */
+	xfer_nullify ( &dhcp->xfer );
 	xfer_close ( &dhcp->xfer, rc );
-	job_done ( &dhcp->job, rc );
+	intf_shutdown ( &dhcp->job, rc );
 }
 
 /****************************************************************************
@@ -999,25 +996,14 @@ static void dhcp_timer_expired ( struct retry_timer *timer, int fail ) {
  *
  */
 
-/**
- * Handle kill() event received via job control interface
- *
- * @v job		DHCP job control interface
- */
-static void dhcp_job_kill ( struct job_interface *job ) {
-	struct dhcp_session *dhcp =
-		container_of ( job, struct dhcp_session, job );
-
-	/* Terminate DHCP session */
-	dhcp_finished ( dhcp, -ECANCELED );
-}
-
 /** DHCP job control interface operations */
-static struct job_interface_operations dhcp_job_operations = {
-	.done		= ignore_job_done,
-	.kill		= dhcp_job_kill,
-	.progress	= ignore_job_progress,
+static struct interface_operation dhcp_job_op[] = {
+	INTF_OP ( intf_close, struct dhcp_session *, dhcp_finished ),
 };
+
+/** DHCP job control interface descriptor */
+static struct interface_descriptor dhcp_job_desc =
+	INTF_DESC ( struct dhcp_session, job, dhcp_job_op );
 
 /****************************************************************************
  *
@@ -1037,7 +1023,7 @@ static struct job_interface_operations dhcp_job_operations = {
  * register_options() routine will be called with the acquired
  * options.
  */
-int start_dhcp ( struct job_interface *job, struct net_device *netdev ) {
+int start_dhcp ( struct interface *job, struct net_device *netdev ) {
 	static struct sockaddr_in server = {
 		.sin_family = AF_INET,
 		.sin_addr.s_addr = INADDR_BROADCAST,
@@ -1055,7 +1041,7 @@ int start_dhcp ( struct job_interface *job, struct net_device *netdev ) {
 	if ( ! dhcp )
 		return -ENOMEM;
 	dhcp->refcnt.free = dhcp_free;
-	job_init ( &dhcp->job, &dhcp_job_operations, &dhcp->refcnt );
+	intf_init ( &dhcp->job, &dhcp_job_desc, &dhcp->refcnt );
 	xfer_init ( &dhcp->xfer, &dhcp_xfer_operations, &dhcp->refcnt );
 	dhcp->netdev = netdev_get ( netdev );
 	dhcp->timer.expired = dhcp_timer_expired;
@@ -1071,7 +1057,7 @@ int start_dhcp ( struct job_interface *job, struct net_device *netdev ) {
 	start_timer_nodelay ( &dhcp->timer );
 
 	/* Attach parent interface, mortalise self, and return */
-	job_plug_plug ( &dhcp->job, job );
+	intf_plug_plug ( &dhcp->job, job );
 	ref_put ( &dhcp->refcnt );
 	return 0;
 

@@ -32,26 +32,20 @@
  *
  */
 
-static int monojob_rc;
-
-static void monojob_done ( struct job_interface *job __unused, int rc ) {
-	monojob_rc = rc;
+static void monojob_close ( struct monojob *monojob, int rc ) {
+	monojob->rc = rc;
+	intf_restart ( &monojob->intf, rc );
 }
 
-/** Single foreground job operations */
-static struct job_interface_operations monojob_operations = {
-	.done		= monojob_done,
-	.kill		= ignore_job_kill,
-	.progress	= ignore_job_progress,
+static struct interface_operation monojob_intf_op[] = {
+	INTF_OP ( intf_close, struct monojob *, monojob_close ),
 };
 
-/** Single foreground job */
-struct job_interface monojob = {
-	.intf = {
-		.dest = &null_job.intf,
-		.refcnt = NULL,
-	},
-	.op = &monojob_operations,
+static struct interface_descriptor monojob_intf_desc =
+	INTF_DESC ( struct monojob, intf, monojob_intf_op );
+
+struct monojob monojob = {
+	.intf = INTF_INIT ( monojob_intf_desc ),
 };
 
 /**
@@ -66,17 +60,16 @@ int monojob_wait ( const char *string ) {
 	tick_t last_progress_dot;
 
 	printf ( "%s.", string );
-	monojob_rc = -EINPROGRESS;
+	monojob.rc = -EINPROGRESS;
 	last_progress_dot = currticks();
-	while ( monojob_rc == -EINPROGRESS ) {
+	while ( monojob.rc == -EINPROGRESS ) {
 		step();
 		if ( iskey() ) {
 			key = getchar();
 			switch ( key ) {
 			case CTRL_C:
-				job_kill ( &monojob );
-				rc = -ECANCELED;
-				goto done;
+				monojob_close ( &monojob, -ECANCELED );
+				break;
 			default:
 				break;
 			}
@@ -86,9 +79,8 @@ int monojob_wait ( const char *string ) {
 			last_progress_dot = currticks();
 		}
 	}
-	rc = monojob_rc;
+	rc = monojob.rc;
 
-done:
 	if ( rc ) {
 		printf ( " %s\n", strerror ( rc ) );
 	} else {
