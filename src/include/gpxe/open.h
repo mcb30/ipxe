@@ -10,7 +10,6 @@
 #include <stdarg.h>
 #include <gpxe/tables.h>
 
-struct xfer_interface;
 struct uri;
 struct sockaddr;
 
@@ -51,11 +50,11 @@ struct uri_opener {
 	const char *scheme;
 	/** Open URI
 	 *
-	 * @v xfer		Data transfer interface
+	 * @v intf		Object interface
 	 * @v uri		URI
 	 * @ret rc		Return status code
 	 */
-	int ( * open ) ( struct xfer_interface *xfer, struct uri *uri );
+	int ( * open ) ( struct interface *intf, struct uri *uri );
 };
 
 /** Register a URI opener */
@@ -69,27 +68,27 @@ struct socket_opener {
 	int family;
 	/** Open socket
 	 *
-	 * @v xfer		Data transfer interface
+	 * @v intf		Object interface
 	 * @v peer		Peer socket address
 	 * @v local		Local socket address, or NULL
 	 * @ret rc		Return status code
 	 */
-	int ( * open ) ( struct xfer_interface *xfer, struct sockaddr *peer,
+	int ( * open ) ( struct interface *intf, struct sockaddr *peer,
 			 struct sockaddr *local );
 };
 
 /** Register a socket opener */
 #define __socket_opener __table ( struct socket_opener, socket_openers, 01 )
 
-extern int xfer_open_uri ( struct xfer_interface *xfer, struct uri *uri );
-extern int xfer_open_uri_string ( struct xfer_interface *xfer,
+extern int xfer_open_uri ( struct interface *intf, struct uri *uri );
+extern int xfer_open_uri_string ( struct interface *intf,
 				  const char *uri_string );
-extern int xfer_open_named_socket ( struct xfer_interface *xfer,
-				    int semantics, struct sockaddr *peer,
-				    const char *name, struct sockaddr *local );
-extern int xfer_open_socket ( struct xfer_interface *xfer, int semantics,
+extern int xfer_open_named_socket ( struct interface *intf, int semantics,
+				    struct sockaddr *peer, const char *name,
+				    struct sockaddr *local );
+extern int xfer_open_socket ( struct interface *intf, int semantics,
 			      struct sockaddr *peer, struct sockaddr *local );
-extern int xfer_vopen ( struct xfer_interface *xfer, int type, va_list args );
-extern int xfer_open ( struct xfer_interface *xfer, int type, ... );
+extern int xfer_vopen ( struct interface *intf, int type, va_list args );
+extern int xfer_open ( struct interface *intf, int type, ... );
 
 #endif /* _GPXE_OPEN_H */

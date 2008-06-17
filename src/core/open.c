@@ -45,14 +45,14 @@ static struct socket_opener socket_openers_end[0]
 /**
  * Open URI
  *
- * @v xfer		Data transfer interface
+ * @v intf		Data transfer interface
  * @v uri		URI
  * @ret rc		Return status code
  *
  * The URI will be regarded as being relative to the current working
  * URI (see churi()).
  */
-int xfer_open_uri ( struct xfer_interface *xfer, struct uri *uri ) {
+int xfer_open_uri ( struct interface *intf, struct uri *uri ) {
 	struct uri_opener *opener;
 	struct uri *resolved_uri;
 	int rc = -ENOTSUP;
@@ -65,12 +65,13 @@ int xfer_open_uri ( struct xfer_interface *xfer, struct uri *uri ) {
 	/* Find opener which supports this URI scheme */
 	for ( opener = uri_openers ; opener < uri_openers_end ; opener++ ) {
 		if ( strcmp ( resolved_uri->scheme, opener->scheme ) == 0 ) {
-			rc = opener->open ( xfer, resolved_uri );
+			rc = opener->open ( intf, resolved_uri );
 			goto done;
 		}
 	}
-	DBGC ( xfer, "XFER %p attempted to open unsupported URI scheme "
-	       "\"%s\"\n", xfer, resolved_uri->scheme );
+	DBGC ( INTF_COL ( intf ), "INTF " INTF_FMT " attempted to open "
+	       "unsupported URI scheme \"%s\"\n",
+	       INTF_DBG ( intf ), resolved_uri->scheme );
 
  done:
 	uri_put ( resolved_uri );
@@ -80,25 +81,26 @@ int xfer_open_uri ( struct xfer_interface *xfer, struct uri *uri ) {
 /**
  * Open URI string
  *
- * @v xfer		Data transfer interface
+ * @v intf		Data transfer interface
  * @v uri_string	URI string (e.g. "http://etherboot.org/kernel")
  * @ret rc		Return status code
  *
  * The URI will be regarded as being relative to the current working
  * URI (see churi()).
  */
-int xfer_open_uri_string ( struct xfer_interface *xfer,
+int xfer_open_uri_string ( struct interface *intf,
 			   const char *uri_string ) {
 	struct uri *uri;
 	int rc;
 
-	DBGC ( xfer, "XFER %p opening URI %s\n", xfer, uri_string );
+	DBGC ( INTF_COL ( intf ), "INTF " INTF_FMT " opening URI %s\n",
+	       INTF_DBG ( intf ), uri_string );
 
 	uri = parse_uri ( uri_string );
 	if ( ! uri )
 		return -ENOMEM;
 
-	rc = xfer_open_uri ( xfer, uri );
+	rc = xfer_open_uri ( intf, uri );
 
 	uri_put ( uri );
 	return rc;
@@ -107,29 +109,30 @@ int xfer_open_uri_string ( struct xfer_interface *xfer,
 /**
  * Open socket
  *
- * @v xfer		Data transfer interface
+ * @v intf		Data transfer interface
  * @v semantics		Communication semantics (e.g. SOCK_STREAM)
  * @v peer		Peer socket address
  * @v local		Local socket address, or NULL
  * @ret rc		Return status code
  */
-int xfer_open_socket ( struct xfer_interface *xfer, int semantics,
+int xfer_open_socket ( struct interface *intf, int semantics,
 		       struct sockaddr *peer, struct sockaddr *local ) {
 	struct socket_opener *opener;
 
-	DBGC ( xfer, "XFER %p opening (%s,%s) socket\n", xfer,
-	       socket_semantics_name ( semantics ),
+	DBGC ( INTF_COL ( intf ), "INTF " INTF_FMT " opening (%s,%s) socket\n",
+	       INTF_DBG ( intf ), socket_semantics_name ( semantics ),
 	       socket_family_name ( peer->sa_family ) );
 
 	for ( opener = socket_openers; opener < socket_openers_end; opener++ ){
 		if ( ( opener->semantics == semantics ) &&
 		     ( opener->family == peer->sa_family ) ) {
-			return opener->open ( xfer, peer, local );
+			return opener->open ( intf, peer, local );
 		}
 	}
 
-	DBGC ( xfer, "XFER %p attempted to open unsupported socket type "
-	       "(%s,%s)\n", xfer, socket_semantics_name ( semantics ),
+	DBGC ( INTF_COL ( intf ), "INTF " INTF_FMT " attempted to open "
+	       "unsupported socket type (%s,%s)\n",
+	       INTF_DBG ( intf ), socket_semantics_name ( semantics ),
 	       socket_family_name ( peer->sa_family ) );
 	return -ENOTSUP;
 }
@@ -137,30 +140,31 @@ int xfer_open_socket ( struct xfer_interface *xfer, int semantics,
 /**
  * Open location
  *
- * @v xfer		Data transfer interface
+ * @v intf		Data transfer interface
  * @v type		Location type
  * @v args		Remaining arguments depend upon location type
  * @ret rc		Return status code
  */
-int xfer_vopen ( struct xfer_interface *xfer, int type, va_list args ) {
+int xfer_vopen ( struct interface *intf, int type, va_list args ) {
 	switch ( type ) {
 	case LOCATION_URI_STRING: {
 		const char *uri_string = va_arg ( args, const char * );
 
-		return xfer_open_uri_string ( xfer, uri_string ); }
+		return xfer_open_uri_string ( intf, uri_string ); }
 	case LOCATION_URI: {
 		struct uri *uri = va_arg ( args, struct uri * );
 
-		return xfer_open_uri ( xfer, uri ); }
+		return xfer_open_uri ( intf, uri ); }
 	case LOCATION_SOCKET: {
 		int semantics = va_arg ( args, int );
 		struct sockaddr *peer = va_arg ( args, struct sockaddr * );
 		struct sockaddr *local = va_arg ( args, struct sockaddr * );
 
-		return xfer_open_socket ( xfer, semantics, peer, local ); }
+		return xfer_open_socket ( intf, semantics, peer, local ); }
 	default:
-		DBGC ( xfer, "XFER %p attempted to open unsupported location "
-		       "type %d\n", xfer, type );
+		DBGC ( INTF_COL ( intf ), "INTF " INTF_FMT " attempted to "
+		       "open unsupported location type %d\n",
+		       INTF_DBG ( intf ), type );
 		return -ENOTSUP;
 	}
 }
@@ -168,17 +172,17 @@ int xfer_vopen ( struct xfer_interface *xfer, int type, va_list args ) {
 /**
  * Open location
  *
- * @v xfer		Data transfer interface
+ * @v intf		Data transfer interface
  * @v type		Location type
  * @v ...		Remaining arguments depend upon location type
  * @ret rc		Return status code
  */
-int xfer_open ( struct xfer_interface *xfer, int type, ... ) {
+int xfer_open ( struct interface *intf, int type, ... ) {
 	va_list args;
 	int rc;
 
 	va_start ( args, type );
-	rc = xfer_vopen ( xfer, type, args );
+	rc = xfer_vopen ( intf, type, args );
 	va_end ( args );
 	return rc;
 }
