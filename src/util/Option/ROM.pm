@@ -13,7 +13,8 @@ Option::ROM - Option ROM manipulation
     $rom->load ( "rtl8139.rom" );
 
     # Modify the PCI device ID
-    $rom->pci->
+    $rom->pci_header->{device_id} = 0x1234;
+    $rom->fix_checksum();
 
     # Write ROM image out to a new file
     $rom->save ( "rtl8139-modified.rom" );
@@ -26,6 +27,12 @@ images.
 =head1 METHODS
 
 =cut
+
+##############################################################################
+#
+# Option::ROM::Fields
+#
+##############################################################################
 
 package Option::ROM::Fields;
 
@@ -116,6 +123,19 @@ sub DESTROY {
   my $self = shift;
 }
 
+sub checksum {
+  my $self = shift;
+
+  my $raw = substr ( ${$self->{data}}, $self->{offset}, $self->{length} );
+  return unpack ( "%8C*", $raw );
+}
+
+##############################################################################
+#
+# Option::ROM
+#
+##############################################################################
+
 package Option::ROM;
 
 use strict;
@@ -124,7 +144,7 @@ use Carp;
 
 =pod
 
-=item C<< new >>
+=item C<< new () >>
 
 Construct a new C<Option::ROM> object.
 
@@ -195,6 +215,15 @@ sub save {
   close $fh;
 }
 
+=pod
+
+=item C<< pci_header () >>
+
+Return a C<Option::ROM::PCI> object representing the ROM's PCI header,
+if present.
+
+=cut
+
 sub pci_header {
   my $hash = shift;
   my $self = tied(%$hash);
@@ -203,8 +232,62 @@ sub pci_header {
   return undef unless $offset != 0;
 
   return Option::ROM::PCI->new ( $self->{data}, $offset );
-}  
+}
 
+=pod
+
+=item C<< pnp_header () >>
+
+Return a C<Option::ROM::PnP> object representing the ROM's PnP header,
+if present.
+
+=cut
+
+sub pnp_header {
+  my $hash = shift;
+  my $self = tied(%$hash);
+
+  my $offset = $hash->{pnp_header};
+  return undef unless $offset != 0;
+
+  return Option::ROM::PnP->new ( $self->{data}, $offset );
+}
+
+=pod
+
+=item C<< checksum () >>
+
+Calculate the byte checksum of the ROM.
+
+=cut
+
+sub checksum {
+  my $hash = shift;
+  my $self = tied(%$hash);
+
+  return unpack ( "%8C*", ${$self->{data}} );
+}
+
+=pod
+
+=item C<< fix_checksum () >>
+
+Fix the byte checksum of the ROM.
+
+=cut
+
+sub fix_checksum {
+  my $hash = shift;
+  my $self = tied(%$hash);
+
+  $hash->{checksum} = ( ( $hash->{checksum} - $hash->checksum() ) & 0xff );
+}
+
+##############################################################################
+#
+# Option::ROM::PCI
+#
+##############################################################################
 
 package Option::ROM::PCI;
 
@@ -248,6 +331,63 @@ sub new {
   $self->{length} = $hash->{struct_length};
 
   return $hash;  
+}
+
+##############################################################################
+#
+# Option::ROM::PnP
+#
+##############################################################################
+
+package Option::ROM::PnP;
+
+use strict;
+use warnings;
+use Carp;
+
+sub new {
+  my $class = shift;
+  my $data = shift;
+  my $offset = shift;
+
+  my $hash = {};
+  tie %$hash, "Option::ROM::Fields", {
+    data => $data,
+    offset => $offset,
+    length => 0x06,
+    fields => {
+      signature =>	{ offset => 0x00, length => 0x04, pack => "L" },
+      struct_revision =>{ offset => 0x04, length => 0x01, pack => "C" },
+      struct_length =>	{ offset => 0x05, length => 0x01, pack => "C" },
+      checksum =>	{ offset => 0x09, length => 0x01, pack => "C" },
+      manufacturer =>	{ offset => 0x0e, length => 0x02, pack => "S" },
+      product =>	{ offset => 0x10, length => 0x02, pack => "S" },
+      bcv =>		{ offset => 0x16, length => 0x02, pack => "S" },
+      bdv =>		{ offset => 0x18, length => 0x02, pack => "S" },
+      bev =>		{ offset => 0x1a, length => 0x02, pack => "S" },
+    },
+  };
+  bless $hash, $class;
+
+  # Retrieve true length of structure
+  my $self = tied ( %$hash );
+  $self->{length} = ( $hash->{struct_length} * 16 );
+
+  return $hash;  
+}
+
+sub checksum {
+  my $hash = shift;
+  my $self = tied(%$hash);
+
+  return $self->checksum();
+}
+
+sub fix_checksum {
+  my $hash = shift;
+  my $self = tied(%$hash);
+
+  $hash->{checksum} = ( ( $hash->{checksum} - $hash->checksum() ) & 0xff );
 }
 
 1;
