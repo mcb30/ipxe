@@ -39,6 +39,7 @@ package Option::ROM::Fields;
 use strict;
 use warnings;
 use Carp;
+use bytes;
 
 sub TIEHASH {
   my $class = shift;
@@ -141,6 +142,15 @@ package Option::ROM;
 use strict;
 use warnings;
 use Carp;
+use bytes;
+use Exporter 'import';
+
+use constant ROM_SIGNATURE => 0xaa55;
+use constant PCI_SIGNATURE => 'PCIR';
+use constant PNP_SIGNATURE => '$PnP';
+
+our @EXPORT_OK = qw ( ROM_SIGNATURE PCI_SIGNATURE PNP_SIGNATURE );
+our %EXPORT_TAGS = ( all => [ @EXPORT_OK ] );
 
 =pod
 
@@ -186,9 +196,9 @@ sub load {
 
   $self->{filename} = $filename;
 
-  open my $fh, "<", $filename
+  open my $fh, "<$filename"
       or croak "Cannot open $filename for reading: $!";
-  read $fh, my $data, -s $fh;
+  read $fh, my $data, ( 128 * 1024 ); # 128kB is theoretical max size
   $self->{data} = \$data;
   close $fh;
 }
@@ -209,10 +219,26 @@ sub save {
 
   $filename ||= $self->{filename};
 
-  open my $fh, ">", $filename
+  open my $fh, ">$filename"
       or croak "Cannot open $filename for writing: $!";
   print $fh ${$self->{data}};
   close $fh;
+}
+
+=pod
+
+=item C<< length () >>
+
+Length of option ROM data.  This is the length of the file, not the
+length from the ROM header length field.
+
+=cut
+
+sub length {
+  my $hash = shift;
+  my $self = tied(%$hash);
+
+  return length ${$self->{data}};
 }
 
 =pod
@@ -294,6 +320,7 @@ package Option::ROM::PCI;
 use strict;
 use warnings;
 use Carp;
+use bytes;
 
 sub new {
   my $class = shift;
@@ -306,7 +333,7 @@ sub new {
     offset => $offset,
     length => 0x0c,
     fields => {
-      signature =>	{ offset => 0x00, length => 0x04, pack => "L" },
+      signature =>	{ offset => 0x00, length => 0x04, pack => "a4" },
       vendor_id =>	{ offset => 0x04, length => 0x02, pack => "S" },
       device_id =>	{ offset => 0x06, length => 0x02, pack => "S" },
       device_list =>	{ offset => 0x08, length => 0x02, pack => "S" },
@@ -344,6 +371,7 @@ package Option::ROM::PnP;
 use strict;
 use warnings;
 use Carp;
+use bytes;
 
 sub new {
   my $class = shift;
@@ -356,7 +384,7 @@ sub new {
     offset => $offset,
     length => 0x06,
     fields => {
-      signature =>	{ offset => 0x00, length => 0x04, pack => "L" },
+      signature =>	{ offset => 0x00, length => 0x04, pack => "a4" },
       struct_revision =>{ offset => 0x04, length => 0x01, pack => "C" },
       struct_length =>	{ offset => 0x05, length => 0x01, pack => "C" },
       checksum =>	{ offset => 0x09, length => 0x01, pack => "C" },
@@ -388,6 +416,28 @@ sub fix_checksum {
   my $self = tied(%$hash);
 
   $hash->{checksum} = ( ( $hash->{checksum} - $hash->checksum() ) & 0xff );
+}
+
+sub manufacturer {
+  my $hash = shift;
+  my $self = tied(%$hash);
+
+  my $manufacturer = $hash->{manufacturer};
+  return undef unless $manufacturer;
+
+  my $raw = substr ( ${$self->{data}}, $manufacturer );
+  return unpack ( "Z*", $raw );
+}
+
+sub product {
+  my $hash = shift;
+  my $self = tied(%$hash);
+
+  my $product = $hash->{product};
+  return undef unless $product;
+
+  my $raw = substr ( ${$self->{data}}, $product );
+  return unpack ( "Z*", $raw );
 }
 
 1;
