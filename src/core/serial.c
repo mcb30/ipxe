@@ -83,12 +83,34 @@
 #define UART_MSR 0x06
 #define UART_SCR 0x07
 
+//#define UART_MEM 1
 #if defined(UART_MEM)
 #define uart_readb(addr) readb((addr))
 #define uart_writeb(val,addr) writeb((val),(addr))
 #else
 #define uart_readb(addr) inb((addr))
 #define uart_writeb(val,addr) outb((val),(addr))
+#endif
+
+
+#if 0
+#undef uart_readb
+#undef uart_writeb
+extern uint8_t __attribute__ (( regparm(0) ))  uart_readb ( int addr );
+extern void __attribute__ (( regparm(0) )) uart_writeb ( uint8_t data, int addr );
+#endif
+
+#if 1
+#undef uart_readb
+#undef uart_writeb
+static inline uint8_t uart_readb ( int addr ) {
+	uint8_t output;
+	__asm__ __volatile__ ( "data16 call _uart_readb" : "=a" ( output ) : "d" ( addr ) );
+	return output;
+}
+static inline void uart_writeb ( uint8_t data, int addr ) {
+	__asm__ __volatile__ ( "data16 call _uart_writeb" : : "a" ( data ), "d" ( addr ) );
+}
 #endif
 
 /*

@@ -40,6 +40,18 @@
  *
  */
 
+#undef writel
+#undef readl
+void writel ( uint32_t data, volatile uint32_t *addr );
+
+
+static inline void writel ( uint32_t data, volatile uint32_t *addr ) {
+	*addr = data;
+}
+
+
+extern uint32_t readl ( volatile uint32_t *addr );
+
 /** Maximum time to wait for SPI lock */
 #define PHN_SPI_LOCK_TIMEOUT_MS 100
 
