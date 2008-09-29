@@ -25,6 +25,8 @@
 
 #define SMAP 0x534d4150
 
+#define E820SIZE	24
+
 /****************************************************************************
  *
  * Allowed memory windows
@@ -208,11 +210,11 @@ get_underlying_e820:
 	pushw	%di
 	pushw	%si
 	movw	$underlying_e820_cache, %si
-	movw	$20, %cx
+	movl	$E820SIZE, %ecx
 	rep movsb
 	popw	%si
 	popw	%di
-	movw	$20, %cx
+	movl	$E820SIZE, %ecx
 	incw	%bx
 	movl	%edx, %eax
 	ret
@@ -250,7 +252,7 @@ get_underlying_e820:
 	pushw	%ds
 	popw	%es
 	movw	$underlying_e820_cache, %di
-	movl	$20, %ecx
+	movl	$E820SIZE, %ecx
 	movl	underlying_e820_ebx, %ebx
 	stc
 	pushfw
@@ -437,15 +439,15 @@ get_mangled_e820:
 	/* Peek ahead to see if there are any further nonempty regions */
 	pushal
 	pushw	%es
-	subw	$20, %sp
+	subw	$E820SIZE, %sp
 	movl	$0xe820, %eax
 	movl	$SMAP, %edx
-	movl	$20, %ecx
+	movl	$E820SIZE, %ecx
 	pushw	%ss
 	popw	%es
 	movw	%sp, %di
 	call	get_nonempty_e820
-	addr32 leal 20(%esp), %esp /* avoid changing flags */
+	addr32 leal E820SIZE(%esp), %esp /* avoid changing flags */
 	popw	%es
 	popal
 	jnc	99f /* There are further nonempty regions */
