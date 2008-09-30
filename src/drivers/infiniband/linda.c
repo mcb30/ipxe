@@ -21,6 +21,8 @@
 #include <errno.h>
 #include <gpxe/pci.h>
 #include <gpxe/infiniband.h>
+#include <gpxe/i2c.h>
+#include <gpxe/bitbash.h>
 #include "linda.h"
 
 /**
@@ -30,14 +32,159 @@
  *
  */
 
+/** A Linda HCA */
+struct linda {
+	/** Registers */
+	void *regs;
+	/** Infiniband devices */
+	struct ib_device *ibdev[LINDA_NUM_PORTS];
 
-static void linda_readq ( struct linda *linda, unsigned long offset,
-			  uint32_t *dwords ) {
+	/** I2C bit-bashing interface */
+	struct i2c_bit_basher i2c;
+	/** I2C serial EEPROM */
+	struct i2c_device eeprom;
+};
+
+/**
+ * Read Linda qword register
+ *
+ * @v linda		Linda device
+ * @v dwords		Register buffer to read into
+ * @v offset		Register offset
+ */
+static void linda_readq ( struct linda *linda, uint32_t *dwords,
+			  unsigned long offset ) {
 	dwords[0] = readl ( linda->regs + offset + 0 );
 	dwords[1] = readl ( linda->regs + offset + 4 );
 }
-#define linda_readq( _linda, _offset, _ptr ) \
-	linda_readq ( (_linda), (_offset), (_ptr)->u.dwords )
+#define linda_readq( _linda, _ptr, _offset ) \
+	linda_readq ( (_linda), (_ptr)->u.dwords, (_offset) )
+
+/**
+ * Write Linda qword register
+ *
+ * @v linda		Linda device
+ * @v dwords		Register buffer to write
+ * @v offset		Register offset
+ */
+static void linda_writeq ( struct linda *linda, const uint32_t *dwords,
+			   unsigned long offset ) {
+	writel ( dwords[0], linda->regs + offset + 0 );
+	writel ( dwords[1], linda->regs + offset + 4 );
+}
+#define linda_writeq( _linda, _ptr, _offset ) \
+	linda_writeq ( (_linda), (_ptr)->u.dwords, (_offset) )
+
+/***************************************************************************
+ *
+ * I2C bus operations
+ *
+ ***************************************************************************
+ */
+
+/** Linda I2C bit to GPIO mappings */
+static unsigned int linda_i2c_bits[] = {
+	[I2C_BIT_SCL] = ( 1 << LINDA_GPIO_SCL ),
+	[I2C_BIT_SDA] = ( 1 << LINDA_GPIO_SDA ),
+};
+
+/**
+ * Read Linda I2C line status
+ *
+ * @v basher		Bit-bashing interface
+ * @v bit_id		Bit number
+ * @ret zero		Input is a logic 0
+ * @ret non-zero	Input is a logic 1
+ */
+static int linda_i2c_read_bit ( struct bit_basher *basher,
+				unsigned int bit_id ) {
+	struct linda *linda =
+		container_of ( basher, struct linda, i2c.basher );
+	struct QIB_7220_GPIO gpiostatus;
+	unsigned int status;
+
+	linda_readq ( linda, &gpiostatus, QIB_7220_GPIOStatus_offset );
+	status = BIT_GET ( &gpiostatus, GPIO );
+	return ( status & linda_i2c_bits[bit_id] );
+}
+
+/**
+ * Write Linda I2C line status
+ *
+ * @v basher		Bit-bashing interface
+ * @v bit_id		Bit number
+ * @v data		Value to write
+ */
+static void linda_i2c_write_bit ( struct bit_basher *basher,
+				  unsigned int bit_id, unsigned long data ) {
+	struct linda *linda =
+		container_of ( basher, struct linda, i2c.basher );
+	struct QIB_7220_EXTCtrl extctrl;
+	struct QIB_7220_GPIO gpioout;
+	unsigned int bit = linda_i2c_bits[bit_id];
+	unsigned int outputs;
+	unsigned int output_enables;
+
+	/* Read current GPIO mask and outputs */
+	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+	linda_readq ( linda, &gpioout, QIB_7220_GPIOOut_offset );
+
+	/* Update outputs and output enables.  I2C lines are tied
+	 * high, so we always set the output to 0 and use the output
+	 * enable to control the line.  Write the output enable first;
+	 * that way we avoid logic hazards.
+	 */
+	output_enables = BIT_GET ( &extctrl, GPIOOe );
+	output_enables = ( ( output_enables & ~bit ) | ( ~data & bit ) );
+	outputs = BIT_GET ( &gpioout, GPIO );
+	outputs = ( outputs & ~bit );
+	BIT_SET ( &extctrl, 0, GPIOOe, output_enables );
+	BIT_SET ( &gpioout, 0, GPIO, outputs );
+
+	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+	linda_writeq ( linda, &gpioout, QIB_7220_GPIOOut_offset );
+}
+
+/** Linda I2C bit-bashing interface operations */
+static struct bit_basher_operations linda_i2c_basher_ops = {
+	.read	= linda_i2c_read_bit,
+	.write	= linda_i2c_write_bit,
+};
+
+/**
+ * Initialise Linda I2C subsystem
+ *
+ * @v linda		Linda device
+ * @ret rc		Return status code
+ */
+static int linda_init_i2c ( struct linda *linda ) {
+	static int try_eeprom_address[] = { 0x50, 0x51 };
+	unsigned int i;
+	int rc;
+
+	/* Initialise bus */
+	if ( ( rc = init_i2c_bit_basher ( &linda->i2c,
+					  &linda_i2c_basher_ops ) ) != 0 ) {
+		DBGC ( linda, "Linda %p could not initialise I2C bus: %s\n",
+		       linda, strerror ( rc ) );
+		return rc;
+	}
+
+	/* Probe for devices */
+	for ( i = 0 ; i < ( sizeof ( try_eeprom_address ) /
+			    sizeof ( try_eeprom_address[0] ) ) ; i++ ) {
+		init_i2c_eeprom ( &linda->eeprom, try_eeprom_address[i] );
+		if ( ( rc = i2c_check_presence ( &linda->i2c.i2c,
+						 &linda->eeprom ) ) == 0 ) {
+			DBGC ( linda, "Linda %p found EEPROM at %02x\n",
+			       linda, try_eeprom_address[i] );
+			return 0;
+		}
+	}
+
+	DBGC ( linda, "Linda %p could not find EEPROM\n", linda );
+	return -ENODEV;
+}
 
 /***************************************************************************
  *
@@ -380,10 +527,17 @@ static int linda_probe ( struct pci_device *pci,
 	DBGC ( linda, "Linda %p has BAR at %08lx\n", linda, pci->membase );
 
 	/* Print some general data */
-	linda_readq ( linda, QIB_7220_Revision_offset, &revision );
-	DBGC ( linda, "Linda %p is version %ld.%ld\n", linda,
+	linda_readq ( linda, &revision, QIB_7220_Revision_offset );
+	DBGC ( linda, "Linda %p board %02lx v%ld.%ld.%ld.%ld\n", linda,
+	       BIT_GET ( &revision, BoardID ),
+	       BIT_GET ( &revision, R_SW ),
+	       BIT_GET ( &revision, R_Arch ),
 	       BIT_GET ( &revision, R_ChipRevMajor ),
 	       BIT_GET ( &revision, R_ChipRevMinor ) );
+
+	/* Initialise I2C subsystem */
+	if ( ( rc = linda_init_i2c ( linda ) ) != 0 )
+		goto err_init_i2c;
 
 	/* Register Infiniband devices */
 	for ( i = 0 ; i < LINDA_NUM_PORTS ; i++ ) {
@@ -400,6 +554,7 @@ static int linda_probe ( struct pci_device *pci,
  err_register_ibdev:
 	for ( i-- ; i >= 0 ; i-- )
 		unregister_ibdev ( linda->ibdev[i] );
+ err_init_i2c:
 	i = LINDA_NUM_PORTS;
  err_alloc_ibdev:
 	for ( i-- ; i >= 0 ; i-- )

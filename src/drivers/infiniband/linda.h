@@ -14,6 +14,15 @@
 
 struct ib_device;
 
+/** A Linda GPIO register */
+struct QIB_7220_GPIO_pb {
+	pseudo_bit_t GPIO[16];
+	pseudo_bit_t Reserved[48];
+};
+struct QIB_7220_GPIO {
+	PSEUDO_BIT_STRUCT ( struct QIB_7220_GPIO_pb );
+};
+
 /** Linda memory BAR size */
 #define LINDA_BAR0_SIZE 0x400000
 
@@ -23,12 +32,10 @@ struct ib_device;
 /** Base port number */
 #define LINDA_PORT_BASE 1
 
-/** A Linda HCA */
-struct linda {
-	/** Registers */
-	void *regs;
-	/** Infiniband devices */
-	struct ib_device *ibdev[LINDA_NUM_PORTS];
-};
+/** Linda I2C SCL line GPIO number */
+#define LINDA_GPIO_SCL 0
+
+/** Linda I2C SDA line GPIO number */
+#define LINDA_GPIO_SDA 1
 
 #endif /* _LINDA_H */
