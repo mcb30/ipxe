@@ -33,13 +33,17 @@
  *
  * This is a property of the NIC, not a property of the host CPU.
  */
-#ifdef BITOPS_LE64
-#define CPU_TO_BF64	cpu_to_le64
-#define BF64_TO_CPU	le64_to_cpu
+#ifdef BITOPS_LITTLE_ENDIAN
+#define cpu_to_BIT64	cpu_to_le64
+#define cpu_to_BIT32	cpu_to_le32
+#define BIT64_to_cpu	le64_to_cpu
+#define BIT32_to_cpu	le32_to_cpu
 #endif
-#ifdef BITOPS_BE64
-#define CPU_TO_BF64	cpu_to_be64
-#define BF64_TO_CPU	be64_to_cpu
+#ifdef BITOPS_BIG_ENDIAN
+#define cpu_to_BIT64	cpu_to_be64
+#define cpu_to_BIT32	cpu_to_be32
+#define BIT64_to_cpu	be64_to_cpu
+#define BIT32_to_cpu	be32_to_cpu
 #endif
 
 /** Datatype used to represent a bit in the pseudo-structures */
@@ -78,11 +82,7 @@ typedef unsigned char pseudo_bit_t;
 #define QWORD_OFFSET( _ptr, _field )					      \
 	( BIT_OFFSET ( _ptr, _field ) / 64 )
 
-/** Qword bit offset of a field within a pseudo_bit_t structure
- *
- * Yes, using mod-64 would work, but would lose the check for the
- * error of specifying a mismatched field name and qword index.
- */
+/** Qword bit offset of a field within a pseudo_bit_t structure */
 #define QWORD_BIT_OFFSET( _ptr, _index, _field )			      \
 	( BIT_OFFSET ( _ptr, _field ) - ( 64 * (_index) ) )
 
@@ -162,40 +162,23 @@ typedef unsigned char pseudo_bit_t;
  *
  */
 
-#define BIT_FILL( _ptr, _index, _assembled )				      \
-	do {								      \
+#define BIT_FILL( _ptr, _index, _assembled ) do {			      \
 		uint64_t *__ptr = &(_ptr)->u.qwords[(_index)];		      \
 		uint64_t __assembled = (_assembled);			      \
-		*__ptr = CPU_TO_BF64 ( __assembled );			      \
+		*__ptr = cpu_to_BIT64 ( __assembled );			      \
 	} while ( 0 )
 
-#define BIT_FILL_1( _ptr, _index, ... )					      \
-	BIT_FILL ( _ptr, _index, BIT_ASSEMBLE_1 ( _ptr, _index, __VA_ARGS__ ) )
-
-#define BIT_FILL_2( _ptr, _index, ... )					      \
-	BIT_FILL ( _ptr, _index, BIT_ASSEMBLE_2 ( _ptr, _index, __VA_ARGS__ ) )
-
-#define BIT_FILL_3( _ptr, _index, ... )					      \
-	BIT_FILL ( _ptr, _index, BIT_ASSEMBLE_3 ( _ptr, _index, __VA_ARGS__ ) )
-
-#define BIT_FILL_4( _ptr, _index, ... )					      \
-	BIT_FILL ( _ptr, _index, BIT_ASSEMBLE_4 ( _ptr, _index, __VA_ARGS__ ) )
-
-#define BIT_FILL_5( _ptr, _index, ... )					      \
-	BIT_FILL ( _ptr, _index, BIT_ASSEMBLE_5 ( _ptr, _index, __VA_ARGS__ ) )
-
-#define BIT_FILL_6( _ptr, _index, ... )					      \
-	BIT_FILL ( _ptr, _index, BIT_ASSEMBLE_6 ( _ptr, _index, __VA_ARGS__ ) )
-
-#define BIT_FILL_7( _ptr, _index, ... )					      \
-	BIT_FILL ( _ptr, _index, BIT_ASSEMBLE_7 ( _ptr, _index, __VA_ARGS__ ) )
+#define BIT_FILL_1( _ptr, _field1, ... )				      \
+	BIT_FILL ( _ptr, QWORD_OFFSET ( _ptr, _field1 ),		      \
+		   BIT_ASSEMBLE_1 ( _ptr, QWORD_OFFSET ( _ptr, _field1 ),     \
+				    _field1, __VA_ARGS__ ) )
 
 /** Extract value of named field */
 #define BIT_GET64( _ptr, _field )					      \
 	( {								      \
 		unsigned int __index = QWORD_OFFSET ( _ptr, _field );	      \
 		uint64_t *__ptr = &(_ptr)->u.qwords[__index];		      \
-		uint64_t __value = BF64_TO_CPU ( *__ptr );		      \
+		uint64_t __value = BIT64_to_cpu ( *__ptr );		      \
 		__value >>=						      \
 		    QWORD_BIT_OFFSET ( _ptr, __index, _field );		      \
 		__value &= BIT_MASK ( _ptr, _field );			      \
@@ -205,5 +188,17 @@ typedef unsigned char pseudo_bit_t;
 /** Extract value of named field (for fields up to the size of a long) */
 #define BIT_GET( _ptr, _field )						      \
 	( ( unsigned long ) BIT_GET64 ( _ptr, _field ) )
+
+#define BIT_SET( _ptr, _field, _value ) do {				      \
+		unsigned int __index = QWORD_OFFSET ( _ptr, _field );	      \
+		uint64_t *__ptr = &(_ptr)->u.qwords[__index];		      \
+		unsigned int __shift =					      \
+			QWORD_BIT_OFFSET ( _ptr, __index, _field );	      \
+		uint64_t __value = (_value);				      \
+		*__ptr &= cpu_to_BIT64 ( ~( BIT_MASK ( _ptr, _field ) <<      \
+					    __shift ) );		      \
+		*__ptr |= cpu_to_BIT64 ( __value << __shift );		      \
+	} while ( 0 )
+		
 
 #endif /* _GPXE_BITOPS_H */

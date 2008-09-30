@@ -8,7 +8,7 @@
  *
  */
 
-#define BITOPS_LE64
+#define BITOPS_LITTLE_ENDIAN
 #include <gpxe/bitops.h>
 #include "qib_7220_regs.h"
 

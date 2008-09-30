@@ -100,11 +100,12 @@ static int linda_i2c_read_bit ( struct bit_basher *basher,
 				unsigned int bit_id ) {
 	struct linda *linda =
 		container_of ( basher, struct linda, i2c.basher );
-	struct QIB_7220_GPIO gpiostatus;
+	struct QIB_7220_EXTStatus extstatus;
 	unsigned int status;
 
-	linda_readq ( linda, &gpiostatus, QIB_7220_GPIOStatus_offset );
-	status = BIT_GET ( &gpiostatus, GPIO );
+	linda_readq ( linda, &extstatus, QIB_7220_EXTStatus_offset );
+	status = BIT_GET ( &extstatus, GPIOIn );
+	DBG ( "GPIO status read as %04x\n", status );
 	return ( status & linda_i2c_bits[bit_id] );
 }
 
@@ -119,15 +120,17 @@ static void linda_i2c_write_bit ( struct bit_basher *basher,
 				  unsigned int bit_id, unsigned long data ) {
 	struct linda *linda =
 		container_of ( basher, struct linda, i2c.basher );
-	struct QIB_7220_EXTCtrl extctrl;
-	struct QIB_7220_GPIO gpioout;
+	static struct QIB_7220_EXTCtrl extctrl;
+	static struct QIB_7220_GPIO gpioout;
 	unsigned int bit = linda_i2c_bits[bit_id];
-	unsigned int outputs;
-	unsigned int output_enables;
+	unsigned int outputs = 0;
+	unsigned int output_enables = 0;
+
+	DBG ( "Set bit %d to %lx\n", bit_id, data );
 
 	/* Read current GPIO mask and outputs */
-	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
-	linda_readq ( linda, &gpioout, QIB_7220_GPIOOut_offset );
+	//	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+	//	linda_readq ( linda, &gpioout, QIB_7220_GPIOOut_offset );
 
 	/* Update outputs and output enables.  I2C lines are tied
 	 * high, so we always set the output to 0 and use the output
@@ -135,14 +138,23 @@ static void linda_i2c_write_bit ( struct bit_basher *basher,
 	 * that way we avoid logic hazards.
 	 */
 	output_enables = BIT_GET ( &extctrl, GPIOOe );
+	DBG ( "OE %04x => ", output_enables );
 	output_enables = ( ( output_enables & ~bit ) | ( ~data & bit ) );
 	outputs = BIT_GET ( &gpioout, GPIO );
+	DBG ( "%04x, Outputs %04x => ", output_enables, outputs );
 	outputs = ( outputs & ~bit );
-	BIT_SET ( &extctrl, 0, GPIOOe, output_enables );
-	BIT_SET ( &gpioout, 0, GPIO, outputs );
+	DBG ( "%04x\n", outputs );
+	BIT_SET ( &extctrl, GPIOOe, output_enables );
+	BIT_SET ( &gpioout, GPIO, outputs );
 
 	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
 	linda_writeq ( linda, &gpioout, QIB_7220_GPIOOut_offset );
+	mb();
+
+	static int count = 15;
+	if ( ! --count ) {
+		//		while ( 1 ) {}
+	}
 }
 
 /** Linda I2C bit-bashing interface operations */
