@@ -965,7 +965,6 @@ mdio_clause45_check_mmds ( struct efab_nic *efab )
 #define FCN_XX_RST_XX_EN_LBN 0
 #define FCN_XX_RST_XX_EN_WIDTH 1
 
-
 /* XGXS/XAUI powerdown/reset control register */
 #define FCN_XX_SD_CTL_REG_MAC 0x11
 #define FCN_XX_TERMADJ1_LBN 17
