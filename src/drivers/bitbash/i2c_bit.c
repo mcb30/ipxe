@@ -231,6 +231,9 @@ static int i2c_reset ( struct bit_basher *basher ) {
 		if ( sda ) {
 			/* Now that the device will see a start, issue it */
 			i2c_start ( basher );
+			/* Read one byte from the bus; apparently some devices
+			 * can't handle an immediate start/stop */
+			i2c_recv_byte ( basher );
 			/* Stop the bus to leave it in a known good state */
 			i2c_stop ( basher );
 			DBGC ( basher, "I2CBIT %p reset after %d attempts\n",

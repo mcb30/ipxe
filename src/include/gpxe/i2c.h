@@ -8,8 +8,7 @@
  */
 
 #include <stdint.h>
-
-struct bit_basher_operations;
+#include <gpxe/bitbash.h>
 
 /** An I2C device
  *
@@ -145,8 +144,8 @@ extern int init_i2c_bit_basher ( struct i2c_bit_basher *i2cbit,
  * @v i2cdev		I2C device
  */
 static inline __always_inline void
-init_i2c_eeprom ( struct i2c_device *i2cdev ) {
-	i2cdev->dev_addr = 0x50;
+init_i2c_eeprom ( struct i2c_device *i2cdev, unsigned int dev_addr ) {
+	i2cdev->dev_addr = dev_addr;
 	i2cdev->dev_addr_len = 1;
 	i2cdev->word_addr_len = 1;
 }

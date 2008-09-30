@@ -964,6 +964,9 @@ static int mentormac_mdio_read ( struct efab_nic *efab, int phy_id,
 /* forward decleration */
 static struct efab_mac_operations ef1002_mac_operations;
 
+/* I2C ID of the EEPROM */
+#define EF1_EEPROM_I2C_ID 0x50
+
 /* Offset of MAC address within EEPROM */
 #define EF1_EEPROM_HWADDR_OFFSET 0x0
 
@@ -1068,7 +1071,7 @@ static struct bit_basher_operations ef1002_basher_ops = {
 static void ef1002_init_eeprom ( struct efab_nic *efab ) {
 	init_i2c_bit_basher ( &efab->ef1002_i2c,
 			      &ef1002_basher_ops );
-	init_i2c_eeprom ( &efab->ef1002_eeprom );
+	init_i2c_eeprom ( &efab->ef1002_eeprom, EF1_EEPROM_I2C_ID );
 }
 
 /**
