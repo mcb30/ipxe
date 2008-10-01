@@ -37,6 +37,9 @@
 struct linda {
 	/** Registers */
 	void *regs;
+	/** Base GUID */
+	uint8_t guid[LINDA_EEPROM_GUID_SIZE];
+
 	/** Infiniband devices */
 	struct ib_device *ibdev[LINDA_NUM_PORTS];
 
@@ -209,25 +212,53 @@ static int linda_init_i2c ( struct linda *linda ) {
 						 &linda->eeprom ) ) == 0 ) {
 			DBGC ( linda, "Linda %p found EEPROM at %02x\n",
 			       linda, try_eeprom_address[i] );
-
-
-	uint8_t buf[128];
-	struct i2c_interface *i2c = &linda->i2c.i2c;
-	if ( ( rc = i2c->read ( i2c, &linda->eeprom, 0, buf,
-				sizeof ( buf ) ) ) != 0 ) {
-		DBGC ( linda, "Linda %p could not read from EEPROM: %s\n",
-		       linda, strerror ( rc ) );
-		return rc;
-	}
-	DBG_HDA ( 0, buf, sizeof ( buf ) );
-
-
 			return 0;
 		}
 	}
 
 	DBGC ( linda, "Linda %p could not find EEPROM\n", linda );
 	return -ENODEV;
+}
+
+/**
+ * Read EEPROM parameters
+ *
+ * @v linda		Linda device
+ * @ret rc		Return status code
+ */
+static int linda_read_eeprom ( struct linda *linda ) {
+	struct i2c_interface *i2c = &linda->i2c.i2c;
+	int rc;
+
+	/* Read GUID */
+	if ( ( rc = i2c->read ( i2c, &linda->eeprom, LINDA_EEPROM_GUID_OFFSET,
+				linda->guid, sizeof ( linda->guid ) ) ) != 0 ){
+		DBGC ( linda, "Linda %p could not read GUID: %s\n",
+		       linda, strerror ( rc ) );
+		return rc;
+	}
+	DBGC ( linda, "Linda %p has GUID "
+	       "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x\n", linda,
+	       linda->guid[0], linda->guid[1], linda->guid[2], linda->guid[3],
+	       linda->guid[4], linda->guid[5], linda->guid[6], linda->guid[7]);
+
+	/* Read serial number (debug only) */
+	if ( DBG_LOG ) {
+		uint8_t serial[LINDA_EEPROM_SERIAL_SIZE + 1];
+
+		serial[ sizeof ( serial ) - 1 ] = '\0';
+		if ( ( rc = i2c->read ( i2c, &linda->eeprom,
+					LINDA_EEPROM_SERIAL_OFFSET, serial,
+					( sizeof ( serial ) - 1 ) ) ) != 0 ) {
+			DBGC ( linda, "Linda %p could not read serial: %s\n",
+			       linda, strerror ( rc ) );
+			return rc;
+		}
+		DBGC ( linda, "Linda %p has serial number \"%s\"\n",
+		       linda, serial );
+	}
+
+	return 0;
 }
 
 /***************************************************************************
@@ -583,6 +614,10 @@ static int linda_probe ( struct pci_device *pci,
 	if ( ( rc = linda_init_i2c ( linda ) ) != 0 )
 		goto err_init_i2c;
 
+	/* Read EEPROM parameters */
+	if ( ( rc = linda_read_eeprom ( linda ) ) != 0 )
+		goto err_read_eeprom;
+
 	/* Register Infiniband devices */
 	for ( i = 0 ; i < LINDA_NUM_PORTS ; i++ ) {
 		if ( ( rc = register_ibdev ( linda->ibdev[i] ) ) != 0 ) {
@@ -598,6 +633,7 @@ static int linda_probe ( struct pci_device *pci,
  err_register_ibdev:
 	for ( i-- ; i >= 0 ; i-- )
 		unregister_ibdev ( linda->ibdev[i] );
+ err_read_eeprom:
  err_init_i2c:
 	i = LINDA_NUM_PORTS;
  err_alloc_ibdev:

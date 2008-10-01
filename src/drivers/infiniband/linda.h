@@ -38,4 +38,16 @@ struct QIB_7220_GPIO {
 /** Linda I2C SDA line GPIO number */
 #define LINDA_GPIO_SDA 1
 
+/** GUID offset within EEPROM */
+#define LINDA_EEPROM_GUID_OFFSET 3
+
+/** GUID size within EEPROM */
+#define LINDA_EEPROM_GUID_SIZE 8
+
+/** Board serial number offset within EEPROM */
+#define LINDA_EEPROM_SERIAL_OFFSET 12
+
+/** Board serial number size within EEPROM */
+#define LINDA_EEPROM_SERIAL_SIZE 12
+
 #endif /* _LINDA_H */
