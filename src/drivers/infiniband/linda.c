@@ -273,7 +273,40 @@ static int linda_read_eeprom ( struct linda *linda ) {
 
 /***************************************************************************
  *
- * Embedded 8051 microcontroller
+ * Link state handling
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Handle link state change
+ *
+ * @v linda		Linda device
+ */
+static void linda_link_state_changed ( struct linda *linda ) {
+	struct QIB_7220_IBCStatus ibcstatus;
+	struct QIB_7220_EXTCtrl extctrl;
+	unsigned int link_state;
+
+	/* Read link state */
+	linda_readq ( linda, &ibcstatus, QIB_7220_IBCStatus_offset );
+	link_state = BIT_GET ( &ibcstatus, LinkState );
+	DBGC ( linda, "Linda %p link state %d (%s %s)\n", linda, link_state,
+	       ( BIT_GET ( &ibcstatus, LinkSpeedActive ) ? "DDR" : "SDR" ),
+	       ( BIT_GET ( &ibcstatus, LinkWidthActive ) ? "x4" : "x1" ) );
+
+	/* Set LEDs according to link state */
+	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+	BIT_SET ( &extctrl, LEDPriPortGreenOn,
+		  ( ( link_state >= LINDA_LINK_STATE_INIT ) ? 1 : 0 ) );
+	BIT_SET ( &extctrl, LEDPriPortYellowOn,
+		  ( ( link_state >= LINDA_LINK_STATE_ACTIVE ) ? 1 : 0 ) );
+	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+}
+
+/***************************************************************************
+ *
+ * Infiniband SerDes
  *
  ***************************************************************************
  */
@@ -575,13 +608,83 @@ static int linda_verify_8051 ( struct linda *linda ) {
 }
 
 /**
- * Start the embedded 8051 microcontroller
+ * Use the 8051 microcontroller to trim the IB link
  *
  * @v linda		Linda device
  * @ret rc		Return status code
  */
-static int linda_start_8051 ( struct linda *linda ) {
+static int linda_trim_ib ( struct linda *linda ) {
+	struct QIB_7220_IBSerDesCtrl ctrl;
+	struct QIB_7220_IntStatus intstatus;
+	unsigned int i;
 	int rc;
+
+	/* Bring the 8051 out of reset */
+	linda_readq ( linda, &ctrl, QIB_7220_IBSerDesCtrl_offset );
+	BIT_SET ( &ctrl, ResetIB_uC_Core, 0 );
+	linda_writeq ( linda, &ctrl, QIB_7220_IBSerDesCtrl_offset );
+
+	/* Wait for the "trim done" signal */
+	for ( i = 0 ; i < LINDA_TRIM_DONE_MAX_WAIT_MS ; i++ ) {
+		linda_readq ( linda, &intstatus, QIB_7220_IntStatus_offset );
+		if ( BIT_GET ( &intstatus, IBSerdesTrimDone ) ) {
+			linda_link_state_changed ( linda );
+			rc = 0;
+			goto done;
+		}
+		mdelay ( 1 );
+	}
+
+	DBGC ( linda, "Linda %p timed out waiting for trim done\n", linda );
+	rc = -ETIMEDOUT;
+ done:
+	/* Put the 8051 back into reset */
+	BIT_SET ( &ctrl, ResetIB_uC_Core, 1 );
+	linda_writeq ( linda, &ctrl, QIB_7220_IBSerDesCtrl_offset );
+
+	return rc;
+}
+
+/**
+ * Initialise the IB SerDes
+ *
+ * @v linda		Linda device
+ * @ret rc		Return status code
+ */
+static int linda_init_ib_serdes ( struct linda *linda ) {
+	struct QIB_7220_Control ctrl;
+	struct QIB_7220_IBCCtrl ibcctrl;
+	struct QIB_7220_IBCDDRCtrl ddrctrl;
+	int rc;
+
+	/* Disable link */
+	linda_readq ( linda, &ctrl, QIB_7220_Control_offset );
+	BIT_SET ( &ctrl, LinkEn, 0 );
+	linda_writeq ( linda, &ctrl, QIB_7220_Control_offset );
+
+	/* Configure sensible defaults for IBC */
+	memset ( &ibcctrl, 0, sizeof ( ibcctrl ) );
+	BIT_FILL_6 ( &ibcctrl, /* Tuning values taken from Linux driver */
+		     FlowCtrlPeriod, 0x03,
+		     FlowCtrlWaterMark, 0x05,
+		     MaxPktLen,
+		     ( ( ( 2048 /* payload */ + 128 /* max headers */ ) >> 2 )
+		       + 1 /* ICRC */ ),
+		     PhyerrThreshold, 0xf,
+		     OverrunThreshold, 0xf,
+		     CreditScale, 0x4 );
+	linda_writeq ( linda, &ibcctrl, QIB_7220_IBCCtrl_offset );
+
+	/* Force SDR only to avoid needing all the DDR tuning,
+	 * Mellanox compatibiltiy hacks etc.  SDR is plenty for
+	 * boot-time operation.
+	 */
+	linda_readq ( linda, &ddrctrl, QIB_7220_IBCDDRCtrl_offset );
+	BIT_SET ( &ddrctrl, IB_ENHANCED_MODE, 0 );
+	BIT_SET ( &ddrctrl, SD_SPEED_SDR, 1 );
+	BIT_SET ( &ddrctrl, SD_SPEED_DDR, 0 );
+	BIT_SET ( &ddrctrl, SD_SPEED_QDR, 0 );
+	linda_writeq ( linda, &ddrctrl, QIB_7220_IBCDDRCtrl_offset );
 
 	/* Program the microcontroller RAM */
 	if ( ( rc = linda_program_8051 ( linda ) ) != 0 )
@@ -592,6 +695,10 @@ static int linda_start_8051 ( struct linda *linda ) {
 		if ( ( rc = linda_verify_8051 ( linda ) ) != 0 )
 			return rc;
 	}
+
+	/* Use the microcontroller to trim the IB link */
+	if ( ( rc = linda_trim_ib ( linda ) ) != 0 )
+		return rc;
 
 	return 0;
 }
@@ -954,8 +1061,8 @@ static int linda_probe ( struct pci_device *pci,
 		goto err_read_eeprom;
 
 	/* Start up the 8051 microcontroller */
-	if ( ( rc = linda_start_8051 ( linda ) ) != 0 )
-		goto err_start_8051;
+	if ( ( rc = linda_init_ib_serdes ( linda ) ) != 0 )
+		goto err_init_ib_serdes;
 
 	/* Register Infiniband devices */
 	for ( i = 0 ; i < LINDA_NUM_PORTS ; i++ ) {
@@ -972,7 +1079,7 @@ static int linda_probe ( struct pci_device *pci,
  err_register_ibdev:
 	for ( i-- ; i >= 0 ; i-- )
 		unregister_ibdev ( linda->ibdev[i] );
- err_start_8051:
+ err_init_ib_serdes:
  err_read_eeprom:
  err_init_i2c:
 	i = LINDA_NUM_PORTS;

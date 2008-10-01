@@ -80,4 +80,16 @@ struct QIB_7220_GPIO {
 
 extern uint8_t linda_ib_fw[8192];
 
+/** Maximum time to wait for "trim done" signal, in ms */
+#define LINDA_TRIM_DONE_MAX_WAIT_MS 1000
+
+/** Linda link states */
+enum linda_link_state {
+	LINDA_LINK_STATE_DOWN = 0,
+	LINDA_LINK_STATE_INIT = 1,
+	LINDA_LINK_STATE_ARM = 2,
+	LINDA_LINK_STATE_ACTIVE = 3,
+	LINDA_LINK_STATE_ACT_DEFER = 4,
+};
+
 #endif /* _LINDA_H */
