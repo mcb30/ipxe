@@ -64,18 +64,33 @@ struct QIB_7220_GPIO {
 #define LINDA_EPB_WRITE 0
 #define LINDA_EPB_READ 1
 
-/** Linda external parallel bus microcontroller registers and values */
-#define LINDA_EPB_LOC( _chn, _elt, _reg)				\
-	( ( (_elt) & 0xf ) | ( ( (_chn) & 7 ) << 4 ) |			\
-	  ( ( (_reg) & 0x3f ) << 9 ) )
+/** Linda external parallel bus register addresses */
+#define LINDA_EPB_ADDRESS( _channel, _element, _reg ) \
+	( (_element) | ( (_channel) << 4 ) | ( (_reg) << 9 ) )
+#define LINDA_EPB_ADDRESS_CHANNEL( _address )	( ( (_address) >> 4 ) & 0x1f )
+#define LINDA_EPB_ADDRESS_ELEMENT( _address )	( ( (_address) >> 0 ) & 0x0f )
+#define LINDA_EPB_ADDRESS_REG( _address )	( ( (_address) >> 9 ) & 0x3f )
 
-#define LINDA_EPB_UC_CTL	LINDA_EPB_LOC ( 6, 0, 0 )
+/** Linda external parallel bus locations
+ *
+ * The location is used by the driver to encode both the chip select
+ * and the EPB address.
+ */
+#define LINDA_EPB_LOC( _cs, _channel, _element, _reg) \
+	( ( (_cs) << 16 ) | LINDA_EPB_ADDRESS ( _channel, _element, _reg ) )
+#define LINDA_EPB_LOC_ADDRESS( _loc )	( (_loc) & 0xffff )
+#define LINDA_EPB_LOC_CS( _loc )	( (_loc) >> 16 )
+
+/** Linda external parallel bus 8051 microcontroller register addresses */
+#define LINDA_EPB_UC_CHANNEL 6
+#define LINDA_EPB_UC_LOC( _reg ) \
+	LINDA_EPB_LOC ( LINDA_EPB_CS_8051, LINDA_EPB_UC_CHANNEL, 0, (_reg) )
+#define LINDA_EPB_UC_CTL	LINDA_EPB_UC_LOC ( 0 )
 #define LINDA_EPB_UC_CTL_WRITE	1
 #define LINDA_EPB_UC_CTL_READ	2
-#define LINDA_EPB_UC_ADDR_LO	LINDA_EPB_LOC ( 6, 0, 2 )
-#define LINDA_EPB_UC_ADDR_HI	LINDA_EPB_LOC ( 6, 0, 3 )
-#define LINDA_EPB_UC_DATA	LINDA_EPB_LOC ( 6, 0, 4 )
-
+#define LINDA_EPB_UC_ADDR_LO	LINDA_EPB_UC_LOC ( 2 )
+#define LINDA_EPB_UC_ADDR_HI	LINDA_EPB_UC_LOC ( 3 )
+#define LINDA_EPB_UC_DATA	LINDA_EPB_UC_LOC ( 4 )
 #define LINDA_EPB_UC_CHUNK_SIZE	64
 
 extern uint8_t linda_ib_fw[8192];
