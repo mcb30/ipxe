@@ -41,6 +41,7 @@
  */
 static void i2c_delay ( void ) {
 	udelay ( I2C_UDELAY );
+	mdelay ( 10 );
 }
 
 /**
@@ -50,6 +51,7 @@ static void i2c_delay ( void ) {
  * @v state		New state of SCL
  */
 static void setscl ( struct bit_basher *basher, int state ) {
+	DBG2 ( "%c", ( state ? '/' : '\\' ) );
 	write_bit ( basher, I2C_BIT_SCL, state );
 	i2c_delay();
 }
@@ -61,6 +63,7 @@ static void setscl ( struct bit_basher *basher, int state ) {
  * @v state		New state of SDA
  */
 static void setsda ( struct bit_basher *basher, int state ) {
+	DBG2 ( "%c", ( state ? '1' : '0' ) );
 	write_bit ( basher, I2C_BIT_SDA, state );
 	i2c_delay();
 }
@@ -72,7 +75,10 @@ static void setsda ( struct bit_basher *basher, int state ) {
  * @ret state		State of SDA
  */
 static int getsda ( struct bit_basher *basher ) {
-	return read_bit ( basher, I2C_BIT_SDA );
+	int state;
+	state = read_bit ( basher, I2C_BIT_SDA );
+	DBG2 ( "%c", ( state ? '+' : '-' ) );
+	return state;
 }
 
 /**
@@ -138,15 +144,20 @@ static void i2c_stop ( struct bit_basher *basher ) {
  */
 static int i2c_send_byte ( struct bit_basher *basher, uint8_t byte ) {
 	int i;
-	
+	int ack;
+
 	/* Send byte */
+	DBG2 ( "[send %02x]", byte );
 	for ( i = 8 ; i ; i-- ) {
 		i2c_send_bit ( basher, byte & 0x80 );
 		byte <<= 1;
 	}
 
 	/* Check for acknowledgement from slave */
-	return ( i2c_recv_bit ( basher ) == 0 ? 0 : -EIO );
+	ack = ( i2c_recv_bit ( basher ) == 0 );
+	DBG2 ( "%s", ( ack ? "[acked]" : "[not acked]" ) );
+
+	return ( ack ? 0 : -EIO );
 }
 
 /**
@@ -158,19 +169,20 @@ static int i2c_send_byte ( struct bit_basher *basher, uint8_t byte ) {
  * Receives a byte via the I2C bus and sends NACK to the slave device.
  */
 static uint8_t i2c_recv_byte ( struct bit_basher *basher ) {
-	uint8_t value = 0;
+	uint8_t byte = 0;
 	int i;
 
 	/* Receive byte */
 	for ( i = 8 ; i ; i-- ) {
-		value <<= 1;
-		value |= ( i2c_recv_bit ( basher ) & 0x1 );
+		byte <<= 1;
+		byte |= ( i2c_recv_bit ( basher ) & 0x1 );
 	}
 
 	/* Send NACK */
 	i2c_send_bit ( basher, 1 );
 
-	return value;
+	DBG2 ( "[rcvd %02x]", byte );
+	return byte;
 }
 
 /**
@@ -221,10 +233,15 @@ static int i2c_reset ( struct bit_basher *basher ) {
 	unsigned int i;
 	int sda;
 
+	i2c_stop ( basher );
+	return 0;
+
 	/* Clock through several cycles, waiting for an opportunity to
 	 * pull SDA low while SCL is high (which creates a start
 	 * condition).
 	 */
+	setscl ( basher, 0 );
+	setsda ( basher, 1 );
 	for ( i = 0 ; i < I2C_RESET_MAX_CYCLES ; i++ ) {
 		setscl ( basher, 1 );
 		sda = getsda ( basher );
@@ -233,7 +250,7 @@ static int i2c_reset ( struct bit_basher *basher ) {
 			i2c_start ( basher );
 			/* Read one byte from the bus; apparently some devices
 			 * can't handle an immediate start/stop */
-			i2c_recv_byte ( basher );
+			//			i2c_recv_byte ( basher );
 			/* Stop the bus to leave it in a known good state */
 			i2c_stop ( basher );
 			DBGC ( basher, "I2CBIT %p reset after %d attempts\n",
