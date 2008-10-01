@@ -41,9 +41,6 @@ struct linda {
 	/** Base GUID */
 	uint8_t guid[LINDA_EEPROM_GUID_SIZE];
 
-	/** Infiniband devices */
-	struct ib_device *ibdev[LINDA_NUM_PORTS];
-
 	/** I2C bit-bashing interface */
 	struct i2c_bit_basher i2c;
 	/** I2C serial EEPROM */
@@ -269,39 +266,6 @@ static int linda_read_eeprom ( struct linda *linda ) {
 	}
 
 	return 0;
-}
-
-/***************************************************************************
- *
- * Link state handling
- *
- ***************************************************************************
- */
-
-/**
- * Handle link state change
- *
- * @v linda		Linda device
- */
-static void linda_link_state_changed ( struct linda *linda ) {
-	struct QIB_7220_IBCStatus ibcstatus;
-	struct QIB_7220_EXTCtrl extctrl;
-	unsigned int link_state;
-
-	/* Read link state */
-	linda_readq ( linda, &ibcstatus, QIB_7220_IBCStatus_offset );
-	link_state = BIT_GET ( &ibcstatus, LinkState );
-	DBGC ( linda, "Linda %p link state %d (%s %s)\n", linda, link_state,
-	       ( BIT_GET ( &ibcstatus, LinkSpeedActive ) ? "DDR" : "SDR" ),
-	       ( BIT_GET ( &ibcstatus, LinkWidthActive ) ? "x4" : "x1" ) );
-
-	/* Set LEDs according to link state */
-	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
-	BIT_SET ( &extctrl, LEDPriPortGreenOn,
-		  ( ( link_state >= LINDA_LINK_STATE_INIT ) ? 1 : 0 ) );
-	BIT_SET ( &extctrl, LEDPriPortYellowOn,
-		  ( ( link_state >= LINDA_LINK_STATE_ACTIVE ) ? 1 : 0 ) );
-	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
 }
 
 /***************************************************************************
@@ -831,7 +795,6 @@ static int linda_trim_ib ( struct linda *linda ) {
 	for ( i = 0 ; i < LINDA_TRIM_DONE_MAX_WAIT_MS ; i++ ) {
 		linda_readq ( linda, &intstatus, QIB_7220_IntStatus_offset );
 		if ( BIT_GET ( &intstatus, IBSerdesTrimDone ) ) {
-			linda_link_state_changed ( linda );
 			rc = 0;
 			goto out_reset;
 		}
@@ -926,16 +889,6 @@ static int linda_init_ib_serdes ( struct linda *linda ) {
 	BIT_SET ( &xgxscfg, xcv_reset, 0 );
 	linda_writeq ( linda, &xgxscfg, QIB_7220_XGXSCfg_offset );
 
-	/* Enable link */
-	BIT_SET ( &control, LinkEn, 1 );
-	linda_writeq ( linda, &control, QIB_7220_Control_offset );
-
-	DBG ( "waiting for link...\n" );
-	int i;
-	for ( i = 0 ; i < 60 ; i++ ) {
-		linda_link_state_changed ( linda );
-	}
-
 	return rc;
 }
 
@@ -959,7 +912,7 @@ static int linda_create_cq ( struct ib_device *ibdev,
 
 	( void ) linda;
 	( void ) cq;
-	return -ENOTSUP;
+	return 0;
 }
 
 /**
@@ -996,7 +949,7 @@ static int linda_create_qp ( struct ib_device *ibdev,
 
 	( void ) linda;
 	( void ) qp;
-	return -ENOTSUP;
+	return 0;
 }
 
 /**
@@ -1015,7 +968,7 @@ static int linda_modify_qp ( struct ib_device *ibdev,
 	( void ) linda;
 	( void ) qp;
 	( void ) mod_list;
-	return -ENOTSUP;
+	return 0;
 }
 
 /**
@@ -1108,14 +1061,52 @@ static void linda_poll_cq ( struct ib_device *ibdev,
  */
 
 /**
+ * Handle link state change
+ *
+ * @v linda		Linda device
+ */
+static void linda_link_state_changed ( struct ib_device *ibdev ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct QIB_7220_IBCStatus ibcstatus;
+	struct QIB_7220_EXTCtrl extctrl;
+	unsigned int link_state;
+
+	/* Read link state */
+	linda_readq ( linda, &ibcstatus, QIB_7220_IBCStatus_offset );
+	link_state = BIT_GET ( &ibcstatus, LinkState );
+	DBGC ( linda, "Linda %p link state %d (%s %s)\n", linda, link_state,
+	       ( BIT_GET ( &ibcstatus, LinkSpeedActive ) ? "DDR" : "SDR" ),
+	       ( BIT_GET ( &ibcstatus, LinkWidthActive ) ? "x4" : "x1" ) );
+
+	/* Set LEDs according to link state */
+	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+	BIT_SET ( &extctrl, LEDPriPortGreenOn,
+		  ( ( link_state >= LINDA_LINK_STATE_INIT ) ? 1 : 0 ) );
+	BIT_SET ( &extctrl, LEDPriPortYellowOn,
+		  ( ( link_state >= LINDA_LINK_STATE_ACTIVE ) ? 1 : 0 ) );
+	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+
+	/* Notify Infiniband core of link state change */
+	//	ib_link_state_changed ( ibdev );
+}
+
+/**
  * Poll event queue
  *
  * @v ibdev		Infiniband device
  */
 static void linda_poll_eq ( struct ib_device *ibdev ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct QIB_7220_IBCStatus ibcstatus;
+	static int link_state;
+	int new_link_state;
 
-	( void ) linda;
+	linda_readq ( linda, &ibcstatus, QIB_7220_IBCStatus_offset );
+	new_link_state = BIT_GET ( &ibcstatus, LinkState );
+	if ( new_link_state != link_state ) {
+		link_state = new_link_state;
+		linda_link_state_changed ( ibdev );
+	}
 }
 
 /***************************************************************************
@@ -1133,9 +1124,13 @@ static void linda_poll_eq ( struct ib_device *ibdev ) {
  */
 static int linda_open ( struct ib_device *ibdev ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct QIB_7220_Control control;
 
-	( void ) linda;
-	return -ENOTSUP;
+	/* Disable link */
+	linda_readq ( linda, &control, QIB_7220_Control_offset );
+	BIT_SET ( &control, LinkEn, 1 );
+	linda_writeq ( linda, &control, QIB_7220_Control_offset );
+	return 0;
 }
 
 /**
@@ -1145,8 +1140,12 @@ static int linda_open ( struct ib_device *ibdev ) {
  */
 static void linda_close ( struct ib_device *ibdev ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct QIB_7220_Control control;
 
-	( void ) linda;
+	/* Disable link */
+	linda_readq ( linda, &control, QIB_7220_Control_offset );
+	BIT_SET ( &control, LinkEn, 0 );
+	linda_writeq ( linda, &control, QIB_7220_Control_offset );
 }
 
 /***************************************************************************
@@ -1214,7 +1213,7 @@ static int linda_mad ( struct ib_device *ibdev, struct ib_mad_hdr *mad,
 	( void ) linda;
 	( void ) mad;
 	( void ) len;
-	return -ENOTSUP;
+	return 0;
 }
 
 /** Linda Infiniband operations */
@@ -1244,33 +1243,21 @@ static struct ib_device_operations linda_ib_operations = {
  */
 static int linda_probe ( struct pci_device *pci,
 			 const struct pci_device_id *id __unused ) {
-	struct linda *linda;
 	struct ib_device *ibdev;
+	struct linda *linda;
 	struct QIB_7220_Revision revision;
-	int i;
 	int rc;
 
-	/* Allocate Linda device */
-	linda = zalloc ( sizeof ( *linda ) );
-	if ( ! linda ) {
+	/* Allocate Infiniband device */
+	ibdev = alloc_ibdev ( sizeof ( *linda ) );
+	if ( ! ibdev ) {
 		rc = -ENOMEM;
-		goto err_alloc_linda;
+		goto err_alloc_ibdev;
 	}
-	pci_set_drvdata ( pci, linda );
-
-	/* Allocate Infiniband devices */
-	for ( i = 0 ; i < LINDA_NUM_PORTS ; i++ ) {
-		ibdev = alloc_ibdev ( 0 );
-		if ( ! ibdev ) {
-			rc = -ENOMEM;
-			goto err_alloc_ibdev;
-		}
-		linda->ibdev[i] = ibdev;
-		ibdev->op = &linda_ib_operations;
-		ibdev->dev = &pci->dev;
-		ibdev->port = ( LINDA_PORT_BASE + i );
-		ib_set_drvdata ( ibdev, linda );
-	}
+	pci_set_drvdata ( pci, ibdev );
+	linda = ib_get_drvdata ( ibdev );
+	ibdev->op = &linda_ib_operations;
+	ibdev->dev = &pci->dev;
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
@@ -1300,30 +1287,22 @@ static int linda_probe ( struct pci_device *pci,
 	if ( ( rc = linda_init_ib_serdes ( linda ) ) != 0 )
 		goto err_init_ib_serdes;
 
-	/* Register Infiniband devices */
-	for ( i = 0 ; i < LINDA_NUM_PORTS ; i++ ) {
-		if ( ( rc = register_ibdev ( linda->ibdev[i] ) ) != 0 ) {
-			DBGC ( linda, "Linda %p could not register IB "
-			       "device: %s\n", linda, strerror ( rc ) );
-			goto err_register_ibdev;
-		}
+	/* Register Infiniband device */
+	if ( ( rc = register_ibdev ( ibdev ) ) != 0 ) {
+		DBGC ( linda, "Linda %p could not register IB "
+		       "device: %s\n", linda, strerror ( rc ) );
+		goto err_register_ibdev;
 	}
 	
 	return 0;
 
-	i = LINDA_NUM_PORTS;
+	unregister_ibdev ( ibdev );
  err_register_ibdev:
-	for ( i-- ; i >= 0 ; i-- )
-		unregister_ibdev ( linda->ibdev[i] );
  err_init_ib_serdes:
  err_read_eeprom:
  err_init_i2c:
-	i = LINDA_NUM_PORTS;
+	ibdev_put ( ibdev );
  err_alloc_ibdev:
-	for ( i-- ; i >= 0 ; i-- )
-		ibdev_put ( ibdev );
-	free ( linda );
- err_alloc_linda:
 	return rc;
 }
 
@@ -1333,14 +1312,10 @@ static int linda_probe ( struct pci_device *pci,
  * @v pci		PCI device
  */
 static void linda_remove ( struct pci_device *pci ) {
-	struct linda *linda = pci_get_drvdata ( pci );
-	int i;
+	struct ib_device *ibdev = pci_get_drvdata ( pci );
 
-	for ( i = ( LINDA_NUM_PORTS - 1 ) ; i >= 0 ; i-- )
-		unregister_ibdev ( linda->ibdev[i] );
-	for ( i = ( LINDA_NUM_PORTS - 1 ) ; i >= 0 ; i-- )
-		ibdev_put ( linda->ibdev[i] );
-	free ( linda );
+	unregister_ibdev ( ibdev );
+	ibdev_put ( ibdev );
 }
 
 static struct pci_device_id linda_nics[] = {

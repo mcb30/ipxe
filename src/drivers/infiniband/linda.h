@@ -26,12 +26,6 @@ struct QIB_7220_GPIO {
 /** Linda memory BAR size */
 #define LINDA_BAR0_SIZE 0x400000
 
-/** Number of ports per Linda card */
-#define LINDA_NUM_PORTS 1
-
-/** Base port number */
-#define LINDA_PORT_BASE 1
-
 /** Linda I2C SCL line GPIO number */
 #define LINDA_GPIO_SCL 0
 
