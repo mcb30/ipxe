@@ -41,6 +41,7 @@
  */
 static void i2c_delay ( void ) {
 	udelay ( I2C_UDELAY );
+	mdelay ( 10 );
 }
 
 /**
@@ -232,6 +233,9 @@ static int i2c_reset ( struct bit_basher *basher ) {
 	unsigned int i;
 	int sda;
 
+	i2c_stop ( basher );
+	return 0;
+
 	/* Clock through several cycles, waiting for an opportunity to
 	 * pull SDA low while SCL is high (which creates a start
 	 * condition).
@@ -246,7 +250,7 @@ static int i2c_reset ( struct bit_basher *basher ) {
 			i2c_start ( basher );
 			/* Read one byte from the bus; apparently some devices
 			 * can't handle an immediate start/stop */
-			i2c_recv_byte ( basher );
+			//			i2c_recv_byte ( basher );
 			/* Stop the bus to leave it in a known good state */
 			i2c_stop ( basher );
 			DBGC ( basher, "I2CBIT %p reset after %d attempts\n",

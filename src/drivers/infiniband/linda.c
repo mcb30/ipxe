@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <unistd.h>
 #include <gpxe/pci.h>
 #include <gpxe/infiniband.h>
 #include <gpxe/i2c.h>
@@ -54,8 +55,14 @@ struct linda {
  */
 static void linda_readq ( struct linda *linda, uint32_t *dwords,
 			  unsigned long offset ) {
-	dwords[0] = readl ( linda->regs + offset + 0 );
-	dwords[1] = readl ( linda->regs + offset + 4 );
+	void *addr = ( linda->regs + offset );
+
+	__asm__ __volatile__ ( "movq (%1), %%mm0\n\t"
+			       "movq %%mm0, (%0)\n\t"
+			       : : "r" ( dwords ), "r" ( addr ) : "memory" );
+
+	DBGIO ( "[%08lx] => %08lx%08lx\n",
+		virt_to_phys ( addr ), dwords[1], dwords[0] );
 }
 #define linda_readq( _linda, _ptr, _offset ) \
 	linda_readq ( (_linda), (_ptr)->u.dwords, (_offset) )
@@ -69,8 +76,14 @@ static void linda_readq ( struct linda *linda, uint32_t *dwords,
  */
 static void linda_writeq ( struct linda *linda, const uint32_t *dwords,
 			   unsigned long offset ) {
-	writel ( dwords[0], linda->regs + offset + 0 );
-	writel ( dwords[1], linda->regs + offset + 4 );
+	void *addr = ( linda->regs + offset );
+
+	DBGIO ( "[%08lx] <= %08lx%08lx\n",
+		virt_to_phys ( addr ), dwords[1], dwords[0] );
+
+	__asm__ __volatile__ ( "movq (%0), %%mm0\n\t"
+			       "movq %%mm0, (%1)\n\t"
+			       : : "r" ( dwords ), "r" ( addr ) : "memory" );
 }
 #define linda_writeq( _linda, _ptr, _offset ) \
 	linda_writeq ( (_linda), (_ptr)->u.dwords, (_offset) )
@@ -105,7 +118,6 @@ static int linda_i2c_read_bit ( struct bit_basher *basher,
 
 	linda_readq ( linda, &extstatus, QIB_7220_EXTStatus_offset );
 	status = BIT_GET ( &extstatus, GPIOIn );
-	DBG ( "GPIO status read as %04x\n", status );
 	return ( status & linda_i2c_bits[bit_id] );
 }
 
@@ -120,17 +132,15 @@ static void linda_i2c_write_bit ( struct bit_basher *basher,
 				  unsigned int bit_id, unsigned long data ) {
 	struct linda *linda =
 		container_of ( basher, struct linda, i2c.basher );
-	static struct QIB_7220_EXTCtrl extctrl;
-	static struct QIB_7220_GPIO gpioout;
+	struct QIB_7220_EXTCtrl extctrl;
+	struct QIB_7220_GPIO gpioout;
 	unsigned int bit = linda_i2c_bits[bit_id];
 	unsigned int outputs = 0;
 	unsigned int output_enables = 0;
 
-	DBG ( "Set bit %d to %lx\n", bit_id, data );
-
 	/* Read current GPIO mask and outputs */
-	//	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
-	//	linda_readq ( linda, &gpioout, QIB_7220_GPIOOut_offset );
+	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+	linda_readq ( linda, &gpioout, QIB_7220_GPIOOut_offset );
 
 	/* Update outputs and output enables.  I2C lines are tied
 	 * high, so we always set the output to 0 and use the output
@@ -138,20 +148,32 @@ static void linda_i2c_write_bit ( struct bit_basher *basher,
 	 * that way we avoid logic hazards.
 	 */
 	output_enables = BIT_GET ( &extctrl, GPIOOe );
-	DBG ( "OE %04x => ", output_enables );
 	output_enables = ( ( output_enables & ~bit ) | ( ~data & bit ) );
 	outputs = BIT_GET ( &gpioout, GPIO );
-	DBG ( "%04x, Outputs %04x => ", output_enables, outputs );
 	outputs = ( outputs & ~bit );
-	DBG ( "%04x\n", outputs );
 	BIT_SET ( &extctrl, GPIOOe, output_enables );
+	BIT_SET ( &extctrl, LEDPriPortYellowOn, 1 );
+	BIT_SET ( &extctrl, LEDPriPortGreenOn, 1 );
 	BIT_SET ( &gpioout, GPIO, outputs );
 
 	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
 	linda_writeq ( linda, &gpioout, QIB_7220_GPIOOut_offset );
 	mb();
 
-	static int count = 15;
+	read_bit ( basher, bit_id );
+	mb();
+
+	mdelay ( 10 );
+	read_bit ( basher, bit_id );
+	mb();
+	unsigned long check_data = read_bit ( basher, bit_id );
+	if ( ( ! data ) && ( check_data != data ) ) {
+		DBG ( "\nBit %08x should be %08lx is %08lx\n",
+		      bit, data, check_data );
+	}
+
+
+	static int count = 10;
 	if ( ! --count ) {
 		//		while ( 1 ) {}
 	}
@@ -190,6 +212,19 @@ static int linda_init_i2c ( struct linda *linda ) {
 						 &linda->eeprom ) ) == 0 ) {
 			DBGC ( linda, "Linda %p found EEPROM at %02x\n",
 			       linda, try_eeprom_address[i] );
+
+
+	uint8_t buf[256];
+	struct i2c_interface *i2c = &linda->i2c.i2c;
+	if ( ( rc = i2c->read ( i2c, &linda->eeprom, 0, buf,
+				sizeof ( buf ) ) ) != 0 ) {
+		DBGC ( linda, "Linda %p could not read from EEPROM: %s\n",
+		       linda, strerror ( rc ) );
+		return rc;
+	}
+	DBG_HDA ( 0, buf, sizeof ( buf ) );
+
+
 			return 0;
 		}
 	}
@@ -546,6 +581,17 @@ static int linda_probe ( struct pci_device *pci,
 	       BIT_GET ( &revision, R_Arch ),
 	       BIT_GET ( &revision, R_ChipRevMajor ),
 	       BIT_GET ( &revision, R_ChipRevMinor ) );
+
+#if 1
+	struct QIB_7220_PageAlign_pb {
+		pseudo_bit_t size[13];
+		pseudo_bit_t reserved[64-13];
+	};
+	struct QIB_7220_PageAlign { PSEUDO_BIT_STRUCT ( struct QIB_7220_PageAlign_pb ); };
+	struct QIB_7220_PageAlign pagealign;
+	linda_readq ( linda, &pagealign, QIB_7220_PageAlign_offset );
+	DBG ( "Page alignment is %lx\n", BIT_GET ( &pagealign, size ) );
+#endif
 
 	/* Initialise I2C subsystem */
 	if ( ( rc = linda_init_i2c ( linda ) ) != 0 )
