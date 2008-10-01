@@ -220,8 +220,8 @@ static int linda_init_i2c ( struct linda *linda ) {
 		init_i2c_eeprom ( &linda->eeprom, try_eeprom_address[i] );
 		if ( ( rc = i2c_check_presence ( &linda->i2c.i2c,
 						 &linda->eeprom ) ) == 0 ) {
-			DBGC ( linda, "Linda %p found EEPROM at %02x\n",
-			       linda, try_eeprom_address[i] );
+			DBGC2 ( linda, "Linda %p found EEPROM at %02x\n",
+				linda, try_eeprom_address[i] );
 			return 0;
 		}
 	}
@@ -247,10 +247,10 @@ static int linda_read_eeprom ( struct linda *linda ) {
 		       linda, strerror ( rc ) );
 		return rc;
 	}
-	DBGC ( linda, "Linda %p has GUID "
-	       "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x\n", linda,
-	       linda->guid[0], linda->guid[1], linda->guid[2], linda->guid[3],
-	       linda->guid[4], linda->guid[5], linda->guid[6], linda->guid[7]);
+	DBGC2 ( linda, "Linda %p has GUID %02x:%02x:%02x:%02x:"
+		"%02x:%02x:%02x:%02x\n", linda, linda->guid[0],
+		linda->guid[1], linda->guid[2], linda->guid[3], linda->guid[4],
+		linda->guid[5], linda->guid[6], linda->guid[7] );
 
 	/* Read serial number (debug only) */
 	if ( DBG_LOG ) {
@@ -264,8 +264,8 @@ static int linda_read_eeprom ( struct linda *linda ) {
 			       linda, strerror ( rc ) );
 			return rc;
 		}
-		DBGC ( linda, "Linda %p has serial number \"%s\"\n",
-		       linda, serial );
+		DBGC2 ( linda, "Linda %p has serial number \"%s\"\n",
+			linda, serial );
 	}
 
 	return 0;
@@ -391,15 +391,13 @@ static void linda_ib_epb_release ( struct linda *linda ) {
  * Read data via IB external parallel bus
  *
  * @v linda		Linda device
- * @v cs		Chip select
- * @v address		Address
+ * @v location		EPB location
  * @ret data		Data read, or negative error
  *
  * You must have already acquired ownership of the IB external
  * parallel bus.
  */
-static int linda_ib_epb_read ( struct linda *linda, unsigned int cs,
-			       unsigned int address ) {
+static int linda_ib_epb_read ( struct linda *linda, unsigned int location ) {
 	struct QIB_7220_ibsd_epb_transaction_reg xact;
 	unsigned int data;
 	int rc;
@@ -411,9 +409,9 @@ static int linda_ib_epb_read ( struct linda *linda, unsigned int cs,
 	/* Process data */
 	memset ( &xact, 0, sizeof ( xact ) );
 	BIT_FILL_3 ( &xact,
-		     ib_epb_address, address,
+		     ib_epb_address, LINDA_EPB_LOC_ADDRESS ( location ),
 		     ib_epb_read_write, LINDA_EPB_READ,
-		     ib_epb_cs, cs );
+		     ib_epb_cs, LINDA_EPB_LOC_CS ( location ) );
 	linda_writeq ( linda, &xact,
 		       QIB_7220_ibsd_epb_transaction_reg_offset );
 
@@ -429,16 +427,15 @@ static int linda_ib_epb_read ( struct linda *linda, unsigned int cs,
  * Write data via IB external parallel bus
  *
  * @v linda		Linda device
- * @v cs		Chip select
- * @v address		Address
+ * @v location		EPB location
  * @v data		Data to write
  * @ret rc		Return status code
  *
  * You must have already acquired ownership of the IB external
  * parallel bus.
  */
-static int linda_ib_epb_write ( struct linda *linda, unsigned int cs,
-				unsigned int address, unsigned int data ) {
+static int linda_ib_epb_write ( struct linda *linda, unsigned int location,
+				unsigned int data ) {
 	struct QIB_7220_ibsd_epb_transaction_reg xact;
 	int rc;
 
@@ -450,9 +447,9 @@ static int linda_ib_epb_write ( struct linda *linda, unsigned int cs,
 	memset ( &xact, 0, sizeof ( xact ) );
 	BIT_FILL_4 ( &xact,
 		     ib_epb_data, data,
-		     ib_epb_address, address,
+		     ib_epb_address, LINDA_EPB_LOC_ADDRESS ( location ),
 		     ib_epb_read_write, LINDA_EPB_WRITE,
-		     ib_epb_cs, cs );
+		     ib_epb_cs, LINDA_EPB_LOC_CS ( location ) );
 	linda_writeq ( linda, &xact,
 		       QIB_7220_ibsd_epb_transaction_reg_offset );
 
@@ -464,19 +461,71 @@ static int linda_ib_epb_write ( struct linda *linda, unsigned int cs,
 }
 
 /**
- * Transfer data to/from microcontroller RAM
+ * Read/modify/write EPB register
  *
  * @v linda		Linda device
  * @v cs		Chip select
+ * @v channel		Channel
+ * @v element		Element
+ * @v reg		Register
+ * @v value		Value to set
+ * @v mask		Mask to apply to old value
+ * @ret rc		Return status code
+ */
+static int linda_ib_epb_mod_reg ( struct linda *linda, unsigned int cs,
+				  unsigned int channel, unsigned int element,
+				  unsigned int reg, unsigned int value,
+				  unsigned int mask ) {
+	unsigned int location;
+	int old_value;
+	int rc;
+
+	/* Sanity check */
+	assert ( ( value & mask ) == value );
+
+	/* Acquire bus ownership */
+	if ( ( rc = linda_ib_epb_request ( linda ) ) != 0 )
+		goto out;
+
+	/* Read existing value, if necessary */
+	location = LINDA_EPB_LOC ( cs, channel, element, reg );
+	if ( (~mask) & 0xff ) {
+		old_value = linda_ib_epb_read ( linda, location );
+		if ( old_value < 0 ) {
+			rc = old_value;
+			goto out_release;
+		}
+	} else {
+		old_value = 0;
+	}
+
+	/* Update value */
+	value = ( ( old_value & ~mask ) | value );
+	DBGC2 ( linda, "Linda %p CS %d EPB(%d,%d,%#02x) %#02x => %#02x\n",
+		linda, cs, channel, element, reg, old_value, value );
+	if ( ( rc = linda_ib_epb_write ( linda, location, value ) ) != 0 )
+		goto out_release;
+
+ out_release:
+	/* Release bus */
+	linda_ib_epb_release ( linda );
+ out:
+	return rc;	
+}
+
+/**
+ * Transfer data to/from microcontroller RAM
+ *
+ * @v linda		Linda device
  * @v address		Starting address
  * @v write		Data to write, or NULL
  * @v read		Data to read, or NULL
  * @v len		Length of data
  * @ret rc		Return status code
  */
-static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
-				   unsigned int address, const void *write,
-				   void *read, size_t len ) {
+static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int address,
+				   const void *write, void *read,
+				   size_t len ) {
 	unsigned int control;
 	unsigned int address_hi;
 	unsigned int address_lo;
@@ -500,19 +549,19 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
 			/* Write the control register */
 			control = ( read ? LINDA_EPB_UC_CTL_READ :
 				    LINDA_EPB_UC_CTL_WRITE );
-			if ( ( rc = linda_ib_epb_write ( linda, cs,
+			if ( ( rc = linda_ib_epb_write ( linda,
 							 LINDA_EPB_UC_CTL,
 							 control ) ) != 0 )
 				break;
 
 			/* Write the address registers */
 			address_hi = ( address >> 8 );
-			if ( ( rc = linda_ib_epb_write ( linda, cs,
+			if ( ( rc = linda_ib_epb_write ( linda,
 							 LINDA_EPB_UC_ADDR_HI,
 							 address_hi ) ) != 0 )
 				break;
 			address_lo = ( address & 0xff );
-			if ( ( rc = linda_ib_epb_write ( linda, cs,
+			if ( ( rc = linda_ib_epb_write ( linda,
 							 LINDA_EPB_UC_ADDR_LO,
 							 address_lo ) ) != 0 )
 				break;
@@ -520,8 +569,7 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
 
 		/* Read or write the data */
 		if ( read ) {
-			data = linda_ib_epb_read ( linda, cs,
-						   LINDA_EPB_UC_DATA );
+			data = linda_ib_epb_read ( linda, LINDA_EPB_UC_DATA );
 			if ( data < 0 ) {
 				rc = data;
 				break;
@@ -529,7 +577,7 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
 			*( ( uint8_t * ) read++ ) = data;
 		} else {
 			data = *( ( uint8_t * ) write++ );
-			if ( ( rc = linda_ib_epb_write ( linda, cs,
+			if ( ( rc = linda_ib_epb_write ( linda,
 							 LINDA_EPB_UC_DATA,
 							 data ) ) != 0 )
 				break;
@@ -539,7 +587,7 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
 
 		/* Reset the control byte after each chunk */
 		if ( ( address % LINDA_EPB_UC_CHUNK_SIZE ) == 0 ) {
-			if ( ( rc = linda_ib_epb_write ( linda, cs,
+			if ( ( rc = linda_ib_epb_write ( linda,
 							 LINDA_EPB_UC_CTL,
 							 0 ) ) != 0 )
 				break;
@@ -552,6 +600,162 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
 	return rc;
 }
 
+/** A Linda SerDes parameter */
+struct linda_serdes_param {
+	/** EPB address as constructed by LINDA_EPB_ADDRESS() */
+	uint16_t address;
+	/** Value to set */
+	uint8_t value;
+	/** Mask to apply to old value */
+	uint8_t mask;
+} __packed;
+
+/** Magic "all channels" channel number */
+#define LINDA_EPB_ALL_CHANNELS 31
+
+/** End of SerDes parameter list marker */
+#define LINDA_SERDES_PARAM_END { 0, 0, 0 }
+
+/**
+ * Program IB SerDes register(s)
+ *
+ * @v linda		Linda device
+ * @v param		SerDes parameter
+ * @ret rc		Return status code
+ */
+static int linda_set_serdes_param ( struct linda *linda,
+				    struct linda_serdes_param *param ) {
+	unsigned int channel;
+	unsigned int channel_start;
+	unsigned int channel_end;
+	unsigned int element;
+	unsigned int reg;
+	int rc;
+
+	/* Break down the EPB address and determine channels */
+	channel = LINDA_EPB_ADDRESS_CHANNEL ( param->address );
+	element = LINDA_EPB_ADDRESS_ELEMENT ( param->address );
+	reg = LINDA_EPB_ADDRESS_REG ( param->address );
+	if ( channel == LINDA_EPB_ALL_CHANNELS ) {
+		channel_start = 0;
+		channel_end = 3;
+	} else {
+		channel_start = channel_end = channel;
+	}
+
+	/* Modify register for each specified channel */
+	for ( channel = channel_start ; channel <= channel_end ; channel++ ) {
+		if ( ( rc = linda_ib_epb_mod_reg ( linda, LINDA_EPB_CS_SERDES,
+						   channel, element, reg,
+						   param->value,
+						   param->mask ) ) != 0 )
+			return rc;
+	}
+
+	return 0;
+}
+
+/**
+ * Program IB SerDes registers
+ *
+ * @v linda		Linda device
+ * @v param		SerDes parameters
+ * @v count		Number of parameters
+ * @ret rc		Return status code
+ */
+static int linda_set_serdes_params ( struct linda *linda,
+				     struct linda_serdes_param *params ) {
+	int rc;
+
+	for ( ; params->mask != 0 ; params++ ){
+		if ( ( rc = linda_set_serdes_param ( linda,
+							 params ) ) != 0 )
+			return rc;
+	}
+
+	return 0;
+}
+
+#define LINDA_DDS_VAL( amp_d, main_d, ipst_d, ipre_d,			\
+		       amp_s, main_s, ipst_s, ipre_s )			\
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 9, 0x00 ),	\
+	  ( ( ( amp_d & 0x1f ) << 1 ) | 1 ), 0xff },			\
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 9, 0x01 ),	\
+	  ( ( ( amp_s & 0x1f ) << 1 ) | 1 ), 0xff },			\
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 9, 0x09 ),	\
+	  ( ( main_d << 3 ) | 4 | ( ipre_d >> 2 ) ), 0xff },		\
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 9, 0x0a ),	\
+	  ( ( main_s << 3 ) | 4 | ( ipre_s >> 2 ) ), 0xff },		\
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 9, 0x06 ),	\
+	  ( ( ( ipst_d & 0xf ) << 1 ) |					\
+	    ( ( ipre_d & 3 ) << 6 ) | 0x21 ), 0xff },			\
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 9, 0x07 ),	\
+	  ( ( ( ipst_s & 0xf ) << 1 ) |					\
+	    ( ( ipre_s & 3 ) << 6) | 0x21 ), 0xff }
+
+/**
+ * Linda SerDes default parameters
+ *
+ * These magic start-of-day values are taken from the Linux driver.
+ */
+static struct linda_serdes_param linda_serdes_defaults1[] = {
+	/* RXHSCTRL0 */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 6, 0x00 ), 0xd4, 0xff },
+	/* VCDL_DAC2 */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 6, 0x05 ), 0x2d, 0xff },
+	/* VCDL_CTRL2 */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 6, 0x08 ), 0x03, 0x0f },
+	/* START_EQ1 */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x27 ), 0x10, 0xff },
+	/* START_EQ2 */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x28 ), 0x30, 0xff },
+	/* BACTRL */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 6, 0x0e ), 0x40, 0xff },
+	/* LDOUTCTRL1 */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x06 ), 0x04, 0xff },
+	/* RXHSSTATUS */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 6, 0x0f ), 0x04, 0xff },
+	/* End of this block */
+	LINDA_SERDES_PARAM_END
+};
+static struct linda_serdes_param linda_serdes_defaults2[] = {
+	/* LDOUTCTRL1 */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x06 ), 0x00, 0xff },
+	/* DDS values */
+	LINDA_DDS_VAL ( 31, 19, 12, 0, 29, 22, 9, 0 ),
+	/* Set Rcv Eq. to Preset node */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x27 ), 0x10, 0xff },
+	/* DFELTHFDR */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x08 ), 0x00, 0xff },
+	/* DFELTHHDR */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x21 ), 0x00, 0xff },
+	/* TLTHFDR */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x09 ), 0x02, 0xff },
+	/* TLTHHDR */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x23 ), 0x02, 0xff },
+	/* ZFR */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x1b ), 0x0c, 0xff },
+	/* ZCNT) */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x1c ), 0x0c, 0xff },
+	/* GFR */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x1e ), 0x10, 0xff },
+	/* GHR */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x1f ), 0x10, 0xff },
+	/* VCDL_CTRL0 toggle */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 6, 0x06 ), 0x20, 0xff },
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 6, 0x06 ), 0x00, 0xff },
+	/* CMUCTRL5 */
+	{ LINDA_EPB_ADDRESS (			   7, 0, 0x15 ), 0x80, 0xff },
+	/* End of this block */
+	LINDA_SERDES_PARAM_END
+};
+static struct linda_serdes_param linda_serdes_defaults3[] = {
+	/* START_EQ1 */
+	{ LINDA_EPB_ADDRESS ( LINDA_EPB_ALL_CHANNELS, 7, 0x27 ), 0x00, 0x38 },
+	/* End of this block */
+	LINDA_SERDES_PARAM_END
+};
+
 /**
  * Program the 8051 microcontroller RAM
  *
@@ -561,8 +765,7 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
 static int linda_program_8051 ( struct linda *linda ) {
 	int rc;
 
-	if ( ( rc = linda_ib_epb_ram_xfer ( linda, LINDA_EPB_CS_8051,
-					    0, linda_ib_fw, NULL,
+	if ( ( rc = linda_ib_epb_ram_xfer ( linda, 0, linda_ib_fw, NULL,
 					    sizeof ( linda_ib_fw ) ) ) != 0 ){
 		DBGC ( linda, "Linda %p could not load IB firmware: %s\n",
 		       linda, strerror ( rc ) );
@@ -585,8 +788,8 @@ static int linda_verify_8051 ( struct linda *linda ) {
 
 	for ( offset = 0 ; offset < sizeof ( linda_ib_fw );
 	      offset += sizeof ( verify ) ) {
-		if ( ( rc = linda_ib_epb_ram_xfer ( linda, LINDA_EPB_CS_8051,
-						    offset, NULL, verify,
+		if ( ( rc = linda_ib_epb_ram_xfer ( linda, offset,
+						    NULL, verify,
 						    sizeof (verify) )) != 0 ){
 			DBGC ( linda, "Linda %p could not read back IB "
 			       "firmware: %s\n", linda, strerror ( rc ) );
@@ -603,7 +806,7 @@ static int linda_verify_8051 ( struct linda *linda ) {
 		}
 	}
 
-	DBGC ( linda, "Linda %p firmware verified ok\n", linda );
+	DBGC2 ( linda, "Linda %p firmware verified ok\n", linda );
 	return 0;
 }
 
@@ -630,14 +833,14 @@ static int linda_trim_ib ( struct linda *linda ) {
 		if ( BIT_GET ( &intstatus, IBSerdesTrimDone ) ) {
 			linda_link_state_changed ( linda );
 			rc = 0;
-			goto done;
+			goto out_reset;
 		}
 		mdelay ( 1 );
 	}
 
 	DBGC ( linda, "Linda %p timed out waiting for trim done\n", linda );
 	rc = -ETIMEDOUT;
- done:
+ out_reset:
 	/* Put the 8051 back into reset */
 	BIT_SET ( &ctrl, ResetIB_uC_Core, 1 );
 	linda_writeq ( linda, &ctrl, QIB_7220_IBSerDesCtrl_offset );
@@ -652,15 +855,16 @@ static int linda_trim_ib ( struct linda *linda ) {
  * @ret rc		Return status code
  */
 static int linda_init_ib_serdes ( struct linda *linda ) {
-	struct QIB_7220_Control ctrl;
+	struct QIB_7220_Control control;
 	struct QIB_7220_IBCCtrl ibcctrl;
-	struct QIB_7220_IBCDDRCtrl ddrctrl;
+	struct QIB_7220_IBCDDRCtrl ibcddrctrl;
+	struct QIB_7220_XGXSCfg xgxscfg;
 	int rc;
 
 	/* Disable link */
-	linda_readq ( linda, &ctrl, QIB_7220_Control_offset );
-	BIT_SET ( &ctrl, LinkEn, 0 );
-	linda_writeq ( linda, &ctrl, QIB_7220_Control_offset );
+	linda_readq ( linda, &control, QIB_7220_Control_offset );
+	BIT_SET ( &control, LinkEn, 0 );
+	linda_writeq ( linda, &control, QIB_7220_Control_offset );
 
 	/* Configure sensible defaults for IBC */
 	memset ( &ibcctrl, 0, sizeof ( ibcctrl ) );
@@ -679,12 +883,23 @@ static int linda_init_ib_serdes ( struct linda *linda ) {
 	 * Mellanox compatibiltiy hacks etc.  SDR is plenty for
 	 * boot-time operation.
 	 */
-	linda_readq ( linda, &ddrctrl, QIB_7220_IBCDDRCtrl_offset );
-	BIT_SET ( &ddrctrl, IB_ENHANCED_MODE, 0 );
-	BIT_SET ( &ddrctrl, SD_SPEED_SDR, 1 );
-	BIT_SET ( &ddrctrl, SD_SPEED_DDR, 0 );
-	BIT_SET ( &ddrctrl, SD_SPEED_QDR, 0 );
-	linda_writeq ( linda, &ddrctrl, QIB_7220_IBCDDRCtrl_offset );
+	linda_readq ( linda, &ibcddrctrl, QIB_7220_IBCDDRCtrl_offset );
+	BIT_SET ( &ibcddrctrl, IB_ENHANCED_MODE, 0 );
+	BIT_SET ( &ibcddrctrl, SD_SPEED_SDR, 1 );
+	BIT_SET ( &ibcddrctrl, SD_SPEED_DDR, 0 );
+	BIT_SET ( &ibcddrctrl, SD_SPEED_QDR, 0 );
+	BIT_SET ( &ibcddrctrl, HRTBT_ENB, 0 );
+	BIT_SET ( &ibcddrctrl, HRTBT_AUTO, 0 );
+	linda_writeq ( linda, &ibcddrctrl, QIB_7220_IBCDDRCtrl_offset );
+
+	/* Set default SerDes parameters */
+	if ( ( rc = linda_set_serdes_params ( linda,
+					      linda_serdes_defaults1 ) ) != 0 )
+		return rc;
+	udelay ( 415 ); /* Magic delay while SerDes sorts itself out */
+	if ( ( rc = linda_set_serdes_params ( linda,
+					      linda_serdes_defaults2 ) ) != 0 )
+		return rc;
 
 	/* Program the microcontroller RAM */
 	if ( ( rc = linda_program_8051 ( linda ) ) != 0 )
@@ -696,11 +911,32 @@ static int linda_init_ib_serdes ( struct linda *linda ) {
 			return rc;
 	}
 
+	/* More SerDes tuning */
+	if ( ( rc = linda_set_serdes_params ( linda,
+					      linda_serdes_defaults3 ) ) != 0 )
+		return rc;
+
 	/* Use the microcontroller to trim the IB link */
 	if ( ( rc = linda_trim_ib ( linda ) ) != 0 )
 		return rc;
 
-	return 0;
+	/* Bring XGXS out of reset */
+	linda_readq ( linda, &xgxscfg, QIB_7220_XGXSCfg_offset );
+	BIT_SET ( &xgxscfg, tx_rx_reset, 0 );
+	BIT_SET ( &xgxscfg, xcv_reset, 0 );
+	linda_writeq ( linda, &xgxscfg, QIB_7220_XGXSCfg_offset );
+
+	/* Enable link */
+	BIT_SET ( &control, LinkEn, 1 );
+	linda_writeq ( linda, &control, QIB_7220_Control_offset );
+
+	DBG ( "waiting for link...\n" );
+	int i;
+	for ( i = 0 ; i < 60 ; i++ ) {
+		linda_link_state_changed ( linda );
+	}
+
+	return rc;
 }
 
 /***************************************************************************
@@ -1041,16 +1277,16 @@ static int linda_probe ( struct pci_device *pci,
 
 	/* Get PCI BARs */
 	linda->regs = ioremap ( pci->membase, LINDA_BAR0_SIZE );
-	DBGC ( linda, "Linda %p has BAR at %08lx\n", linda, pci->membase );
+	DBGC2 ( linda, "Linda %p has BAR at %08lx\n", linda, pci->membase );
 
 	/* Print some general data */
 	linda_readq ( linda, &revision, QIB_7220_Revision_offset );
-	DBGC ( linda, "Linda %p board %02lx v%ld.%ld.%ld.%ld\n", linda,
-	       BIT_GET ( &revision, BoardID ),
-	       BIT_GET ( &revision, R_SW ),
-	       BIT_GET ( &revision, R_Arch ),
-	       BIT_GET ( &revision, R_ChipRevMajor ),
-	       BIT_GET ( &revision, R_ChipRevMinor ) );
+	DBGC2 ( linda, "Linda %p board %02lx v%ld.%ld.%ld.%ld\n", linda,
+		BIT_GET ( &revision, BoardID ),
+		BIT_GET ( &revision, R_SW ),
+		BIT_GET ( &revision, R_Arch ),
+		BIT_GET ( &revision, R_ChipRevMajor ),
+		BIT_GET ( &revision, R_ChipRevMinor ) );
 
 	/* Initialise I2C subsystem */
 	if ( ( rc = linda_init_i2c ( linda ) ) != 0 )
