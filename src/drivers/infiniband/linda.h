@@ -51,10 +51,10 @@ struct QIB_7220_GPIO {
 #define LINDA_EEPROM_SERIAL_SIZE 12
 
 /** Maximum time for wait for external parallel bus request, in us */
-#define LINDA_EPB_REQUEST_MAX_WAIT_US 100
+#define LINDA_EPB_REQUEST_MAX_WAIT_US 500
 
 /** Maximum time for wait for external parallel bus transaction, in us */
-#define LINDA_EPB_XACT_MAX_WAIT_US 100
+#define LINDA_EPB_XACT_MAX_WAIT_US 500
 
 /** Linda external parallel bus chip selects */
 #define LINDA_EPB_CS_SERDES 1

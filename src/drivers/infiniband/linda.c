@@ -135,9 +135,14 @@ static int linda_i2c_read_bit ( struct bit_basher *basher,
 	struct QIB_7220_EXTStatus extstatus;
 	unsigned int status;
 
+	DBG_DISABLE ( DBGLVL_IO );
+
 	linda_readq ( linda, &extstatus, QIB_7220_EXTStatus_offset );
-	status = BIT_GET ( &extstatus, GPIOIn );
-	return ( status & linda_i2c_bits[bit_id] );
+	status = ( BIT_GET ( &extstatus, GPIOIn ) & linda_i2c_bits[bit_id] );
+
+	DBG_ENABLE ( DBGLVL_IO );
+
+	return status;
 }
 
 /**
@@ -156,6 +161,8 @@ static void linda_i2c_write_bit ( struct bit_basher *basher,
 	unsigned int bit = linda_i2c_bits[bit_id];
 	unsigned int outputs = 0;
 	unsigned int output_enables = 0;
+
+	DBG_DISABLE ( DBGLVL_IO );
 
 	/* Read current GPIO mask and outputs */
 	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
@@ -178,6 +185,8 @@ static void linda_i2c_write_bit ( struct bit_basher *basher,
 	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
 	linda_writeq ( linda, &gpioout, QIB_7220_GPIOOut_offset );
 	mb();
+
+	DBG_ENABLE ( DBGLVL_IO );
 }
 
 /** Linda I2C bit-bashing interface operations */
@@ -286,8 +295,8 @@ static int linda_ib_epb_request ( struct linda *linda ) {
 
 	/* Wait for ownership to be granted */
 	for ( i = 0 ; i < LINDA_EPB_REQUEST_MAX_WAIT_US ; i++ ) {
-		linda_writeq ( linda, &access,
-			       QIB_7220_ibsd_epb_access_ctrl_offset );
+		linda_readq ( linda, &access,
+			      QIB_7220_ibsd_epb_access_ctrl_offset );
 		if ( BIT_GET ( &access, sw_ib_epb_req_granted ) )
 			return 0;
 		udelay ( 1 );
@@ -308,6 +317,9 @@ static int linda_ib_epb_request ( struct linda *linda ) {
 static int linda_ib_epb_wait ( struct linda *linda,
 			    struct QIB_7220_ibsd_epb_transaction_reg *xact ) {
 	unsigned int i;
+
+	/* Discard first read to allow for signals crossing clock domains */
+	linda_readq ( linda, xact, QIB_7220_ibsd_epb_transaction_reg_offset );
 
 	for ( i = 0 ; i < LINDA_EPB_XACT_MAX_WAIT_US ; i++ ) {
 		linda_readq ( linda, xact,
@@ -439,6 +451,7 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
 	int rc;
 
 	assert ( ! ( write && read ) );
+	assert ( ( address % LINDA_EPB_UC_CHUNK_SIZE ) == 0 );
 	assert ( ( len % LINDA_EPB_UC_CHUNK_SIZE ) == 0 );
 
 	/* Acquire bus ownership */
@@ -449,7 +462,7 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
 	while ( len ) {
 
 		/* Reset the address for each new chunk */
-		if ( ( len % LINDA_EPB_UC_CHUNK_SIZE ) == 0 ) {
+		if ( ( address % LINDA_EPB_UC_CHUNK_SIZE ) == 0 ) {
 
 			/* Write the control register */
 			control = ( read ? LINDA_EPB_UC_CTL_READ :
@@ -488,10 +501,11 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
 							 data ) ) != 0 )
 				break;
 		}
+		address++;
 		len--;
 
 		/* Reset the control byte after each chunk */
-		if ( ( len % LINDA_EPB_UC_CHUNK_SIZE ) == 0 ) {
+		if ( ( address % LINDA_EPB_UC_CHUNK_SIZE ) == 0 ) {
 			if ( ( rc = linda_ib_epb_write ( linda, cs,
 							 LINDA_EPB_UC_CTL,
 							 0 ) ) != 0 )
@@ -506,12 +520,12 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
 }
 
 /**
- * Start the embedded 8051 microcontroller
+ * Program the 8051 microcontroller RAM
  *
  * @v linda		Linda device
  * @ret rc		Return status code
  */
-static int linda_start_8051 ( struct linda *linda ) {
+static int linda_program_8051 ( struct linda *linda ) {
 	int rc;
 
 	if ( ( rc = linda_ib_epb_ram_xfer ( linda, LINDA_EPB_CS_8051,
@@ -522,18 +536,61 @@ static int linda_start_8051 ( struct linda *linda ) {
 		return rc;
 	}
 
-	static char verify[ sizeof ( linda_ib_fw ) ];
-	if ( ( rc = linda_ib_epb_ram_xfer ( linda, LINDA_EPB_CS_8051, 0, NULL,
-					    verify, sizeof (verify) )) != 0 ) {
-		DBGC ( linda, "Linda %p could not read back IB firwmare: %s\n",
-		       linda, strerror ( rc ) );
-		return rc;
+	return 0;
+}
+
+/**
+ * Verify the 8051 microcontroller RAM
+ *
+ * @v linda		Linda device
+ * @ret rc		Return status code
+ */
+static int linda_verify_8051 ( struct linda *linda ) {
+	uint8_t verify[LINDA_EPB_UC_CHUNK_SIZE];
+	unsigned int offset;
+	int rc;
+
+	for ( offset = 0 ; offset < sizeof ( linda_ib_fw );
+	      offset += sizeof ( verify ) ) {
+		if ( ( rc = linda_ib_epb_ram_xfer ( linda, LINDA_EPB_CS_8051,
+						    offset, NULL, verify,
+						    sizeof (verify) )) != 0 ){
+			DBGC ( linda, "Linda %p could not read back IB "
+			       "firmware: %s\n", linda, strerror ( rc ) );
+			return rc;
+		}
+		if ( memcmp ( ( linda_ib_fw + offset ), verify,
+			      sizeof ( verify ) ) != 0 ) {
+			DBGC ( linda, "Linda %p firmware verification failed "
+			       "at offset %#x\n", linda, offset );
+			DBGC_HDA ( linda, offset, ( linda_ib_fw + offset ),
+				   sizeof ( verify ) );
+			DBGC_HDA ( linda, offset, verify, sizeof ( verify ) );
+			return -EIO;
+		}
 	}
 
-	if ( memcmp ( linda_ib_fw, verify, sizeof ( linda_ib_fw ) ) != 0 ) {
-		DBGC ( linda, "Linda %p firmware verification failed\n",
-		       linda );
-		return -EIO;
+	DBGC ( linda, "Linda %p firmware verified ok\n", linda );
+	return 0;
+}
+
+/**
+ * Start the embedded 8051 microcontroller
+ *
+ * @v linda		Linda device
+ * @ret rc		Return status code
+ */
+static int linda_start_8051 ( struct linda *linda ) {
+	int rc;
+
+	/* Program the microcontroller RAM */
+	if ( ( rc = linda_program_8051 ( linda ) ) != 0 )
+		return rc;
+
+	/* Verify the microcontroller RAM contents */
+	if ( DBGLVL_LOG ) {
+		if ( ( rc = linda_verify_8051 ( linda ) ) != 0 )
+			return rc;
 	}
 
 	return 0;
