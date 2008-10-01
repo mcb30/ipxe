@@ -50,4 +50,34 @@ struct QIB_7220_GPIO {
 /** Board serial number size within EEPROM */
 #define LINDA_EEPROM_SERIAL_SIZE 12
 
+/** Maximum time for wait for external parallel bus request, in us */
+#define LINDA_EPB_REQUEST_MAX_WAIT_US 100
+
+/** Maximum time for wait for external parallel bus transaction, in us */
+#define LINDA_EPB_XACT_MAX_WAIT_US 100
+
+/** Linda external parallel bus chip selects */
+#define LINDA_EPB_CS_SERDES 1
+#define LINDA_EPB_CS_8051 2
+
+/** Linda external parallel bus read/write operations */
+#define LINDA_EPB_WRITE 0
+#define LINDA_EPB_READ 1
+
+/** Linda external parallel bus microcontroller registers and values */
+#define LINDA_EPB_LOC( _chn, _elt, _reg)				\
+	( ( (_elt) & 0xf ) | ( ( (_chn) & 7 ) << 4 ) |			\
+	  ( ( (_reg) & 0x3f ) << 9 ) )
+
+#define LINDA_EPB_UC_CTL	LINDA_EPB_LOC ( 6, 0, 0 )
+#define LINDA_EPB_UC_CTL_WRITE	1
+#define LINDA_EPB_UC_CTL_READ	2
+#define LINDA_EPB_UC_ADDR_LO	LINDA_EPB_LOC ( 6, 0, 2 )
+#define LINDA_EPB_UC_ADDR_HI	LINDA_EPB_LOC ( 6, 0, 3 )
+#define LINDA_EPB_UC_DATA	LINDA_EPB_LOC ( 6, 0, 4 )
+
+#define LINDA_EPB_UC_CHUNK_SIZE	64
+
+extern uint8_t linda_ib_fw[8192];
+
 #endif /* _LINDA_H */

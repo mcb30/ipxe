@@ -173,6 +173,21 @@ typedef unsigned char pseudo_bit_t;
 		   BIT_ASSEMBLE_1 ( _ptr, QWORD_OFFSET ( _ptr, _field1 ),     \
 				    _field1, __VA_ARGS__ ) )
 
+#define BIT_FILL_2( _ptr, _field1, ... )				      \
+	BIT_FILL ( _ptr, QWORD_OFFSET ( _ptr, _field1 ),		      \
+		   BIT_ASSEMBLE_2 ( _ptr, QWORD_OFFSET ( _ptr, _field1 ),     \
+				    _field1, __VA_ARGS__ ) )
+
+#define BIT_FILL_3( _ptr, _field1, ... )				      \
+	BIT_FILL ( _ptr, QWORD_OFFSET ( _ptr, _field1 ),		      \
+		   BIT_ASSEMBLE_3 ( _ptr, QWORD_OFFSET ( _ptr, _field1 ),     \
+				    _field1, __VA_ARGS__ ) )
+
+#define BIT_FILL_4( _ptr, _field1, ... )				      \
+	BIT_FILL ( _ptr, QWORD_OFFSET ( _ptr, _field1 ),		      \
+		   BIT_ASSEMBLE_4 ( _ptr, QWORD_OFFSET ( _ptr, _field1 ),     \
+				    _field1, __VA_ARGS__ ) )
+
 /** Extract value of named field */
 #define BIT_GET64( _ptr, _field )					      \
 	( {								      \
