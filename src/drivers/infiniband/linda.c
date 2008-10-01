@@ -46,6 +46,21 @@ struct linda {
 	struct i2c_device eeprom;
 };
 
+/***************************************************************************
+ *
+ * Linda register access
+ *
+ ***************************************************************************
+ *
+ * This card requires atomic 64-bit accesses.  Strange things happen
+ * if you try to use 32-bit accesses; sometimes they work, sometimes
+ * they don't, sometimes you get random data.
+ *
+ * These accessors use the "movq" MMX instruction, and so won't work
+ * on really old Pentiums (which won't have PCIe anyway, so this is
+ * something of a moot point).
+ */
+
 /**
  * Read Linda qword register
  *
@@ -144,39 +159,21 @@ static void linda_i2c_write_bit ( struct bit_basher *basher,
 
 	/* Update outputs and output enables.  I2C lines are tied
 	 * high, so we always set the output to 0 and use the output
-	 * enable to control the line.  Write the output enable first;
-	 * that way we avoid logic hazards.
+	 * enable to control the line.
 	 */
 	output_enables = BIT_GET ( &extctrl, GPIOOe );
 	output_enables = ( ( output_enables & ~bit ) | ( ~data & bit ) );
 	outputs = BIT_GET ( &gpioout, GPIO );
 	outputs = ( outputs & ~bit );
 	BIT_SET ( &extctrl, GPIOOe, output_enables );
-	BIT_SET ( &extctrl, LEDPriPortYellowOn, 1 );
-	BIT_SET ( &extctrl, LEDPriPortGreenOn, 1 );
 	BIT_SET ( &gpioout, GPIO, outputs );
 
+	/* Write the output enable first; that way we avoid logic
+	 * hazards.
+	 */
 	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
 	linda_writeq ( linda, &gpioout, QIB_7220_GPIOOut_offset );
 	mb();
-
-	read_bit ( basher, bit_id );
-	mb();
-
-	mdelay ( 10 );
-	read_bit ( basher, bit_id );
-	mb();
-	unsigned long check_data = read_bit ( basher, bit_id );
-	if ( ( ! data ) && ( check_data != data ) ) {
-		DBG ( "\nBit %08x should be %08lx is %08lx\n",
-		      bit, data, check_data );
-	}
-
-
-	static int count = 10;
-	if ( ! --count ) {
-		//		while ( 1 ) {}
-	}
 }
 
 /** Linda I2C bit-bashing interface operations */
@@ -192,7 +189,7 @@ static struct bit_basher_operations linda_i2c_basher_ops = {
  * @ret rc		Return status code
  */
 static int linda_init_i2c ( struct linda *linda ) {
-	static int try_eeprom_address[] = { 0x50, 0x51 };
+	static int try_eeprom_address[] = { 0x51, 0x50 };
 	unsigned int i;
 	int rc;
 
@@ -214,7 +211,7 @@ static int linda_init_i2c ( struct linda *linda ) {
 			       linda, try_eeprom_address[i] );
 
 
-	uint8_t buf[256];
+	uint8_t buf[128];
 	struct i2c_interface *i2c = &linda->i2c.i2c;
 	if ( ( rc = i2c->read ( i2c, &linda->eeprom, 0, buf,
 				sizeof ( buf ) ) ) != 0 ) {
@@ -581,17 +578,6 @@ static int linda_probe ( struct pci_device *pci,
 	       BIT_GET ( &revision, R_Arch ),
 	       BIT_GET ( &revision, R_ChipRevMajor ),
 	       BIT_GET ( &revision, R_ChipRevMinor ) );
-
-#if 1
-	struct QIB_7220_PageAlign_pb {
-		pseudo_bit_t size[13];
-		pseudo_bit_t reserved[64-13];
-	};
-	struct QIB_7220_PageAlign { PSEUDO_BIT_STRUCT ( struct QIB_7220_PageAlign_pb ); };
-	struct QIB_7220_PageAlign pagealign;
-	linda_readq ( linda, &pagealign, QIB_7220_PageAlign_offset );
-	DBG ( "Page alignment is %lx\n", BIT_GET ( &pagealign, size ) );
-#endif
 
 	/* Initialise I2C subsystem */
 	if ( ( rc = linda_init_i2c ( linda ) ) != 0 )
