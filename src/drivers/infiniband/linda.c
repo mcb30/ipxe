@@ -1061,6 +1061,23 @@ static void linda_poll_cq ( struct ib_device *ibdev,
  */
 
 /**
+ * Textual representation of link state
+ *
+ * @v link_state	Link state
+ * @ret link_text	Link state text
+ */
+static const char * linda_link_state_text ( unsigned int link_state ) {
+	switch ( link_state ) {
+	case LINDA_LINK_STATE_DOWN:	return "DOWN";
+	case LINDA_LINK_STATE_INIT:	return "INIT";
+	case LINDA_LINK_STATE_ARM:	return "ARM";
+	case LINDA_LINK_STATE_ACTIVE:	return "ACTIVE";
+	case LINDA_LINK_STATE_ACT_DEFER:return "ACT_DEFER";
+	default:			return "UNKNOWN";
+	}
+}
+
+/**
  * Handle link state change
  *
  * @v linda		Linda device
@@ -1074,7 +1091,8 @@ static void linda_link_state_changed ( struct ib_device *ibdev ) {
 	/* Read link state */
 	linda_readq ( linda, &ibcstatus, QIB_7220_IBCStatus_offset );
 	link_state = BIT_GET ( &ibcstatus, LinkState );
-	DBGC ( linda, "Linda %p link state %d (%s %s)\n", linda, link_state,
+	DBGC ( linda, "Linda %p link state %s (%s %s)\n", linda,
+	       linda_link_state_text ( link_state ),
 	       ( BIT_GET ( &ibcstatus, LinkSpeedActive ) ? "DDR" : "SDR" ),
 	       ( BIT_GET ( &ibcstatus, LinkWidthActive ) ? "x4" : "x1" ) );
 
@@ -1087,7 +1105,7 @@ static void linda_link_state_changed ( struct ib_device *ibdev ) {
 	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
 
 	/* Notify Infiniband core of link state change */
-	//	ib_link_state_changed ( ibdev );
+	ib_link_state_changed ( ibdev );
 }
 
 /**
@@ -1097,15 +1115,16 @@ static void linda_link_state_changed ( struct ib_device *ibdev ) {
  */
 static void linda_poll_eq ( struct ib_device *ibdev ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct QIB_7220_IBCStatus ibcstatus;
-	static int link_state;
-	int new_link_state;
+	struct QIB_7220_ErrStatus errstatus;
+	struct QIB_7220_ErrClear errclear;
 
-	linda_readq ( linda, &ibcstatus, QIB_7220_IBCStatus_offset );
-	new_link_state = BIT_GET ( &ibcstatus, LinkState );
-	if ( new_link_state != link_state ) {
-		link_state = new_link_state;
+	/* Check for link status changes */
+	linda_readq ( linda, &errstatus, QIB_7220_ErrStatus_offset );
+	if ( BIT_GET ( &errstatus, IBStatusChanged ) ) {
 		linda_link_state_changed ( ibdev );
+		memset ( &errclear, 0, sizeof ( errclear ) );
+		BIT_FILL_1 ( &errclear, IBStatusChangedClear, 1 );
+		linda_writeq ( linda, &errclear, QIB_7220_ErrClear_offset );
 	}
 }
 
