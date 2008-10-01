@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>
+#include <assert.h>
 #include <gpxe/pci.h>
 #include <gpxe/infiniband.h>
 #include <gpxe/i2c.h>
@@ -256,6 +257,283 @@ static int linda_read_eeprom ( struct linda *linda ) {
 		}
 		DBGC ( linda, "Linda %p has serial number \"%s\"\n",
 		       linda, serial );
+	}
+
+	return 0;
+}
+
+/***************************************************************************
+ *
+ * Embedded 8051 microcontroller
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Request ownership of the IB external parallel bus
+ *
+ * @v linda		Linda device
+ * @ret rc		Return status code
+ */
+static int linda_ib_epb_request ( struct linda *linda ) {
+	struct QIB_7220_ibsd_epb_access_ctrl access;
+	unsigned int i;
+
+	/* Request ownership */
+	memset ( &access, 0, sizeof ( access ) );
+	BIT_FILL_1 ( &access, sw_ib_epb_req, 1 );
+	linda_writeq ( linda, &access, QIB_7220_ibsd_epb_access_ctrl_offset );
+
+	/* Wait for ownership to be granted */
+	for ( i = 0 ; i < LINDA_EPB_REQUEST_MAX_WAIT_US ; i++ ) {
+		linda_writeq ( linda, &access,
+			       QIB_7220_ibsd_epb_access_ctrl_offset );
+		if ( BIT_GET ( &access, sw_ib_epb_req_granted ) )
+			return 0;
+		udelay ( 1 );
+	}
+
+	DBGC ( linda, "Linda %p timed out waiting for IB EPB request\n",
+	       linda );
+	return -ETIMEDOUT;
+}
+
+/**
+ * Wait for IB external parallel bus transaction to complete
+ *
+ * @v linda		Linda device
+ * @v xact		Buffer to hold transaction result
+ * @ret rc		Return status code
+ */
+static int linda_ib_epb_wait ( struct linda *linda,
+			    struct QIB_7220_ibsd_epb_transaction_reg *xact ) {
+	unsigned int i;
+
+	for ( i = 0 ; i < LINDA_EPB_XACT_MAX_WAIT_US ; i++ ) {
+		linda_readq ( linda, xact,
+			      QIB_7220_ibsd_epb_transaction_reg_offset );
+		if ( BIT_GET ( xact, ib_epb_rdy ) ) {
+			if ( BIT_GET ( xact, ib_epb_req_error ) ) {
+				DBGC ( linda, "Linda %p EPB transaction "
+				       "failed\n", linda );
+				return -EIO;
+			} else {
+				return 0;
+			}
+		}
+		udelay ( 1 );
+	}
+
+	DBGC ( linda, "Linda %p timed out waiting for IB EPB transaction\n",
+	       linda );
+	return -ETIMEDOUT;
+}
+
+/**
+ * Release ownership of the IB external parallel bus
+ *
+ * @v linda		Linda device
+ */
+static void linda_ib_epb_release ( struct linda *linda ) {
+	struct QIB_7220_ibsd_epb_access_ctrl access;
+
+	memset ( &access, 0, sizeof ( access ) );
+	BIT_FILL_1 ( &access, sw_ib_epb_req, 0 );
+	linda_writeq ( linda, &access, QIB_7220_ibsd_epb_access_ctrl_offset );
+}
+
+/**
+ * Read data via IB external parallel bus
+ *
+ * @v linda		Linda device
+ * @v cs		Chip select
+ * @v address		Address
+ * @ret data		Data read, or negative error
+ *
+ * You must have already acquired ownership of the IB external
+ * parallel bus.
+ */
+static int linda_ib_epb_read ( struct linda *linda, unsigned int cs,
+			       unsigned int address ) {
+	struct QIB_7220_ibsd_epb_transaction_reg xact;
+	unsigned int data;
+	int rc;
+
+	/* Ensure no transaction is currently in progress */
+	if ( ( rc = linda_ib_epb_wait ( linda, &xact ) ) != 0 )
+		return rc;
+
+	/* Process data */
+	memset ( &xact, 0, sizeof ( xact ) );
+	BIT_FILL_3 ( &xact,
+		     ib_epb_address, address,
+		     ib_epb_read_write, LINDA_EPB_READ,
+		     ib_epb_cs, cs );
+	linda_writeq ( linda, &xact,
+		       QIB_7220_ibsd_epb_transaction_reg_offset );
+
+	/* Wait for transaction to complete */
+	if ( ( rc = linda_ib_epb_wait ( linda, &xact ) ) != 0 )
+		return rc;
+
+	data = BIT_GET ( &xact, ib_epb_data );
+	return data;
+}
+
+/**
+ * Write data via IB external parallel bus
+ *
+ * @v linda		Linda device
+ * @v cs		Chip select
+ * @v address		Address
+ * @v data		Data to write
+ * @ret rc		Return status code
+ *
+ * You must have already acquired ownership of the IB external
+ * parallel bus.
+ */
+static int linda_ib_epb_write ( struct linda *linda, unsigned int cs,
+				unsigned int address, unsigned int data ) {
+	struct QIB_7220_ibsd_epb_transaction_reg xact;
+	int rc;
+
+	/* Ensure no transaction is currently in progress */
+	if ( ( rc = linda_ib_epb_wait ( linda, &xact ) ) != 0 )
+		return rc;
+
+	/* Process data */
+	memset ( &xact, 0, sizeof ( xact ) );
+	BIT_FILL_4 ( &xact,
+		     ib_epb_data, data,
+		     ib_epb_address, address,
+		     ib_epb_read_write, LINDA_EPB_WRITE,
+		     ib_epb_cs, cs );
+	linda_writeq ( linda, &xact,
+		       QIB_7220_ibsd_epb_transaction_reg_offset );
+
+	/* Wait for transaction to complete */
+	if ( ( rc = linda_ib_epb_wait ( linda, &xact ) ) != 0 )
+		return rc;
+
+	return 0;
+}
+
+/**
+ * Transfer data to/from microcontroller RAM
+ *
+ * @v linda		Linda device
+ * @v cs		Chip select
+ * @v address		Starting address
+ * @v write		Data to write, or NULL
+ * @v read		Data to read, or NULL
+ * @v len		Length of data
+ * @ret rc		Return status code
+ */
+static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int cs,
+				   unsigned int address, const void *write,
+				   void *read, size_t len ) {
+	unsigned int control;
+	unsigned int address_hi;
+	unsigned int address_lo;
+	int data;
+	int rc;
+
+	assert ( ! ( write && read ) );
+	assert ( ( len % LINDA_EPB_UC_CHUNK_SIZE ) == 0 );
+
+	/* Acquire bus ownership */
+	if ( ( rc = linda_ib_epb_request ( linda ) ) != 0 )
+		return rc;
+
+	/* Process data */
+	while ( len ) {
+
+		/* Reset the address for each new chunk */
+		if ( ( len % LINDA_EPB_UC_CHUNK_SIZE ) == 0 ) {
+
+			/* Write the control register */
+			control = ( read ? LINDA_EPB_UC_CTL_READ :
+				    LINDA_EPB_UC_CTL_WRITE );
+			if ( ( rc = linda_ib_epb_write ( linda, cs,
+							 LINDA_EPB_UC_CTL,
+							 control ) ) != 0 )
+				break;
+
+			/* Write the address registers */
+			address_hi = ( address >> 8 );
+			if ( ( rc = linda_ib_epb_write ( linda, cs,
+							 LINDA_EPB_UC_ADDR_HI,
+							 address_hi ) ) != 0 )
+				break;
+			address_lo = ( address & 0xff );
+			if ( ( rc = linda_ib_epb_write ( linda, cs,
+							 LINDA_EPB_UC_ADDR_LO,
+							 address_lo ) ) != 0 )
+				break;
+		}
+
+		/* Read or write the data */
+		if ( read ) {
+			data = linda_ib_epb_read ( linda, cs,
+						   LINDA_EPB_UC_DATA );
+			if ( data < 0 ) {
+				rc = data;
+				break;
+			}
+			*( ( uint8_t * ) read++ ) = data;
+		} else {
+			data = *( ( uint8_t * ) write++ );
+			if ( ( rc = linda_ib_epb_write ( linda, cs,
+							 LINDA_EPB_UC_DATA,
+							 data ) ) != 0 )
+				break;
+		}
+		len--;
+
+		/* Reset the control byte after each chunk */
+		if ( ( len % LINDA_EPB_UC_CHUNK_SIZE ) == 0 ) {
+			if ( ( rc = linda_ib_epb_write ( linda, cs,
+							 LINDA_EPB_UC_CTL,
+							 0 ) ) != 0 )
+				break;
+		}
+	}
+
+	/* Release bus */
+	linda_ib_epb_release ( linda );
+
+	return rc;
+}
+
+/**
+ * Start the embedded 8051 microcontroller
+ *
+ * @v linda		Linda device
+ * @ret rc		Return status code
+ */
+static int linda_start_8051 ( struct linda *linda ) {
+	int rc;
+
+	if ( ( rc = linda_ib_epb_ram_xfer ( linda, LINDA_EPB_CS_8051,
+					    0, linda_ib_fw, NULL,
+					    sizeof ( linda_ib_fw ) ) ) != 0 ){
+		DBGC ( linda, "Linda %p could not load IB firmware: %s\n",
+		       linda, strerror ( rc ) );
+		return rc;
+	}
+
+	static char verify[ sizeof ( linda_ib_fw ) ];
+	if ( ( rc = linda_ib_epb_ram_xfer ( linda, LINDA_EPB_CS_8051, 0, NULL,
+					    verify, sizeof (verify) )) != 0 ) {
+		DBGC ( linda, "Linda %p could not read back IB firwmare: %s\n",
+		       linda, strerror ( rc ) );
+		return rc;
+	}
+
+	if ( memcmp ( linda_ib_fw, verify, sizeof ( linda_ib_fw ) ) != 0 ) {
+		DBGC ( linda, "Linda %p firmware verification failed\n",
+		       linda );
+		return -EIO;
 	}
 
 	return 0;
@@ -618,6 +896,10 @@ static int linda_probe ( struct pci_device *pci,
 	if ( ( rc = linda_read_eeprom ( linda ) ) != 0 )
 		goto err_read_eeprom;
 
+	/* Start up the 8051 microcontroller */
+	if ( ( rc = linda_start_8051 ( linda ) ) != 0 )
+		goto err_start_8051;
+
 	/* Register Infiniband devices */
 	for ( i = 0 ; i < LINDA_NUM_PORTS ; i++ ) {
 		if ( ( rc = register_ibdev ( linda->ibdev[i] ) ) != 0 ) {
@@ -633,6 +915,7 @@ static int linda_probe ( struct pci_device *pci,
  err_register_ibdev:
 	for ( i-- ; i >= 0 ; i-- )
 		unregister_ibdev ( linda->ibdev[i] );
+ err_start_8051:
  err_read_eeprom:
  err_init_i2c:
 	i = LINDA_NUM_PORTS;
