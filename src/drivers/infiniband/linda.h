@@ -62,7 +62,10 @@ struct QIB_7220_RcvEgr {
 /** Board serial number size within EEPROM */
 #define LINDA_EEPROM_SERIAL_SIZE 12
 
-/** Number of contexts (including kernel context) */
+/** Number of contexts (including kernel context)
+ *
+ * This is a policy decision.  Must be 5, 9 or 17.
+ */
 #define LINDA_NUM_CONTEXTS 17
 
 /** PortCfg values for different numbers of contexts */
@@ -79,6 +82,24 @@ enum linda_portcfg {
 #define LINDA_EAGER_ARRAY_SIZE_9CTX_OTHER 2048
 #define LINDA_EAGER_ARRAY_SIZE_17CTX_0 2048
 #define LINDA_EAGER_ARRAY_SIZE_17CTX_OTHER 1024
+
+/** Number of RX headers per context
+ *
+ * This is a policy decision. 
+ */
+#define LINDA_RX_HEADER_COUNT 8
+
+/** Maximum size of each RX header
+ *
+ * This is a policy decision.  Must be divisible by 4.
+ */
+#define LINDA_RX_HEADER_SIZE 64
+
+/** Total size of an RX header ring */
+#define LINDA_RX_HEADERS_SIZE ( LINDA_RX_HEADER_SIZE * LINDA_RX_HEADER_COUNT )
+
+/** RX header alignment */
+#define LINDA_RX_HEADERS_ALIGN 64
 
 /** Maximum time for wait for external parallel bus request, in us */
 #define LINDA_EPB_REQUEST_MAX_WAIT_US 500
