@@ -45,9 +45,9 @@ struct linda_context {
 	unsigned int eager_entries;
 	/** Receive header ring */
 	void *header;
-	/** Receive header producer index (written by hardware) */
+	/** Receive header producer offset (written by hardware) */
 	struct QIB_7220_scalar header_prod;
-	/** Receive header consumer index */
+	/** Receive header consumer offset */
 	unsigned int header_cons;
 };
 
@@ -250,6 +250,7 @@ static int linda_create_qp ( struct ib_device *ibdev,
 	struct linda_context *context;
 	struct QIB_7220_RcvHdrAddr0 rcvhdraddr;
 	struct QIB_7220_RcvHdrTailAddr0 rcvhdrtailaddr;
+	struct QIB_7220_RcvHdrHead0 rcvhdrhead;
 	struct QIB_7220_RcvCtrl rcvctrl;
 	int ctx;
 	int rc;
@@ -288,6 +289,11 @@ static int linda_create_qp ( struct ib_device *ibdev,
 	linda_writeq ( linda, &rcvhdrtailaddr,
 		       ( QIB_7220_RcvHdrTailAddr0_offset +
 			 ( ctx * sizeof ( rcvhdrtailaddr ) ) ) );
+	memset ( &rcvhdrhead, 0, sizeof ( rcvhdrhead ) );
+	BIT_FILL_1 ( &rcvhdrhead, counter, 1 );
+	linda_writeq ( linda, &rcvhdrhead,
+		       ( QIB_7220_RcvHdrHead0_offset +
+			 ( ctx * sizeof ( rcvhdrhead ) ) ) );
 	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
 	BIT_SET ( &rcvctrl, PortEnable[ctx], 1 );
 	BIT_SET ( &rcvctrl, IntrAvail[ctx], 1 );
@@ -316,12 +322,13 @@ static int linda_create_qp ( struct ib_device *ibdev,
  */
 static int linda_modify_qp ( struct ib_device *ibdev,
 			     struct ib_queue_pair *qp,
-			     unsigned long mod_list ) {
+			     unsigned long mod_list __unused ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
 
-	( void ) linda;
-	( void ) qp;
-	( void ) mod_list;
+	/* Nothing to do; the hardware doesn't have a notion of queue
+	 * keys
+	 */
+	DBGC ( linda, "Linda %p QPN %ld modified\n", linda, qp->qpn );
 	return 0;
 }
 
@@ -404,6 +411,73 @@ static int linda_post_recv ( struct ib_device *ibdev,
 }
 
 /**
+ * Poll receive work queue
+ *
+ * @v ibdev		Infiniband device
+ * @v recv_wq		Receive work queue
+ * @v complete_recv	Receive completion handler
+ */
+static void linda_poll_recv_wq ( struct ib_device *ibdev,
+				 struct ib_work_queue *recv_wq,
+				 ib_completer_t complete_recv ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct linda_context *context;
+	struct QIB_7220_RcvHdrFlags *rcvhdrflags;
+	struct QIB_7220_RcvHdrHead0 rcvhdrhead;
+	unsigned int ctx;
+	unsigned int header_prod;
+	unsigned int rcvtype;
+	unsigned int pktlen;
+	unsigned int egrindex;
+	unsigned int useegrbfr;
+	unsigned int hdrqoffset;
+
+	/* Identify context for this queue */
+	ctx = linda_qpn_to_ctx ( recv_wq->qp->qpn );
+	context = &linda->context[ctx];
+
+	/* Check for received packets */
+	header_prod = ( BIT_GET ( &context->header_prod, Value ) << 2 );
+	if ( header_prod == context->header_cons )
+		return;
+
+	/* Process all received packets */
+	while ( context->header_cons != header_prod ) {
+		rcvhdrflags = ( context->header + context->header_cons +
+				LINDA_RX_HEADER_SIZE - sizeof (*rcvhdrflags) );
+		rcvtype = BIT_GET ( rcvhdrflags, RcvType );
+		pktlen = BIT_GET ( rcvhdrflags, PktLen );
+		egrindex = BIT_GET ( rcvhdrflags, EgrIndex );
+		useegrbfr = BIT_GET ( rcvhdrflags, UseEgrBfr );
+		DBGC ( linda, "Linda %p QPN %ld RX hdr %d type %d len %d "
+		       "egr %d%s\n", linda, recv_wq->qp->qpn,
+		       ( context->header_cons / LINDA_RX_HEADER_SIZE ),
+		       rcvtype, pktlen, egrindex,
+		       ( useegrbfr ? "" : "(unused)" ) );
+		hdrqoffset = ( BIT_GET ( rcvhdrflags, HdrqOffset ) << 2 );
+		DBGC_HDA ( linda, 0,
+			   ( context->header + context->header_cons +
+			     hdrqoffset ),
+			   ( LINDA_RX_HEADER_SIZE - hdrqoffset ) );
+
+		context->header_cons += LINDA_RX_HEADER_SIZE;
+		context->header_cons %= LINDA_RX_HEADERS_SIZE;
+	}
+
+	/* Update consumer counter */
+	context->header_cons = header_prod;
+	memset ( &rcvhdrhead, 0, sizeof ( rcvhdrhead ) );
+	BIT_FILL_2 ( &rcvhdrhead,
+		     RcvHeadPointer, ( context->header_cons >> 2 ),
+		     counter, 1 );
+	linda_writeq ( linda, &rcvhdrhead,
+		       ( QIB_7220_RcvHdrHead0_offset +
+			 ( ctx * sizeof ( rcvhdrhead ) ) ) );
+
+	( void ) complete_recv;
+}
+
+/**
  * Poll completion queue
  *
  * @v ibdev		Infiniband device
@@ -415,29 +489,16 @@ static void linda_poll_cq ( struct ib_device *ibdev,
 			    struct ib_completion_queue *cq,
 			    ib_completer_t complete_send,
 			    ib_completer_t complete_recv ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
 	struct ib_work_queue *wq;
-	unsigned int ctx;
-	struct linda_context *context;
-	unsigned int header_prod;
 
 	/* Poll associated RX queues */
 	list_for_each_entry ( wq, &cq->work_queues, list ) {
 		if ( wq->is_send )
 			continue;
-		ctx = linda_qpn_to_ctx ( wq->qp->qpn );
-		DBG ( "Polling CTX %d\n", ctx );
-		context = &linda->context[ctx];
-		header_prod = BIT_GET ( &context->header_prod, Value );
-		if ( header_prod != context->header_cons ) {
-			DBGC ( linda, "Linda %p QPN %ld prod %d\n",
-			       linda, wq->qp->qpn, header_prod );
-			context->header_cons = header_prod;
-		}
+		linda_poll_recv_wq ( ibdev, wq, complete_recv );
 	}
 
 	( void ) complete_send;
-	( void ) complete_recv;
 }
 
 /***************************************************************************

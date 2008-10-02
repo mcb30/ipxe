@@ -41,6 +41,32 @@ struct QIB_7220_RcvEgr {
 	PSEUDO_BIT_STRUCT ( struct QIB_7220_RcvEgr_pb );
 };
 
+/** Linda receive header flags */
+struct QIB_7220_RcvHdrFlags_pb {
+	pseudo_bit_t PktLen[11];
+	pseudo_bit_t RcvType[3];
+	pseudo_bit_t SoftB[1];
+	pseudo_bit_t SoftA[1];
+	pseudo_bit_t EgrIndex[12];
+	pseudo_bit_t Reserved1[3];
+	pseudo_bit_t UseEgrBfr[1];
+	pseudo_bit_t RcvSeq[4];
+	pseudo_bit_t HdrqOffset[11];
+	pseudo_bit_t Reserved2[8];
+	pseudo_bit_t IBErr[1];
+	pseudo_bit_t MKErr[1];
+	pseudo_bit_t TIDErr[1];
+	pseudo_bit_t KHdrErr[1];
+	pseudo_bit_t MTUErr[1];
+	pseudo_bit_t LenErr[1];
+	pseudo_bit_t ParityErr[1];
+	pseudo_bit_t VCRCErr[1];
+	pseudo_bit_t ICRCErr[1];
+};
+struct QIB_7220_RcvHdrFlags {
+	PSEUDO_BIT_STRUCT ( struct QIB_7220_RcvHdrFlags_pb );
+};
+
 /** Linda memory BAR size */
 #define LINDA_BAR0_SIZE 0x400000
 
