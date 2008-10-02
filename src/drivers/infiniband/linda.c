@@ -34,12 +34,23 @@
  *
  */
 
+/** A Linda context */
+struct linda_context {
+	/** Offset within register space of the eager array */
+	unsigned long eager_array;
+	/** Number of entries in eager array */
+	unsigned int eager_entries;
+};
+
 /** A Linda HCA */
 struct linda {
 	/** Registers */
 	void *regs;
 	/** Base GUID */
 	uint8_t guid[LINDA_EEPROM_GUID_SIZE];
+
+	/** Contexts */
+	struct linda_context ctx[LINDA_NUM_CONTEXTS];
 
 	/** I2C bit-bashing interface */
 	struct i2c_bit_basher i2c;
@@ -270,6 +281,80 @@ static int linda_read_eeprom ( struct linda *linda ) {
 
 /***************************************************************************
  *
+ * RX datapath
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Initialise RX contexts
+ *
+ * @v linda		Linda device
+ * @ret rc		Return status code
+ */
+static int linda_init_rx ( struct linda *linda ) {
+	struct QIB_7220_RcvCtrl rcvctrl;
+	struct QIB_7220_scalar rcvegrbase;
+	unsigned int portcfg;
+	unsigned long egrbase;
+	unsigned int eager_array_size_0;
+	unsigned int eager_array_size_other;
+	unsigned int ctx;
+
+	/* Select configuration based on number of contexts */
+	switch ( LINDA_NUM_CONTEXTS ) {
+	case 5:
+		portcfg = LINDA_PORTCFG_5CTX;
+		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_5CTX_0;
+		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_5CTX_OTHER;
+		break;
+	case 9:
+		portcfg = LINDA_PORTCFG_9CTX;
+		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_9CTX_0;
+		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_9CTX_OTHER;
+		break;
+	case 17:
+		portcfg = LINDA_PORTCFG_17CTX;
+		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_17CTX_0;
+		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_17CTX_OTHER;
+		break;
+	default:
+		linker_assert ( 0, invalid_LINDA_NUM_CONTEXTS );
+		return -EINVAL;
+	}
+
+	/* Configure number of contexts */
+	memset ( &rcvctrl, 0, sizeof ( rcvctrl ) );
+	BIT_FILL_4 ( &rcvctrl,
+		     PortEnable, ( ( 1 << LINDA_NUM_CONTEXTS ) - 1 ),
+		     IntrAvail, ( ( 1 << LINDA_NUM_CONTEXTS ) - 1),
+		     PortCfg, portcfg,
+		     RcvQPMapEnable, 1 );
+	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+
+	/* Calculate eager array start addresses for each context */
+	linda_readq ( linda, &rcvegrbase, QIB_7220_RcvEgrBase_offset );
+	egrbase = BIT_GET ( &rcvegrbase, Value );
+	linda->ctx[0].eager_array = egrbase;
+	linda->ctx[0].eager_entries = eager_array_size_0;
+	egrbase += ( eager_array_size_0 * sizeof ( struct QIB_7220_RcvEgr ) );
+	for ( ctx = 1 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
+		linda->ctx[ctx].eager_array = egrbase;
+		linda->ctx[ctx].eager_entries = eager_array_size_other;
+		egrbase += ( eager_array_size_other *
+			     sizeof ( struct QIB_7220_RcvEgr ) );
+	}
+	for ( ctx = 0 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
+		DBGC ( linda, "Linda %p context %d eager array at %lx (%d "
+		       "entries)\n", linda, ctx, linda->ctx[ctx].eager_array,
+		       linda->ctx[ctx].eager_entries );
+	}
+
+	return 0;
+}
+
+/***************************************************************************
+ *
  * Infiniband SerDes
  *
  ***************************************************************************
@@ -465,7 +550,7 @@ static int linda_ib_epb_mod_reg ( struct linda *linda, unsigned int cs,
 
 	/* Update value */
 	value = ( ( old_value & ~mask ) | value );
-	DBGC2 ( linda, "Linda %p CS %d EPB(%d,%d,%#02x) %#02x => %#02x\n",
+	DBGCP ( linda, "Linda %p CS %d EPB(%d,%d,%#02x) %#02x => %#02x\n",
 		linda, cs, channel, element, reg, old_value, value );
 	if ( ( rc = linda_ib_epb_write ( linda, location, value ) ) != 0 )
 		goto out_release;
@@ -1302,6 +1387,10 @@ static int linda_probe ( struct pci_device *pci,
 	if ( ( rc = linda_read_eeprom ( linda ) ) != 0 )
 		goto err_read_eeprom;
 
+	/* Initialise receive datapath */
+	if ( ( rc = linda_init_rx ( linda ) ) != 0 )
+		goto err_init_rx;
+
 	/* Start up the 8051 microcontroller */
 	if ( ( rc = linda_init_ib_serdes ( linda ) ) != 0 )
 		goto err_init_ib_serdes;
@@ -1317,6 +1406,7 @@ static int linda_probe ( struct pci_device *pci,
 
 	unregister_ibdev ( ibdev );
  err_register_ibdev:
+ err_init_rx:
  err_init_ib_serdes:
  err_read_eeprom:
  err_init_i2c:

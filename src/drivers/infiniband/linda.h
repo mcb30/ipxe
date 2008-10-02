@@ -23,6 +23,24 @@ struct QIB_7220_GPIO {
 	PSEUDO_BIT_STRUCT ( struct QIB_7220_GPIO_pb );
 };
 
+/** A Linda general scalar register */
+struct QIB_7220_scalar_pb {
+	pseudo_bit_t Value[64];
+};
+struct QIB_7220_scalar {
+	PSEUDO_BIT_STRUCT ( struct QIB_7220_scalar_pb );
+};
+
+/** A Linda eager receive descriptor */
+struct QIB_7220_RcvEgr_pb {
+	pseudo_bit_t Addr[37];
+	pseudo_bit_t BufSize[3];
+	pseudo_bit_t Reserved[24];
+};
+struct QIB_7220_RcvEgr {
+	PSEUDO_BIT_STRUCT ( struct QIB_7220_RcvEgr_pb );
+};
+
 /** Linda memory BAR size */
 #define LINDA_BAR0_SIZE 0x400000
 
@@ -43,6 +61,24 @@ struct QIB_7220_GPIO {
 
 /** Board serial number size within EEPROM */
 #define LINDA_EEPROM_SERIAL_SIZE 12
+
+/** Number of contexts (including kernel context) */
+#define LINDA_NUM_CONTEXTS 17
+
+/** PortCfg values for different numbers of contexts */
+enum linda_portcfg {
+	LINDA_PORTCFG_5CTX = 0,
+	LINDA_PORTCFG_9CTX = 1,
+	LINDA_PORTCFG_17CTX = 2,
+};
+
+/** PortCfg values for different numbers of contexts */
+#define LINDA_EAGER_ARRAY_SIZE_5CTX_0 2048
+#define LINDA_EAGER_ARRAY_SIZE_5CTX_OTHER 4096
+#define LINDA_EAGER_ARRAY_SIZE_9CTX_0 2048
+#define LINDA_EAGER_ARRAY_SIZE_9CTX_OTHER 2048
+#define LINDA_EAGER_ARRAY_SIZE_17CTX_0 2048
+#define LINDA_EAGER_ARRAY_SIZE_17CTX_OTHER 1024
 
 /** Maximum time for wait for external parallel bus request, in us */
 #define LINDA_EPB_REQUEST_MAX_WAIT_US 500
