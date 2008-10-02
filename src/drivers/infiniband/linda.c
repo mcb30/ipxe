@@ -25,6 +25,7 @@
 #include <gpxe/infiniband.h>
 #include <gpxe/i2c.h>
 #include <gpxe/bitbash.h>
+#include <gpxe/malloc.h>
 #include "linda.h"
 
 /**
@@ -36,10 +37,18 @@
 
 /** A Linda context */
 struct linda_context {
+	/** Context is in use */
+	unsigned int active;
 	/** Offset within register space of the eager array */
 	unsigned long eager_array;
 	/** Number of entries in eager array */
 	unsigned int eager_entries;
+	/** Receive header ring */
+	void *header;
+	/** Receive header tail (written by hardware) */
+	uint32_t header_tail;
+	// see if HW overwrites this!
+	uint32_t dummy;
 };
 
 /** A Linda HCA */
@@ -50,7 +59,7 @@ struct linda {
 	uint8_t guid[LINDA_EEPROM_GUID_SIZE];
 
 	/** Contexts */
-	struct linda_context ctx[LINDA_NUM_CONTEXTS];
+	struct linda_context context[LINDA_NUM_CONTEXTS];
 
 	/** I2C bit-bashing interface */
 	struct i2c_bit_basher i2c;
@@ -114,6 +123,473 @@ static void linda_writeq ( struct linda *linda, const uint32_t *dwords,
 }
 #define linda_writeq( _linda, _ptr, _offset ) \
 	linda_writeq ( (_linda), (_ptr)->u.dwords, (_offset) )
+
+/***************************************************************************
+ *
+ * Completion queue operations
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Create completion queue
+ *
+ * @v ibdev		Infiniband device
+ * @v cq		Completion queue
+ * @ret rc		Return status code
+ */
+static int linda_create_cq ( struct ib_device *ibdev,
+			     struct ib_completion_queue *cq ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	( void ) linda;
+	( void ) cq;
+	return 0;
+}
+
+/**
+ * Destroy completion queue
+ *
+ * @v ibdev		Infiniband device
+ * @v cq		Completion queue
+ */
+static void linda_destroy_cq ( struct ib_device *ibdev,
+			       struct ib_completion_queue *cq ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	( void ) linda;
+	( void ) cq;
+}
+
+/***************************************************************************
+ *
+ * Queue pair operations
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Map context number to QPN
+ *
+ * @v ctx		Context index
+ * @ret qpn		Queue pair number
+ */
+static int linda_ctx_to_qpn ( unsigned int ctx ) {
+	/* This mapping is fixed by hardware */
+	return ( ctx * 2 );
+}
+
+/**
+ * Map QPN to context number
+ *
+ * @v qpn		Queue pair number
+ * @ret ctx		Context index
+ */
+static int linda_qpn_to_ctx ( unsigned int qpn ) {
+	/* This mapping is fixed by hardware */
+	return ( qpn / 2 );
+}
+
+/**
+ * Allocate a context
+ *
+ * @v linda		Linda device
+ * @ret ctx		Context index, or negative error
+ */
+static int linda_alloc_ctx ( struct linda *linda ) {
+	unsigned int ctx;
+
+	for ( ctx = 0 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
+		if ( ! linda->context[ctx].active ) {
+			DBGC2 ( linda, "Linda %p context %d allocated\n",
+				linda, ctx );
+			linda->context[ctx].active = 1;
+			return ctx;
+		}
+	}
+
+	DBGC ( linda, "Linda %p out of available contexts\n", linda );
+	return -ENOENT;
+}
+
+/**
+ * Free a context
+ *
+ * @v linda		Linda device
+ * @v ctx		Context index
+ */
+static void linda_free_ctx ( struct linda *linda, unsigned int ctx ) {
+	DBGC2 ( linda, "Linda %p context %d freed\n", linda, ctx );
+	linda->context[ctx].active = 0;
+}
+
+/**
+ * Create queue pair
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ * @ret rc		Return status code
+ */
+static int linda_create_qp ( struct ib_device *ibdev,
+			     struct ib_queue_pair *qp ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct linda_context *context;
+	struct QIB_7220_RcvHdrAddr0 rcvhdraddr;
+	struct QIB_7220_RcvHdrTailAddr0 rcvhdrtailaddr;
+	struct QIB_7220_RcvCtrl rcvctrl;
+	int ctx;
+	int rc;
+
+	/* Locate an available context */
+	ctx = linda_alloc_ctx ( linda );
+	if ( ctx < 0 ) {
+		rc = ctx;
+		goto err_alloc_ctx;
+	}
+	qp->qpn = linda_ctx_to_qpn ( ctx );
+	context = &linda->context[ctx];
+
+	/* Reset context information */
+	context->header_tail = cpu_to_le32 ( 0 );
+
+	/* Allocate receive header buffer */
+	context->header = malloc_dma ( LINDA_RX_HEADERS_SIZE,
+				       LINDA_RX_HEADERS_ALIGN );
+	if ( ! context->header ) {
+		rc = -ENOMEM;
+		goto err_alloc_header;
+	}
+
+	/* Enable context in hardware */
+	memset ( &rcvhdraddr, 0, sizeof ( rcvhdraddr ) );
+	BIT_FILL_1 ( &rcvhdraddr, RcvHdrAddr0,
+		     ( virt_to_bus ( context->header ) >> 2 ) );
+	linda_writeq ( linda, &rcvhdraddr,
+		       ( QIB_7220_RcvHdrAddr0_offset +
+			 ( ctx * sizeof ( rcvhdraddr ) ) ) );
+	memset ( &rcvhdrtailaddr, 0, sizeof ( rcvhdrtailaddr ) );
+	BIT_FILL_1 ( &rcvhdrtailaddr, RcvHdrTailAddr0,
+		     ( virt_to_bus ( &context->header_tail ) >> 2 ) );
+	linda_writeq ( linda, &rcvhdrtailaddr,
+		       ( QIB_7220_RcvHdrTailAddr0_offset +
+			 ( ctx * sizeof ( rcvhdrtailaddr ) ) ) );
+	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+	BIT_SET ( &rcvctrl, PortEnable[ctx], 1 );
+	BIT_SET ( &rcvctrl, IntrAvail[ctx], 1 );
+	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+
+	return 0;
+
+	free_dma ( context->header, LINDA_RX_HEADERS_SIZE );
+ err_alloc_header:
+	linda_free_ctx ( linda, ctx );
+ err_alloc_ctx:
+	return rc;
+}
+
+/**
+ * Modify queue pair
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ * @v mod_list		Modification list
+ * @ret rc		Return status code
+ */
+static int linda_modify_qp ( struct ib_device *ibdev,
+			     struct ib_queue_pair *qp,
+			     unsigned long mod_list ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	( void ) linda;
+	( void ) qp;
+	( void ) mod_list;
+	return 0;
+}
+
+/**
+ * Destroy queue pair
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ */
+static void linda_destroy_qp ( struct ib_device *ibdev,
+			       struct ib_queue_pair *qp ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	unsigned int ctx = linda_qpn_to_ctx ( qp->qpn );
+
+	/* Free context */
+	linda_free_ctx ( linda, ctx );
+}
+
+/***************************************************************************
+ *
+ * Work request operations
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Post send work queue entry
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ * @v av		Address vector
+ * @v iobuf		I/O buffer
+ * @ret rc		Return status code
+ */
+static int linda_post_send ( struct ib_device *ibdev,
+			     struct ib_queue_pair *qp,
+			     struct ib_address_vector *av,
+			     struct io_buffer *iobuf ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	( void ) linda;
+	( void ) qp;
+	( void ) av;
+	( void ) iobuf;
+	return -ENOTSUP;
+}
+
+/**
+ * Post receive work queue entry
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ * @v iobuf		I/O buffer
+ * @ret rc		Return status code
+ */
+static int linda_post_recv ( struct ib_device *ibdev,
+			     struct ib_queue_pair *qp,
+			     struct io_buffer *iobuf ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	( void ) linda;
+	( void ) qp;
+	( void ) iobuf;
+	return -ENOTSUP;
+}
+
+/**
+ * Poll completion queue
+ *
+ * @v ibdev		Infiniband device
+ * @v cq		Completion queue
+ * @v complete_send	Send completion handler
+ * @v complete_recv	Receive completion handler
+ */
+static void linda_poll_cq ( struct ib_device *ibdev,
+			    struct ib_completion_queue *cq,
+			    ib_completer_t complete_send,
+			    ib_completer_t complete_recv ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	( void ) linda;
+	( void ) cq;
+	( void ) complete_send;
+	( void ) complete_recv;
+}
+
+/***************************************************************************
+ *
+ * Event queues
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Textual representation of link state
+ *
+ * @v link_state	Link state
+ * @ret link_text	Link state text
+ */
+static const char * linda_link_state_text ( unsigned int link_state ) {
+	switch ( link_state ) {
+	case LINDA_LINK_STATE_DOWN:	return "DOWN";
+	case LINDA_LINK_STATE_INIT:	return "INIT";
+	case LINDA_LINK_STATE_ARM:	return "ARM";
+	case LINDA_LINK_STATE_ACTIVE:	return "ACTIVE";
+	case LINDA_LINK_STATE_ACT_DEFER:return "ACT_DEFER";
+	default:			return "UNKNOWN";
+	}
+}
+
+/**
+ * Handle link state change
+ *
+ * @v linda		Linda device
+ */
+static void linda_link_state_changed ( struct ib_device *ibdev ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct QIB_7220_IBCStatus ibcstatus;
+	struct QIB_7220_EXTCtrl extctrl;
+	unsigned int link_state;
+
+	/* Read link state */
+	linda_readq ( linda, &ibcstatus, QIB_7220_IBCStatus_offset );
+	link_state = BIT_GET ( &ibcstatus, LinkState );
+	DBGC ( linda, "Linda %p link state %s (%s %s)\n", linda,
+	       linda_link_state_text ( link_state ),
+	       ( BIT_GET ( &ibcstatus, LinkSpeedActive ) ? "DDR" : "SDR" ),
+	       ( BIT_GET ( &ibcstatus, LinkWidthActive ) ? "x4" : "x1" ) );
+
+	/* Set LEDs according to link state */
+	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+	BIT_SET ( &extctrl, LEDPriPortGreenOn,
+		  ( ( link_state >= LINDA_LINK_STATE_INIT ) ? 1 : 0 ) );
+	BIT_SET ( &extctrl, LEDPriPortYellowOn,
+		  ( ( link_state >= LINDA_LINK_STATE_ACTIVE ) ? 1 : 0 ) );
+	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+
+	/* Notify Infiniband core of link state change */
+	ib_link_state_changed ( ibdev );
+}
+
+/**
+ * Poll event queue
+ *
+ * @v ibdev		Infiniband device
+ */
+static void linda_poll_eq ( struct ib_device *ibdev ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct QIB_7220_ErrStatus errstatus;
+	struct QIB_7220_ErrClear errclear;
+
+	/* Check for link status changes */
+	DBG_DISABLE ( DBGLVL_IO );
+	linda_readq ( linda, &errstatus, QIB_7220_ErrStatus_offset );
+	DBG_ENABLE ( DBGLVL_IO );
+	if ( BIT_GET ( &errstatus, IBStatusChanged ) ) {
+		linda_link_state_changed ( ibdev );
+		memset ( &errclear, 0, sizeof ( errclear ) );
+		BIT_FILL_1 ( &errclear, IBStatusChangedClear, 1 );
+		linda_writeq ( linda, &errclear, QIB_7220_ErrClear_offset );
+	}
+}
+
+/***************************************************************************
+ *
+ * Infiniband link-layer operations
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Initialise Infiniband link
+ *
+ * @v ibdev		Infiniband device
+ * @ret rc		Return status code
+ */
+static int linda_open ( struct ib_device *ibdev ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct QIB_7220_Control control;
+
+	/* Disable link */
+	linda_readq ( linda, &control, QIB_7220_Control_offset );
+	BIT_SET ( &control, LinkEn, 1 );
+	linda_writeq ( linda, &control, QIB_7220_Control_offset );
+	return 0;
+}
+
+/**
+ * Close Infiniband link
+ *
+ * @v ibdev		Infiniband device
+ */
+static void linda_close ( struct ib_device *ibdev ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct QIB_7220_Control control;
+
+	/* Disable link */
+	linda_readq ( linda, &control, QIB_7220_Control_offset );
+	BIT_SET ( &control, LinkEn, 0 );
+	linda_writeq ( linda, &control, QIB_7220_Control_offset );
+}
+
+/***************************************************************************
+ *
+ * Multicast group operations
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Attach to multicast group
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ * @v gid		Multicast GID
+ * @ret rc		Return status code
+ */
+static int linda_mcast_attach ( struct ib_device *ibdev,
+				struct ib_queue_pair *qp,
+				struct ib_gid *gid ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	( void ) linda;
+	( void ) qp;
+	( void ) gid;
+	return -ENOTSUP;
+}
+
+/**
+ * Detach from multicast group
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ * @v gid		Multicast GID
+ */
+static void linda_mcast_detach ( struct ib_device *ibdev,
+				 struct ib_queue_pair *qp,
+				 struct ib_gid *gid ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	( void ) linda;
+	( void ) qp;
+	( void ) gid;
+}
+
+/***************************************************************************
+ *
+ * MAD operations
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Issue management datagram
+ *
+ * @v ibdev		Infiniband device
+ * @v mad		Management datagram
+ * @v len		Length of management datagram
+ * @ret rc		Return status code
+ */
+static int linda_mad ( struct ib_device *ibdev, struct ib_mad_hdr *mad,
+		       size_t len ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	( void ) linda;
+	( void ) mad;
+	( void ) len;
+	return 0;
+}
+
+/** Linda Infiniband operations */
+static struct ib_device_operations linda_ib_operations = {
+	.create_cq	= linda_create_cq,
+	.destroy_cq	= linda_destroy_cq,
+	.create_qp	= linda_create_qp,
+	.modify_qp	= linda_modify_qp,
+	.destroy_qp	= linda_destroy_qp,
+	.post_send	= linda_post_send,
+	.post_recv	= linda_post_recv,
+	.poll_cq	= linda_poll_cq,
+	.poll_eq	= linda_poll_eq,
+	.open		= linda_open,
+	.close		= linda_close,
+	.mcast_attach	= linda_mcast_attach,
+	.mcast_detach	= linda_mcast_detach,
+	.mad		= linda_mad,
+};
 
 /***************************************************************************
  *
@@ -281,81 +757,7 @@ static int linda_read_eeprom ( struct linda *linda ) {
 
 /***************************************************************************
  *
- * RX datapath
- *
- ***************************************************************************
- */
-
-/**
- * Initialise RX contexts
- *
- * @v linda		Linda device
- * @ret rc		Return status code
- */
-static int linda_init_rx ( struct linda *linda ) {
-	struct QIB_7220_RcvCtrl rcvctrl;
-	struct QIB_7220_scalar rcvegrbase;
-	unsigned int portcfg;
-	unsigned long egrbase;
-	unsigned int eager_array_size_0;
-	unsigned int eager_array_size_other;
-	unsigned int ctx;
-
-	/* Select configuration based on number of contexts */
-	switch ( LINDA_NUM_CONTEXTS ) {
-	case 5:
-		portcfg = LINDA_PORTCFG_5CTX;
-		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_5CTX_0;
-		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_5CTX_OTHER;
-		break;
-	case 9:
-		portcfg = LINDA_PORTCFG_9CTX;
-		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_9CTX_0;
-		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_9CTX_OTHER;
-		break;
-	case 17:
-		portcfg = LINDA_PORTCFG_17CTX;
-		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_17CTX_0;
-		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_17CTX_OTHER;
-		break;
-	default:
-		linker_assert ( 0, invalid_LINDA_NUM_CONTEXTS );
-		return -EINVAL;
-	}
-
-	/* Configure number of contexts */
-	memset ( &rcvctrl, 0, sizeof ( rcvctrl ) );
-	BIT_FILL_4 ( &rcvctrl,
-		     PortEnable, ( ( 1 << LINDA_NUM_CONTEXTS ) - 1 ),
-		     IntrAvail, ( ( 1 << LINDA_NUM_CONTEXTS ) - 1),
-		     PortCfg, portcfg,
-		     RcvQPMapEnable, 1 );
-	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
-
-	/* Calculate eager array start addresses for each context */
-	linda_readq ( linda, &rcvegrbase, QIB_7220_RcvEgrBase_offset );
-	egrbase = BIT_GET ( &rcvegrbase, Value );
-	linda->ctx[0].eager_array = egrbase;
-	linda->ctx[0].eager_entries = eager_array_size_0;
-	egrbase += ( eager_array_size_0 * sizeof ( struct QIB_7220_RcvEgr ) );
-	for ( ctx = 1 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
-		linda->ctx[ctx].eager_array = egrbase;
-		linda->ctx[ctx].eager_entries = eager_array_size_other;
-		egrbase += ( eager_array_size_other *
-			     sizeof ( struct QIB_7220_RcvEgr ) );
-	}
-	for ( ctx = 0 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
-		DBGC ( linda, "Linda %p context %d eager array at %lx (%d "
-		       "entries)\n", linda, ctx, linda->ctx[ctx].eager_array,
-		       linda->ctx[ctx].eager_entries );
-	}
-
-	return 0;
-}
-
-/***************************************************************************
- *
- * Infiniband SerDes
+ * External parallel bus access
  *
  ***************************************************************************
  */
@@ -529,6 +931,8 @@ static int linda_ib_epb_mod_reg ( struct linda *linda, unsigned int cs,
 	int old_value;
 	int rc;
 
+	DBG_DISABLE ( DBGLVL_IO );
+
 	/* Sanity check */
 	assert ( ( value & mask ) == value );
 
@@ -559,6 +963,7 @@ static int linda_ib_epb_mod_reg ( struct linda *linda, unsigned int cs,
 	/* Release bus */
 	linda_ib_epb_release ( linda );
  out:
+	DBG_ENABLE ( DBGLVL_IO );
 	return rc;	
 }
 
@@ -581,13 +986,15 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int address,
 	int data;
 	int rc;
 
+	DBG_DISABLE ( DBGLVL_IO );
+
 	assert ( ! ( write && read ) );
 	assert ( ( address % LINDA_EPB_UC_CHUNK_SIZE ) == 0 );
 	assert ( ( len % LINDA_EPB_UC_CHUNK_SIZE ) == 0 );
 
 	/* Acquire bus ownership */
 	if ( ( rc = linda_ib_epb_request ( linda ) ) != 0 )
-		return rc;
+		goto out;
 
 	/* Process data */
 	while ( len ) {
@@ -646,8 +1053,103 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int address,
 	/* Release bus */
 	linda_ib_epb_release ( linda );
 
+ out:
+	DBG_ENABLE ( DBGLVL_IO );
 	return rc;
 }
+
+/***************************************************************************
+ *
+ * RX initialisation
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Initialise RX contexts
+ *
+ * @v linda		Linda device
+ * @ret rc		Return status code
+ */
+static int linda_init_rx ( struct linda *linda ) {
+	struct QIB_7220_RcvCtrl rcvctrl;
+	struct QIB_7220_scalar rcvegrbase;
+	struct QIB_7220_scalar rcvhdrentsize;
+	struct QIB_7220_scalar rcvhdrcnt;
+	unsigned int portcfg;
+	unsigned long egrbase;
+	unsigned int eager_array_size_0;
+	unsigned int eager_array_size_other;
+	unsigned int ctx;
+
+	/* Select configuration based on number of contexts */
+	switch ( LINDA_NUM_CONTEXTS ) {
+	case 5:
+		portcfg = LINDA_PORTCFG_5CTX;
+		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_5CTX_0;
+		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_5CTX_OTHER;
+		break;
+	case 9:
+		portcfg = LINDA_PORTCFG_9CTX;
+		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_9CTX_0;
+		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_9CTX_OTHER;
+		break;
+	case 17:
+		portcfg = LINDA_PORTCFG_17CTX;
+		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_17CTX_0;
+		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_17CTX_OTHER;
+		break;
+	default:
+		linker_assert ( 0, invalid_LINDA_NUM_CONTEXTS );
+		return -EINVAL;
+	}
+
+	/* Configure number of contexts */
+	memset ( &rcvctrl, 0, sizeof ( rcvctrl ) );
+	BIT_FILL_3 ( &rcvctrl,
+		     TailUpd, 1,
+		     PortCfg, portcfg,
+		     RcvQPMapEnable, 1 );
+	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+
+	/* Configure receive header buffer sizes */
+	memset ( &rcvhdrcnt, 0, sizeof ( rcvhdrcnt ) );
+	BIT_FILL_1 ( &rcvhdrcnt, Value, LINDA_RX_HEADER_COUNT );
+	linda_writeq ( linda, &rcvhdrcnt, QIB_7220_RcvHdrCnt_offset );
+	memset ( &rcvhdrentsize, 0, sizeof ( rcvhdrentsize ) );
+	BIT_FILL_1 ( &rcvhdrentsize, Value, ( LINDA_RX_HEADER_SIZE >> 2 ) );
+	linda_writeq ( linda, &rcvhdrentsize, QIB_7220_RcvHdrEntSize_offset );
+
+	/* Calculate eager array start addresses for each context */
+	linda_readq ( linda, &rcvegrbase, QIB_7220_RcvEgrBase_offset );
+	egrbase = BIT_GET ( &rcvegrbase, Value );
+	linda->context[0].eager_array = egrbase;
+	linda->context[0].eager_entries = eager_array_size_0;
+	egrbase += ( eager_array_size_0 * sizeof ( struct QIB_7220_RcvEgr ) );
+	for ( ctx = 1 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
+		linda->context[ctx].eager_array = egrbase;
+		linda->context[ctx].eager_entries = eager_array_size_other;
+		egrbase += ( eager_array_size_other *
+			     sizeof ( struct QIB_7220_RcvEgr ) );
+	}
+	for ( ctx = 0 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
+		DBGC ( linda, "Linda %p context %d eager array at %lx (%d "
+		       "entries)\n", linda, ctx,
+		       linda->context[ctx].eager_array,
+		       linda->context[ctx].eager_entries );
+	}
+
+	
+
+	return 0;
+}
+
+/***************************************************************************
+ *
+ * Infiniband SerDes initialisation
+ *
+ ***************************************************************************
+ */
 
 /** A Linda SerDes parameter */
 struct linda_serdes_param {
@@ -979,364 +1481,10 @@ static int linda_init_ib_serdes ( struct linda *linda ) {
 
 /***************************************************************************
  *
- * Completion queue operations
+ * PCI layer interface
  *
  ***************************************************************************
  */
-
-/**
- * Create completion queue
- *
- * @v ibdev		Infiniband device
- * @v cq		Completion queue
- * @ret rc		Return status code
- */
-static int linda_create_cq ( struct ib_device *ibdev,
-			     struct ib_completion_queue *cq ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	( void ) linda;
-	( void ) cq;
-	return 0;
-}
-
-/**
- * Destroy completion queue
- *
- * @v ibdev		Infiniband device
- * @v cq		Completion queue
- */
-static void linda_destroy_cq ( struct ib_device *ibdev,
-			       struct ib_completion_queue *cq ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	( void ) linda;
-	( void ) cq;
-}
-
-/***************************************************************************
- *
- * Queue pair operations
- *
- ***************************************************************************
- */
-
-/**
- * Create queue pair
- *
- * @v ibdev		Infiniband device
- * @v qp		Queue pair
- * @ret rc		Return status code
- */
-static int linda_create_qp ( struct ib_device *ibdev,
-			     struct ib_queue_pair *qp ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	( void ) linda;
-	( void ) qp;
-	return 0;
-}
-
-/**
- * Modify queue pair
- *
- * @v ibdev		Infiniband device
- * @v qp		Queue pair
- * @v mod_list		Modification list
- * @ret rc		Return status code
- */
-static int linda_modify_qp ( struct ib_device *ibdev,
-			     struct ib_queue_pair *qp,
-			     unsigned long mod_list ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	( void ) linda;
-	( void ) qp;
-	( void ) mod_list;
-	return 0;
-}
-
-/**
- * Destroy queue pair
- *
- * @v ibdev		Infiniband device
- * @v qp		Queue pair
- */
-static void linda_destroy_qp ( struct ib_device *ibdev,
-			       struct ib_queue_pair *qp ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	( void ) linda;
-	( void ) qp;
-}
-
-/***************************************************************************
- *
- * Work request operations
- *
- ***************************************************************************
- */
-
-/**
- * Post send work queue entry
- *
- * @v ibdev		Infiniband device
- * @v qp		Queue pair
- * @v av		Address vector
- * @v iobuf		I/O buffer
- * @ret rc		Return status code
- */
-static int linda_post_send ( struct ib_device *ibdev,
-			     struct ib_queue_pair *qp,
-			     struct ib_address_vector *av,
-			     struct io_buffer *iobuf ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	( void ) linda;
-	( void ) qp;
-	( void ) av;
-	( void ) iobuf;
-	return -ENOTSUP;
-}
-
-/**
- * Post receive work queue entry
- *
- * @v ibdev		Infiniband device
- * @v qp		Queue pair
- * @v iobuf		I/O buffer
- * @ret rc		Return status code
- */
-static int linda_post_recv ( struct ib_device *ibdev,
-			     struct ib_queue_pair *qp,
-			     struct io_buffer *iobuf ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	( void ) linda;
-	( void ) qp;
-	( void ) iobuf;
-	return -ENOTSUP;
-}
-
-/**
- * Poll completion queue
- *
- * @v ibdev		Infiniband device
- * @v cq		Completion queue
- * @v complete_send	Send completion handler
- * @v complete_recv	Receive completion handler
- */
-static void linda_poll_cq ( struct ib_device *ibdev,
-			    struct ib_completion_queue *cq,
-			    ib_completer_t complete_send,
-			    ib_completer_t complete_recv ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	( void ) linda;
-	( void ) cq;
-	( void ) complete_send;
-	( void ) complete_recv;
-}
-
-/***************************************************************************
- *
- * Event queues
- *
- ***************************************************************************
- */
-
-/**
- * Textual representation of link state
- *
- * @v link_state	Link state
- * @ret link_text	Link state text
- */
-static const char * linda_link_state_text ( unsigned int link_state ) {
-	switch ( link_state ) {
-	case LINDA_LINK_STATE_DOWN:	return "DOWN";
-	case LINDA_LINK_STATE_INIT:	return "INIT";
-	case LINDA_LINK_STATE_ARM:	return "ARM";
-	case LINDA_LINK_STATE_ACTIVE:	return "ACTIVE";
-	case LINDA_LINK_STATE_ACT_DEFER:return "ACT_DEFER";
-	default:			return "UNKNOWN";
-	}
-}
-
-/**
- * Handle link state change
- *
- * @v linda		Linda device
- */
-static void linda_link_state_changed ( struct ib_device *ibdev ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct QIB_7220_IBCStatus ibcstatus;
-	struct QIB_7220_EXTCtrl extctrl;
-	unsigned int link_state;
-
-	/* Read link state */
-	linda_readq ( linda, &ibcstatus, QIB_7220_IBCStatus_offset );
-	link_state = BIT_GET ( &ibcstatus, LinkState );
-	DBGC ( linda, "Linda %p link state %s (%s %s)\n", linda,
-	       linda_link_state_text ( link_state ),
-	       ( BIT_GET ( &ibcstatus, LinkSpeedActive ) ? "DDR" : "SDR" ),
-	       ( BIT_GET ( &ibcstatus, LinkWidthActive ) ? "x4" : "x1" ) );
-
-	/* Set LEDs according to link state */
-	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
-	BIT_SET ( &extctrl, LEDPriPortGreenOn,
-		  ( ( link_state >= LINDA_LINK_STATE_INIT ) ? 1 : 0 ) );
-	BIT_SET ( &extctrl, LEDPriPortYellowOn,
-		  ( ( link_state >= LINDA_LINK_STATE_ACTIVE ) ? 1 : 0 ) );
-	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
-
-	/* Notify Infiniband core of link state change */
-	ib_link_state_changed ( ibdev );
-}
-
-/**
- * Poll event queue
- *
- * @v ibdev		Infiniband device
- */
-static void linda_poll_eq ( struct ib_device *ibdev ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct QIB_7220_ErrStatus errstatus;
-	struct QIB_7220_ErrClear errclear;
-
-	/* Check for link status changes */
-	linda_readq ( linda, &errstatus, QIB_7220_ErrStatus_offset );
-	if ( BIT_GET ( &errstatus, IBStatusChanged ) ) {
-		linda_link_state_changed ( ibdev );
-		memset ( &errclear, 0, sizeof ( errclear ) );
-		BIT_FILL_1 ( &errclear, IBStatusChangedClear, 1 );
-		linda_writeq ( linda, &errclear, QIB_7220_ErrClear_offset );
-	}
-}
-
-/***************************************************************************
- *
- * Infiniband link-layer operations
- *
- ***************************************************************************
- */
-
-/**
- * Initialise Infiniband link
- *
- * @v ibdev		Infiniband device
- * @ret rc		Return status code
- */
-static int linda_open ( struct ib_device *ibdev ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct QIB_7220_Control control;
-
-	/* Disable link */
-	linda_readq ( linda, &control, QIB_7220_Control_offset );
-	BIT_SET ( &control, LinkEn, 1 );
-	linda_writeq ( linda, &control, QIB_7220_Control_offset );
-	return 0;
-}
-
-/**
- * Close Infiniband link
- *
- * @v ibdev		Infiniband device
- */
-static void linda_close ( struct ib_device *ibdev ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct QIB_7220_Control control;
-
-	/* Disable link */
-	linda_readq ( linda, &control, QIB_7220_Control_offset );
-	BIT_SET ( &control, LinkEn, 0 );
-	linda_writeq ( linda, &control, QIB_7220_Control_offset );
-}
-
-/***************************************************************************
- *
- * Multicast group operations
- *
- ***************************************************************************
- */
-
-/**
- * Attach to multicast group
- *
- * @v ibdev		Infiniband device
- * @v qp		Queue pair
- * @v gid		Multicast GID
- * @ret rc		Return status code
- */
-static int linda_mcast_attach ( struct ib_device *ibdev,
-				struct ib_queue_pair *qp,
-				struct ib_gid *gid ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	( void ) linda;
-	( void ) qp;
-	( void ) gid;
-	return -ENOTSUP;
-}
-
-/**
- * Detach from multicast group
- *
- * @v ibdev		Infiniband device
- * @v qp		Queue pair
- * @v gid		Multicast GID
- */
-static void linda_mcast_detach ( struct ib_device *ibdev,
-				 struct ib_queue_pair *qp,
-				 struct ib_gid *gid ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	( void ) linda;
-	( void ) qp;
-	( void ) gid;
-}
-
-/***************************************************************************
- *
- * MAD operations
- *
- ***************************************************************************
- */
-
-/**
- * Issue management datagram
- *
- * @v ibdev		Infiniband device
- * @v mad		Management datagram
- * @v len		Length of management datagram
- * @ret rc		Return status code
- */
-static int linda_mad ( struct ib_device *ibdev, struct ib_mad_hdr *mad,
-		       size_t len ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	( void ) linda;
-	( void ) mad;
-	( void ) len;
-	return 0;
-}
-
-/** Linda Infiniband operations */
-static struct ib_device_operations linda_ib_operations = {
-	.create_cq	= linda_create_cq,
-	.destroy_cq	= linda_destroy_cq,
-	.create_qp	= linda_create_qp,
-	.modify_qp	= linda_modify_qp,
-	.destroy_qp	= linda_destroy_qp,
-	.post_send	= linda_post_send,
-	.post_recv	= linda_post_recv,
-	.poll_cq	= linda_poll_cq,
-	.poll_eq	= linda_poll_eq,
-	.open		= linda_open,
-	.close		= linda_close,
-	.mcast_attach	= linda_mcast_attach,
-	.mcast_detach	= linda_mcast_detach,
-	.mad		= linda_mad,
-};
 
 /**
  * Probe PCI device
