@@ -411,70 +411,77 @@ static int linda_post_recv ( struct ib_device *ibdev,
 }
 
 /**
- * Poll receive work queue
+ * Complete receive work queue entry
  *
  * @v ibdev		Infiniband device
- * @v recv_wq		Receive work queue
- * @v complete_recv	Receive completion handler
+ * @v qp		Queue pair
+ * @v context		Linda context
+ * @v header_offs	Header offset
  */
-static void linda_poll_recv_wq ( struct ib_device *ibdev,
-				 struct ib_work_queue *recv_wq,
-				 ib_completer_t complete_recv ) {
+static void linda_complete_recv ( struct ib_device *ibdev,
+				  struct ib_queue_pair *qp,
+				  struct linda_context *context,
+				  unsigned int header_offs ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct linda_context *context;
 	struct QIB_7220_RcvHdrFlags *rcvhdrflags;
-	struct QIB_7220_RcvHdrHead0 rcvhdrhead;
-	unsigned int ctx;
-	unsigned int header_prod;
+	struct ib_completion completion;
 	unsigned int rcvtype;
 	unsigned int pktlen;
 	unsigned int egrindex;
 	unsigned int useegrbfr;
+	unsigned int iberr, mkerr, tiderr, khdrerr, mtuerr;
+	unsigned int lenerr, parityerr, vcrcerr, icrcerr;
+	unsigned int err;
 	unsigned int hdrqoffset;
+	unsigned int header_len;
+	unsigned int payload_len;
 
-	/* Identify context for this queue */
-	ctx = linda_qpn_to_ctx ( recv_wq->qp->qpn );
-	context = &linda->context[ctx];
+	/* RcvHdrFlags are at the end of the header entry */
+	rcvhdrflags = ( context->header + header_offs + LINDA_RX_HEADER_SIZE -
+			sizeof ( *rcvhdrflags ) );
+	rcvtype = BIT_GET ( rcvhdrflags, RcvType );
+	pktlen = BIT_GET ( rcvhdrflags, PktLen );
+	egrindex = BIT_GET ( rcvhdrflags, EgrIndex );
+	useegrbfr = BIT_GET ( rcvhdrflags, UseEgrBfr );
+	hdrqoffset = ( BIT_GET ( rcvhdrflags, HdrqOffset ) << 2 );
+	iberr = BIT_GET ( rcvhdrflags, IBErr );
+	mkerr = BIT_GET ( rcvhdrflags, MKErr );
+	tiderr = BIT_GET ( rcvhdrflags, TIDErr );
+	khdrerr = BIT_GET ( rcvhdrflags, KHdrErr );
+	mtuerr = BIT_GET ( rcvhdrflags, MTUErr );
+	lenerr = BIT_GET ( rcvhdrflags, LenErr );
+	parityerr = BIT_GET ( rcvhdrflags, ParityErr );
+	vcrcerr = BIT_GET ( rcvhdrflags, VCRCErr );
+	icrcerr = BIT_GET ( rcvhdrflags, ICRCErr );
+	header_len = ( LINDA_RX_HEADER_SIZE - hdrqoffset -
+		       sizeof ( *rcvhdrflags ) );
+	payload_len = ( pktlen - header_len - 4 /* ICRC */ );
+	err = ( iberr | mkerr | tiderr | khdrerr | mtuerr |
+		lenerr | parityerr | vcrcerr | icrcerr );
+	DBGC ( linda, "Linda %p QPN %ld RX hdr %d type %d len %d(%d+%d+4) "
+	       "egr %d%s%s%s%s%s%s%s%s%s%s%s%s\n", linda, qp->qpn,
+	       ( header_offs / LINDA_RX_HEADER_SIZE ), rcvtype,
+	       pktlen, header_len, payload_len, egrindex,
+	       ( useegrbfr ? "" : "(unused)" ), ( err ? " [Err" : "" ),
+	       ( iberr ? " IB" : "" ), ( mkerr ? " MK" : "" ),
+	       ( tiderr ? " TID" : "" ), ( khdrerr ? " KHdr" : "" ),
+	       ( mtuerr ? " MTU" : "" ), ( lenerr ? " Len" : "" ),
+	       ( parityerr ? " Parity" : "" ), ( vcrcerr ? " VCRC" : "" ),
+	       ( icrcerr ? " ICRC" : "" ), ( err ? "]" : "" ) );
+	/* IB header is placed immediately before RcvHdrFlags */
+	DBGC_HDA ( linda, 0,
+		   ( ( ( void * ) rcvhdrflags ) - header_len ),
+		   ( header_len + sizeof ( *rcvhdrflags ) ) );
 
-	/* Check for received packets */
-	header_prod = ( BIT_GET ( &context->header_prod, Value ) << 2 );
-	if ( header_prod == context->header_cons )
-		return;
-
-	/* Process all received packets */
-	while ( context->header_cons != header_prod ) {
-		rcvhdrflags = ( context->header + context->header_cons +
-				LINDA_RX_HEADER_SIZE - sizeof (*rcvhdrflags) );
-		rcvtype = BIT_GET ( rcvhdrflags, RcvType );
-		pktlen = BIT_GET ( rcvhdrflags, PktLen );
-		egrindex = BIT_GET ( rcvhdrflags, EgrIndex );
-		useegrbfr = BIT_GET ( rcvhdrflags, UseEgrBfr );
-		DBGC ( linda, "Linda %p QPN %ld RX hdr %d type %d len %d "
-		       "egr %d%s\n", linda, recv_wq->qp->qpn,
-		       ( context->header_cons / LINDA_RX_HEADER_SIZE ),
-		       rcvtype, pktlen, egrindex,
-		       ( useegrbfr ? "" : "(unused)" ) );
-		hdrqoffset = ( BIT_GET ( rcvhdrflags, HdrqOffset ) << 2 );
-		DBGC_HDA ( linda, 0,
-			   ( context->header + context->header_cons +
-			     hdrqoffset ),
-			   ( LINDA_RX_HEADER_SIZE - hdrqoffset ) );
-
-		context->header_cons += LINDA_RX_HEADER_SIZE;
-		context->header_cons %= LINDA_RX_HEADERS_SIZE;
+	/* Construct IB completion indicator */
+	memset ( &completion, 0, sizeof ( completion ) );
+	completion.len = payload_len;
+	if ( err ) {
+		/* Report any errors as "local queue pair
+		 * operation error" for simplicity.
+		 */
+		completion.syndrome = IB_SYN_LOCAL_QP;
 	}
-
-	/* Update consumer counter */
-	context->header_cons = header_prod;
-	memset ( &rcvhdrhead, 0, sizeof ( rcvhdrhead ) );
-	BIT_FILL_2 ( &rcvhdrhead,
-		     RcvHeadPointer, ( context->header_cons >> 2 ),
-		     counter, 1 );
-	linda_writeq ( linda, &rcvhdrhead,
-		       ( QIB_7220_RcvHdrHead0_offset +
-			 ( ctx * sizeof ( rcvhdrhead ) ) ) );
-
-	( void ) complete_recv;
 }
 
 /**
@@ -482,23 +489,52 @@ static void linda_poll_recv_wq ( struct ib_device *ibdev,
  *
  * @v ibdev		Infiniband device
  * @v cq		Completion queue
- * @v complete_send	Send completion handler
- * @v complete_recv	Receive completion handler
  */
 static void linda_poll_cq ( struct ib_device *ibdev,
-			    struct ib_completion_queue *cq,
-			    ib_completer_t complete_send,
-			    ib_completer_t complete_recv ) {
-	struct ib_work_queue *wq;
+			    struct ib_completion_queue *cq ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct ib_work_queue *recv_wq;
+	struct linda_context *context;
+	struct QIB_7220_RcvHdrHead0 rcvhdrhead;
+	unsigned int ctx;
+	unsigned int header_prod;
 
 	/* Poll associated RX queues */
-	list_for_each_entry ( wq, &cq->work_queues, list ) {
-		if ( wq->is_send )
+	list_for_each_entry ( recv_wq, &cq->work_queues, list ) {
+		if ( recv_wq->is_send )
 			continue;
-		linda_poll_recv_wq ( ibdev, wq, complete_recv );
-	}
 
-	( void ) complete_send;
+		/* Identify context for this queue */
+		ctx = linda_qpn_to_ctx ( recv_wq->qp->qpn );
+		context = &linda->context[ctx];
+
+		/* Check for received packets */
+		header_prod =
+			( BIT_GET ( &context->header_prod, Value ) << 2 );
+		if ( header_prod == context->header_cons )
+			continue;
+
+		/* Process all received packets */
+		while ( context->header_cons != header_prod ) {
+
+			/* Complete the receive */
+			linda_complete_recv ( ibdev, recv_wq->qp,
+					      context, context->header_cons );
+			
+			/* Increment the consumer offset */
+			context->header_cons += LINDA_RX_HEADER_SIZE;
+			context->header_cons %= LINDA_RX_HEADERS_SIZE;
+		}
+		
+		/* Update consumer offset */
+		memset ( &rcvhdrhead, 0, sizeof ( rcvhdrhead ) );
+		BIT_FILL_2 ( &rcvhdrhead,
+			     RcvHeadPointer, ( context->header_cons >> 2 ),
+			     counter, 1 );
+		linda_writeq ( linda, &rcvhdrhead,
+			       ( QIB_7220_RcvHdrHead0_offset +
+				 ( ctx * sizeof ( rcvhdrhead ) ) ) );
+	}
 }
 
 /***************************************************************************
@@ -578,8 +614,7 @@ static void linda_poll_eq ( struct ib_device *ibdev ) {
 	}
 
 	/* Poll the kernel completion queue */
-	// fixme - no NULLs!
-	ib_poll_cq ( ibdev, linda->kernel_cq, NULL, NULL );
+	ib_poll_cq ( ibdev, linda->kernel_cq );
 }
 
 /***************************************************************************
@@ -1601,17 +1636,61 @@ static int linda_init_ib_serdes ( struct linda *linda ) {
  */
 
 /**
+ * Complete send in context 0
+ *
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ * @v completion	Completion
+ * @v iobuf		I/O buffer
+ */
+static void linda_kctx_complete_send ( struct ib_device *ibdev,
+				       struct ib_queue_pair *qp,
+				       struct ib_completion *completion,
+				       struct io_buffer *iobuf ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	( void ) linda;
+	( void ) qp;
+	( void ) completion;
+	( void ) iobuf;
+}
+
+/**
+ * Complete receive in context 0
+ *
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ * @v completion	Completion
+ * @v iobuf		I/O buffer
+ */
+static void linda_kctx_complete_recv ( struct ib_device *ibdev,
+				       struct ib_queue_pair *qp,
+				       struct ib_completion *completion,
+				       struct io_buffer *iobuf ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	( void ) linda;
+	( void ) qp;
+	( void ) completion;
+	( void ) iobuf;
+}
+
+/**
  * Create context 0
  *
  * @v ibdev		Infiniband device
  * @ret rc		Return status code
  */
-static int linda_create_kernel_context ( struct ib_device *ibdev ) {
+static int linda_create_kctx ( struct ib_device *ibdev ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
 	int rc;
 
 	/* Create completion queue */
-	linda->kernel_cq = ib_create_cq ( ibdev, 0 );
+	linda->kernel_cq = ib_create_cq ( ibdev, 0,
+					  linda_kctx_complete_send,
+					  linda_kctx_complete_recv );
 	if ( ! linda->kernel_cq ) {
 		rc = -ENOMEM;
 		goto err_create_cq;
@@ -1643,7 +1722,7 @@ static int linda_create_kernel_context ( struct ib_device *ibdev ) {
  *
  * @v ibdev		Infiniband device
  */
-static void linda_destroy_kernel_context ( struct ib_device *ibdev ) {
+static void linda_destroy_kctx ( struct ib_device *ibdev ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
 
 	ib_destroy_qp ( ibdev, linda->kernel_qp );
@@ -1715,8 +1794,8 @@ static int linda_probe ( struct pci_device *pci,
 		goto err_init_ib_serdes;
 
 	/* Create the kernel context */
-	if ( ( rc = linda_create_kernel_context ( ibdev ) ) != 0 )
-		goto err_create_kernel_context;
+	if ( ( rc = linda_create_kctx ( ibdev ) ) != 0 )
+		goto err_create_kctx;
 
 	/* Register Infiniband device */
 	if ( ( rc = register_ibdev ( ibdev ) ) != 0 ) {
@@ -1729,8 +1808,8 @@ static int linda_probe ( struct pci_device *pci,
 
 	unregister_ibdev ( ibdev );
  err_register_ibdev:
-	linda_destroy_kernel_context ( ibdev );
- err_create_kernel_context:
+	linda_destroy_kctx ( ibdev );
+ err_create_kctx:
  err_init_rx:
  err_init_ib_serdes:
  err_read_eeprom:
@@ -1748,7 +1827,7 @@ static int linda_probe ( struct pci_device *pci,
 static void linda_remove ( struct pci_device *pci ) {
 	struct ib_device *ibdev = pci_get_drvdata ( pci );
 
-	linda_destroy_kernel_context ( ibdev );
+	linda_destroy_kctx ( ibdev );
 	unregister_ibdev ( ibdev );
 	ibdev_put ( ibdev );
 }
