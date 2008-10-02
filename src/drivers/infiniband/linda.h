@@ -101,6 +101,18 @@ enum linda_portcfg {
 /** RX header alignment */
 #define LINDA_RX_HEADERS_ALIGN 64
 
+/** Context 0 number of send WQEs
+ *
+ * This is a policy decision.
+ */
+#define LINDA_KCTX_NUM_SEND_WQES 2
+
+/** Context 0 number of receive WQEs
+ *
+ * This is a policy decision.
+ */
+#define LINDA_KCTX_NUM_RECV_WQES 2
+
 /** Maximum time for wait for external parallel bus request, in us */
 #define LINDA_EPB_REQUEST_MAX_WAIT_US 500
 

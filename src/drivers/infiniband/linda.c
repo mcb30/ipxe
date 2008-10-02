@@ -45,10 +45,10 @@ struct linda_context {
 	unsigned int eager_entries;
 	/** Receive header ring */
 	void *header;
-	/** Receive header tail (written by hardware) */
-	uint32_t header_tail;
-	// see if HW overwrites this!
-	uint32_t dummy;
+	/** Receive header producer index (written by hardware) */
+	struct QIB_7220_scalar header_prod;
+	/** Receive header consumer index */
+	unsigned int header_cons;
 };
 
 /** A Linda HCA */
@@ -60,6 +60,11 @@ struct linda {
 
 	/** Contexts */
 	struct linda_context context[LINDA_NUM_CONTEXTS];
+
+	/** Kernel context completion queue */
+	struct ib_completion_queue *kernel_cq;
+	/** Kernel context queue pair */
+	struct ib_queue_pair *kernel_qp;
 
 	/** I2C bit-bashing interface */
 	struct i2c_bit_basher i2c;
@@ -141,9 +146,18 @@ static void linda_writeq ( struct linda *linda, const uint32_t *dwords,
 static int linda_create_cq ( struct ib_device *ibdev,
 			     struct ib_completion_queue *cq ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
+	static int cqn;
 
-	( void ) linda;
-	( void ) cq;
+	/* The hardware has no concept of completion queues.  We
+	 * simply use the association between CQs and WQs (already
+	 * handled by the IB core) to decide which WQs to poll.
+	 *
+	 * We do set a CQN, just to avoid confusing debug messages
+	 * from the IB core.
+	 */
+	cq->cqn = ++cqn;
+	DBGC ( linda, "Linda %p CQN %ld created\n", linda, cq->cqn );
+
 	return 0;
 }
 
@@ -157,8 +171,8 @@ static void linda_destroy_cq ( struct ib_device *ibdev,
 			       struct ib_completion_queue *cq ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
 
-	( void ) linda;
-	( void ) cq;
+	/* Nothing to do */
+	DBGC ( linda, "Linda %p CQN %ld destroyed\n", linda, cq->cqn );
 }
 
 /***************************************************************************
@@ -201,7 +215,7 @@ static int linda_alloc_ctx ( struct linda *linda ) {
 
 	for ( ctx = 0 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
 		if ( ! linda->context[ctx].active ) {
-			DBGC2 ( linda, "Linda %p context %d allocated\n",
+			DBGC2 ( linda, "Linda %p CTX %d allocated\n",
 				linda, ctx );
 			linda->context[ctx].active = 1;
 			return ctx;
@@ -219,7 +233,7 @@ static int linda_alloc_ctx ( struct linda *linda ) {
  * @v ctx		Context index
  */
 static void linda_free_ctx ( struct linda *linda, unsigned int ctx ) {
-	DBGC2 ( linda, "Linda %p context %d freed\n", linda, ctx );
+	DBGC2 ( linda, "Linda %p CTX %d freed\n", linda, ctx );
 	linda->context[ctx].active = 0;
 }
 
@@ -250,7 +264,8 @@ static int linda_create_qp ( struct ib_device *ibdev,
 	context = &linda->context[ctx];
 
 	/* Reset context information */
-	context->header_tail = cpu_to_le32 ( 0 );
+	memset ( &context->header_prod, 0, sizeof ( context->header_prod ) );
+	context->header_cons = 0;
 
 	/* Allocate receive header buffer */
 	context->header = malloc_dma ( LINDA_RX_HEADERS_SIZE,
@@ -269,7 +284,7 @@ static int linda_create_qp ( struct ib_device *ibdev,
 			 ( ctx * sizeof ( rcvhdraddr ) ) ) );
 	memset ( &rcvhdrtailaddr, 0, sizeof ( rcvhdrtailaddr ) );
 	BIT_FILL_1 ( &rcvhdrtailaddr, RcvHdrTailAddr0,
-		     ( virt_to_bus ( &context->header_tail ) >> 2 ) );
+		     ( virt_to_bus ( &context->header_prod ) >> 2 ) );
 	linda_writeq ( linda, &rcvhdrtailaddr,
 		       ( QIB_7220_RcvHdrTailAddr0_offset +
 			 ( ctx * sizeof ( rcvhdrtailaddr ) ) ) );
@@ -278,6 +293,10 @@ static int linda_create_qp ( struct ib_device *ibdev,
 	BIT_SET ( &rcvctrl, IntrAvail[ctx], 1 );
 	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
 
+	DBGC ( linda, "Linda %p QPN %ld using CTX %d hdrs [%lx,%lx) prod "
+	       "%lx\n", linda, qp->qpn, ctx, virt_to_bus ( context->header ),
+	       ( virt_to_bus ( context->header ) + LINDA_RX_HEADERS_SIZE ),
+	       virt_to_bus ( &context->header_prod ) );
 	return 0;
 
 	free_dma ( context->header, LINDA_RX_HEADERS_SIZE );
@@ -316,6 +335,21 @@ static void linda_destroy_qp ( struct ib_device *ibdev,
 			       struct ib_queue_pair *qp ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
 	unsigned int ctx = linda_qpn_to_ctx ( qp->qpn );
+	struct linda_context *context = &linda->context[ctx];
+	struct QIB_7220_RcvCtrl rcvctrl;
+
+	/* Disable context in hardware */
+	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+	BIT_SET ( &rcvctrl, PortEnable[ctx], 0 );
+	BIT_SET ( &rcvctrl, IntrAvail[ctx], 0 );
+	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+
+	/* Make sure the hardware has seen that the context is disabled */
+	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+	mb();
+
+	/* Free headers ring */
+	free_dma ( context->header, LINDA_RX_HEADERS_SIZE );
 
 	/* Free context */
 	linda_free_ctx ( linda, ctx );
@@ -382,9 +416,26 @@ static void linda_poll_cq ( struct ib_device *ibdev,
 			    ib_completer_t complete_send,
 			    ib_completer_t complete_recv ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct ib_work_queue *wq;
+	unsigned int ctx;
+	struct linda_context *context;
+	unsigned int header_prod;
 
-	( void ) linda;
-	( void ) cq;
+	/* Poll associated RX queues */
+	list_for_each_entry ( wq, &cq->work_queues, list ) {
+		if ( wq->is_send )
+			continue;
+		ctx = linda_qpn_to_ctx ( wq->qp->qpn );
+		DBG ( "Polling CTX %d\n", ctx );
+		context = &linda->context[ctx];
+		header_prod = BIT_GET ( &context->header_prod, Value );
+		if ( header_prod != context->header_cons ) {
+			DBGC ( linda, "Linda %p QPN %ld prod %d\n",
+			       linda, wq->qp->qpn, header_prod );
+			context->header_cons = header_prod;
+		}
+	}
+
 	( void ) complete_send;
 	( void ) complete_recv;
 }
@@ -464,6 +515,10 @@ static void linda_poll_eq ( struct ib_device *ibdev ) {
 		BIT_FILL_1 ( &errclear, IBStatusChangedClear, 1 );
 		linda_writeq ( linda, &errclear, QIB_7220_ErrClear_offset );
 	}
+
+	/* Poll the kernel completion queue */
+	// fixme - no NULLs!
+	ib_poll_cq ( ibdev, linda->kernel_cq, NULL, NULL );
 }
 
 /***************************************************************************
@@ -1133,13 +1188,11 @@ static int linda_init_rx ( struct linda *linda ) {
 			     sizeof ( struct QIB_7220_RcvEgr ) );
 	}
 	for ( ctx = 0 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
-		DBGC ( linda, "Linda %p context %d eager array at %lx (%d "
+		DBGC ( linda, "Linda %p CTX %d eager array at %lx (%d "
 		       "entries)\n", linda, ctx,
 		       linda->context[ctx].eager_array,
 		       linda->context[ctx].eager_entries );
 	}
-
-	
 
 	return 0;
 }
@@ -1481,6 +1534,63 @@ static int linda_init_ib_serdes ( struct linda *linda ) {
 
 /***************************************************************************
  *
+ * Context 0 ("kernel" context)
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Create context 0
+ *
+ * @v ibdev		Infiniband device
+ * @ret rc		Return status code
+ */
+static int linda_create_kernel_context ( struct ib_device *ibdev ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	int rc;
+
+	/* Create completion queue */
+	linda->kernel_cq = ib_create_cq ( ibdev, 0 );
+	if ( ! linda->kernel_cq ) {
+		rc = -ENOMEM;
+		goto err_create_cq;
+	}
+
+	/* Create queue pair */
+	linda->kernel_qp = ib_create_qp ( ibdev, LINDA_KCTX_NUM_SEND_WQES,
+					  linda->kernel_cq,
+					  LINDA_KCTX_NUM_RECV_WQES,
+					  linda->kernel_cq, 0 );
+	if ( ! linda->kernel_qp ) {
+		rc = -ENOMEM;
+		goto err_create_qp;
+	}
+	/* If this isn't context 0, we're screwed */
+	assert ( linda_qpn_to_ctx ( linda->kernel_qp->qpn ) == 0 );
+
+	return 0;
+
+	ib_destroy_qp ( ibdev, linda->kernel_qp );
+ err_create_qp:
+	ib_destroy_cq ( ibdev, linda->kernel_cq );
+ err_create_cq:
+	return rc;
+}
+
+/**
+ * Destroy context 0
+ *
+ * @v ibdev		Infiniband device
+ */
+static void linda_destroy_kernel_context ( struct ib_device *ibdev ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	ib_destroy_qp ( ibdev, linda->kernel_qp );
+	ib_destroy_cq ( ibdev, linda->kernel_cq );
+}
+
+/***************************************************************************
+ *
  * PCI layer interface
  *
  ***************************************************************************
@@ -1539,9 +1649,13 @@ static int linda_probe ( struct pci_device *pci,
 	if ( ( rc = linda_init_rx ( linda ) ) != 0 )
 		goto err_init_rx;
 
-	/* Start up the 8051 microcontroller */
+	/* Initialise the IB SerDes */
 	if ( ( rc = linda_init_ib_serdes ( linda ) ) != 0 )
 		goto err_init_ib_serdes;
+
+	/* Create the kernel context */
+	if ( ( rc = linda_create_kernel_context ( ibdev ) ) != 0 )
+		goto err_create_kernel_context;
 
 	/* Register Infiniband device */
 	if ( ( rc = register_ibdev ( ibdev ) ) != 0 ) {
@@ -1554,6 +1668,8 @@ static int linda_probe ( struct pci_device *pci,
 
 	unregister_ibdev ( ibdev );
  err_register_ibdev:
+	linda_destroy_kernel_context ( ibdev );
+ err_create_kernel_context:
  err_init_rx:
  err_init_ib_serdes:
  err_read_eeprom:
@@ -1571,6 +1687,7 @@ static int linda_probe ( struct pci_device *pci,
 static void linda_remove ( struct pci_device *pci ) {
 	struct ib_device *ibdev = pci_get_drvdata ( pci );
 
+	linda_destroy_kernel_context ( ibdev );
 	unregister_ibdev ( ibdev );
 	ibdev_put ( ibdev );
 }
