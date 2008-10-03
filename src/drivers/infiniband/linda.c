@@ -828,11 +828,20 @@ struct linda_mad_handler {
  */
 static int linda_mad_get_node_info ( struct ib_device *ibdev,
 				     struct ib_mad_hdr *mad, size_t len ) {
-	DBG ( "*******************************\n" );
-	
-	( void ) ibdev;
-	( void ) mad;
-	( void ) len;
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct ib_node_info *node_info;
+
+	/* Sanity check */
+	if ( len < sizeof ( *node_info ) ) {
+		DBGC ( linda, "Linda %p GET NODE_INFO too short (%zd "
+		       "bytes)\n", linda, len );
+		return -EINVAL;
+	}
+	node_info = ( ( struct ib_node_info * ) mad );
+
+	DBGC ( linda, "Get node info:\n" );
+	DBGC_HDA ( linda, 0, node_info, sizeof ( *node_info ) );
+
 	return -EIO;
 }
 
