@@ -704,10 +704,34 @@ struct ib_rmpp_hdr {
 	uint32_t raw[3];
 } __attribute__ (( packed ));
 
+struct ib_sm_hdr {
+	uint64_t mkey;
+	uint16_t dr_slid;
+	uint16_t dr_dlid;
+	uint8_t reserved[28];
+} __attribute__ (( packed ));
+
 struct ib_mad_data {
 	struct ib_mad_hdr mad_hdr;
 	uint8_t data[232];
 } __attribute__ (( packed ));
+
+struct ib_node_info {
+	struct ib_mad_hdr mad_hdr;
+	struct ib_sm_hdr sm_hdr;
+	uint8_t base_version;
+	uint8_t class_version;
+	uint8_t node_type;
+	uint8_t num_ports;
+	uint16_t sys_guid;
+	uint16_t node_guid;
+	uint16_t port_guid;
+	uint16_t partition_cap;
+	uint16_t device_id;
+	uint32_t revision;
+	uint8_t local_port_num;
+	uint8_t vendor_id[3];
+} __attribute__ ((packed));
 
 struct ib_mad_guid_info {
 	struct ib_mad_hdr mad_hdr;
