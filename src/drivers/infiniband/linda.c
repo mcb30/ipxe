@@ -50,8 +50,8 @@ struct linda_context {
 	unsigned long eager_array;
 	/** Number of entries in eager array */
 	unsigned int eager_entries;
-	/** Eager array producer offset */
-	unsigned int eager_prod;
+	/** Eager array consumer index */
+	unsigned int eager_cons;
 };
 
 /** A Linda HCA */
@@ -68,8 +68,6 @@ struct linda {
 	struct ib_completion_queue *kernel_cq;
 	/** Kernel context queue pair */
 	struct ib_queue_pair *kernel_qp;
-	/** Kernel context receive work queue fill level */
-	unsigned int kernel_recv_fill;
 
 	/** I2C bit-bashing interface */
 	struct i2c_bit_basher i2c;
@@ -219,21 +217,32 @@ static int linda_qpn_to_ctx ( unsigned int qpn ) {
  * Allocate a context
  *
  * @v linda		Linda device
+ * @v num_recv_wqes	Number of receive work queue entries
  * @ret ctx		Context index, or negative error
  */
-static int linda_alloc_ctx ( struct linda *linda ) {
+static int linda_alloc_ctx ( struct linda *linda,
+			     unsigned int num_recv_wqes ) {
+	struct linda_context *context;
 	unsigned int ctx;
 
 	for ( ctx = 0 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
-		if ( ! linda->context[ctx].active ) {
-			DBGC2 ( linda, "Linda %p CTX %d allocated\n",
-				linda, ctx );
-			linda->context[ctx].active = 1;
-			return ctx;
-		}
+		context = &linda->context[ctx];
+
+		if ( context->active )
+			continue;
+
+		/* Sanity check */
+		if ( num_recv_wqes > context->eager_entries )
+			continue;
+
+		DBGC2 ( linda, "Linda %p CTX %d allocated with %d RX WQEs\n",
+			linda, ctx, num_recv_wqes );
+		linda->context[ctx].active = 1;
+		return ctx;
 	}
 
-	DBGC ( linda, "Linda %p out of available contexts\n", linda );
+	DBGC ( linda, "Linda %p out of available contexts for %d RX WQEs\n",
+	       linda, num_recv_wqes );
 	return -ENOENT;
 }
 
@@ -244,8 +253,10 @@ static int linda_alloc_ctx ( struct linda *linda ) {
  * @v ctx		Context index
  */
 static void linda_free_ctx ( struct linda *linda, unsigned int ctx ) {
+	struct linda_context *context = &linda->context[ctx];
+
+	context->active = 0;
 	DBGC2 ( linda, "Linda %p CTX %d freed\n", linda, ctx );
-	linda->context[ctx].active = 0;
 }
 
 /**
@@ -267,7 +278,7 @@ static int linda_create_qp ( struct ib_device *ibdev,
 	int rc;
 
 	/* Locate an available context */
-	ctx = linda_alloc_ctx ( linda );
+	ctx = linda_alloc_ctx ( linda, qp->recv.num_wqes );
 	if ( ctx < 0 ) {
 		rc = ctx;
 		goto err_alloc_ctx;
@@ -278,6 +289,7 @@ static int linda_create_qp ( struct ib_device *ibdev,
 	/* Reset context information */
 	memset ( &context->header_prod, 0, sizeof ( context->header_prod ) );
 	context->header_cons = 0;
+	context->eager_cons = 0;
 
 	/* Allocate receive header buffer */
 	context->header = malloc_dma ( LINDA_RX_HEADERS_SIZE,
@@ -414,20 +426,12 @@ static int linda_post_recv ( struct ib_device *ibdev,
 	struct ib_work_queue *wq = &qp->recv;
 	struct linda_context *context;
 	struct QIB_7220_RcvEgr rcvegr;
-	struct QIB_7220_scalar rcvegrindexhead;
-	unsigned int ctx;
-	unsigned int wqe_idx_mask;
-	unsigned int bufsize;
 	physaddr_t addr;
 	size_t len;
-
-	/* Allocate work queue entry */
-	wqe_idx_mask = ( wq->num_wqes - 1 );
-	if ( wq->iobufs[wq->next_idx & wqe_idx_mask] ) {
-		DBGC ( linda, "Linda %p QPN %ld receive queue full\n",
-		       linda, qp->qpn );
-		return -ENOBUFS;
-	}
+	unsigned int ctx;
+	unsigned int eager_prod;
+	unsigned int wqe_idx;
+	unsigned int bufsize;
 
 	/* Sanity checks */
 	addr = virt_to_bus ( iobuf->data );
@@ -447,6 +451,14 @@ static int linda_post_recv ( struct ib_device *ibdev,
 	ctx = linda_qpn_to_ctx ( qp->qpn );
 	context = &linda->context[ctx];
 
+	/* Calculate eager producer index and WQE index */
+	eager_prod = ( context->eager_cons + wq->fill );
+	wqe_idx = ( eager_prod & ( wq->num_wqes - 1 ) );
+	assert ( wq->iobufs[wqe_idx] == NULL );
+
+	/* Store I/O buffer */
+	wq->iobufs[wqe_idx] = iobuf;
+
 	/* Calculate buffer size */
 	switch ( LINDA_RX_PAYLOAD_SIZE ) {
 	case 2048:  bufsize = LINDA_EAGER_BUFFER_2K;  break;
@@ -465,21 +477,9 @@ static int linda_post_recv ( struct ib_device *ibdev,
 		     Addr, ( addr >> 11 ),
 		     BufSize, bufsize );
 	linda_writeq_array8b ( linda, &rcvegr,
-			       context->eager_array, context->eager_prod );
-	DBGC ( linda, "Linda %p QPN %ld posted RX idx %d [%lx,%lx)\n",
-	       linda, qp->qpn, context->eager_prod, addr, ( addr + len ) );
-
-	/* Increment producer offset */
-	context->eager_prod = ( ( context->eager_prod + 1 ) &
-				( context->eager_entries - 1 ) );
-	memset ( &rcvegrindexhead, 0, sizeof ( rcvegrindexhead ) );
-	BIT_FILL_1 ( &rcvegrindexhead, Value, context->eager_prod );
-	linda_writeq_array64k ( linda, &rcvegrindexhead,
-				QIB_7220_RcvEgrIndexHead0_offset, ctx );
-
-	/* Update work queue's index */
-	wq->iobufs[wq->next_idx & wqe_idx_mask] = iobuf;
-	wq->next_idx++;
+			       context->eager_array, eager_prod );
+	DBGC ( linda, "Linda %p QPN %ld posted RX %d(%d) [%lx,%lx)\n",
+	       linda, qp->qpn, eager_prod, wqe_idx, addr, ( addr + len ) );
 
 	return 0;
 }
@@ -488,16 +488,17 @@ static int linda_post_recv ( struct ib_device *ibdev,
  * Complete receive work queue entry
  *
  * @v ibdev		Infiniband device
- * @v qp		Queue pair
+ * @v wq		Receive work queue
  * @v context		Linda context
  * @v header_offs	Header offset
  */
 static void linda_complete_recv ( struct ib_device *ibdev,
-				  struct ib_queue_pair *qp,
+				  struct ib_work_queue *wq,
 				  struct linda_context *context,
 				  unsigned int header_offs ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
 	struct QIB_7220_RcvHdrFlags *rcvhdrflags;
+	struct QIB_7220_RcvEgr rcvegr;
 	struct ib_completion completion;
 	unsigned int rcvtype;
 	unsigned int pktlen;
@@ -509,6 +510,7 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	unsigned int hdrqoffset;
 	unsigned int header_len;
 	unsigned int payload_len;
+	unsigned int wqe_idx;
 
 	/* RcvHdrFlags are at the end of the header entry */
 	rcvhdrflags = ( context->header + header_offs + LINDA_RX_HEADER_SIZE -
@@ -533,7 +535,7 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	err = ( iberr | mkerr | tiderr | khdrerr | mtuerr |
 		lenerr | parityerr | vcrcerr | icrcerr );
 	DBGC ( linda, "Linda %p QPN %ld RX hdr %d type %d len %d(%d+%d+4) "
-	       "egr %d%s%s%s%s%s%s%s%s%s%s%s%s\n", linda, qp->qpn,
+	       "egr %d%s%s%s%s%s%s%s%s%s%s%s%s\n", linda, wq->qp->qpn,
 	       ( header_offs / LINDA_RX_HEADER_SIZE ), rcvtype,
 	       pktlen, header_len, payload_len, egrindex,
 	       ( useegrbfr ? "" : "(unused)" ), ( err ? " [Err" : "" ),
@@ -550,12 +552,32 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	/* Construct IB completion indicator */
 	memset ( &completion, 0, sizeof ( completion ) );
 	completion.len = payload_len;
-	if ( err ) {
+	if ( err || ( ! useegrbfr ) ) {
 		/* Report any errors as "local queue pair
 		 * operation error" for simplicity.
 		 */
 		completion.syndrome = IB_SYN_LOCAL_QP;
 	}
+
+	/* Locate work queue entry */
+	assert ( egrindex == context->eager_cons );
+	wqe_idx = ( context->eager_cons & ( wq->num_wqes - 1 ) );
+
+	/* Complete work queue entry */
+	if ( wq->iobufs[wqe_idx] != NULL ) {
+		ib_complete_recv ( ibdev, wq->qp, &completion,
+				   wq->iobufs[wqe_idx] );
+		wq->iobufs[wqe_idx] = NULL;
+	}
+
+	/* Clear eager buffer */
+	memset ( &rcvegr, 0, sizeof ( rcvegr ) );
+	linda_writeq_array8b ( linda, &rcvegr,
+			       context->eager_array, context->eager_cons );
+
+	/* Update consumer index */
+	context->eager_cons = ( ( context->eager_cons + 1 ) &
+				( context->eager_entries - 1 ) );
 }
 
 /**
@@ -567,19 +589,19 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 static void linda_poll_cq ( struct ib_device *ibdev,
 			    struct ib_completion_queue *cq ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct ib_work_queue *recv_wq;
+	struct ib_work_queue *wq;
 	struct linda_context *context;
 	struct QIB_7220_RcvHdrHead0 rcvhdrhead;
 	unsigned int ctx;
 	unsigned int header_prod;
 
 	/* Poll associated RX queues */
-	list_for_each_entry ( recv_wq, &cq->work_queues, list ) {
-		if ( recv_wq->is_send )
+	list_for_each_entry ( wq, &cq->work_queues, list ) {
+		if ( wq->is_send )
 			continue;
 
 		/* Identify context for this queue */
-		ctx = linda_qpn_to_ctx ( recv_wq->qp->qpn );
+		ctx = linda_qpn_to_ctx ( wq->qp->qpn );
 		context = &linda->context[ctx];
 
 		/* Check for received packets */
@@ -592,8 +614,8 @@ static void linda_poll_cq ( struct ib_device *ibdev,
 		while ( context->header_cons != header_prod ) {
 
 			/* Complete the receive */
-			linda_complete_recv ( ibdev, recv_wq->qp,
-					      context, context->header_cons );
+			linda_complete_recv ( ibdev, wq, context,
+					      context->header_cons );
 			
 			/* Increment the consumer offset */
 			context->header_cons += LINDA_RX_HEADER_SIZE;
@@ -1720,7 +1742,7 @@ static void linda_kctx_refill_recv ( struct ib_device *ibdev ) {
 	struct io_buffer *iobuf;
 	int rc;
 
-	while ( linda->kernel_recv_fill < LINDA_KCTX_NUM_SEND_WQES ) {
+	while ( linda->kernel_qp->recv.fill < LINDA_KCTX_NUM_SEND_WQES ) {
 
 		/* Allocate I/O buffer */
 		iobuf = alloc_iob ( LINDA_RX_PAYLOAD_SIZE );
@@ -1738,8 +1760,6 @@ static void linda_kctx_refill_recv ( struct ib_device *ibdev ) {
 			/* Give up */
 			return;
 		}
-
-		linda->kernel_recv_fill++;
 	}
 }
 
@@ -1786,9 +1806,6 @@ static void linda_kctx_complete_recv ( struct ib_device *ibdev,
 	DBGC_HDA ( linda, 0, iobuf->data, iob_len ( iobuf ) );
 
 	free_iob ( iobuf );
-
-	/* Reduce receive ring fill level */
-	linda->kernel_recv_fill--;
 }
 
 /**
