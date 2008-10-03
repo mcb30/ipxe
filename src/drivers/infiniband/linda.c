@@ -304,8 +304,8 @@ static int linda_send_buf_in_use ( struct linda *linda,
 	send_idx = ( send_buf & ~LINDA_SEND_BUF_TOGGLE );
 	send_check = ( !! ( send_buf & LINDA_SEND_BUF_TOGGLE ) );
 	inusecheck = BIT_GET ( linda->sendbufavail, InUseCheck[send_idx] );
-	inuse = ( !! ( inusecheck & 0x01 ) );
-	check = ( !! ( inusecheck & 0x02 ) );
+	inuse = ( !! ( inusecheck & 0x02 ) );
+	check = ( !! ( inusecheck & 0x01 ) );
 	return ( inuse || ( check != send_check ) );
 }
 
@@ -858,7 +858,7 @@ static int linda_post_send ( struct ib_device *ibdev,
 	( void ) av;
 
 	assert ( ( start_offset + len ) == offset );
-	DBGC ( linda, "Linda %p QPN %ld posted TX %d(%d) [%lx,%lx)\n",
+	DBGC ( linda, "Linda %p QPN %ld TX %d(%d) posted [%lx,%lx)\n",
 	       linda, qp->qpn, send_buf, linda_wq->prod,
 	       start_offset, offset );
 
@@ -883,6 +883,12 @@ static void linda_complete_send ( struct ib_device *ibdev,
 	struct linda_send_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
 	struct io_buffer *iobuf;
 	struct ib_completion completion;
+	unsigned int send_buf;
+
+	/* Parse completion */
+	send_buf = linda_wq->send_buf[wqe_idx];
+	DBGC ( linda, "Linda %p QPN %ld TX %d(%d) complete\n",
+	       linda, qp->qpn, send_buf, wqe_idx );
 
 	/* Complete work queue entry */
 	iobuf = wq->iobufs[wqe_idx];
@@ -893,7 +899,7 @@ static void linda_complete_send ( struct ib_device *ibdev,
 	wq->iobufs[wqe_idx] = NULL;
 
 	/* Free send buffer */
-	linda_free_send_buf ( linda, linda_wq->send_buf[wqe_idx] );
+	linda_free_send_buf ( linda, send_buf );
 }
 
 /**
@@ -909,23 +915,13 @@ static void linda_poll_send_wq ( struct ib_device *ibdev,
 	struct linda_send_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
 	unsigned int send_buf;
 
-	/* Do nothing if queue is empty */
-	if ( ! wq->fill )
-		return;
-
 	/* Look for completions */
-	while ( linda_wq->cons != linda_wq->prod ) {
-
-		DBG ( "***** polling with prod=%d cons=%d\n",
-		      linda_wq->prod, linda_wq->cons );
+	while ( wq->fill ) {
 
 		/* Check to see if send buffer has completed */
 		send_buf = linda_wq->send_buf[linda_wq->cons];
-		if ( linda_send_buf_in_use ( linda, send_buf ) ) {
-			DBG ( "**** in use\n" );
-			DBG_HD ( linda->sendbufavail, 20 );
+		if ( linda_send_buf_in_use ( linda, send_buf ) )
 			break;
-		}
 
 		/* Complete this buffer */
 		linda_complete_send ( ibdev, qp, linda_wq->cons );
@@ -998,7 +994,7 @@ static int linda_post_recv ( struct ib_device *ibdev,
 		     BufSize, bufsize );
 	linda_writeq_array8b ( linda, &rcvegr,
 			       linda_wq->eager_array, eager_prod );
-	DBGC ( linda, "Linda %p QPN %ld posted RX egr %d(%d) [%lx,%lx)\n",
+	DBGC ( linda, "Linda %p QPN %ld RX egr %d(%d) posted [%lx,%lx)\n",
 	       linda, qp->qpn, eager_prod, wqe_idx, addr, ( addr + len ) );
 
 	return 0;
@@ -1056,10 +1052,10 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 		lenerr | parityerr | vcrcerr | icrcerr );
 	assert ( egrindex == linda_wq->eager_cons );
 	wqe_idx = ( linda_wq->eager_cons & ( wq->num_wqes - 1 ) );
-	DBGC ( linda, "Linda %p QPN %ld RX hdr %d egr %d(%d)%s type %d len "
+	DBGC ( linda, "Linda %p QPN %ld RX egr %d(%d)%s hdr %d type %d len "
 	       "%d(%d+%d+4)%s%s%s%s%s%s%s%s%s%s%s\n", linda, qp->qpn,
-	       ( header_offs / LINDA_RECV_HEADER_SIZE ), egrindex, wqe_idx,
-	       ( useegrbfr ? "" : "(unused)" ), rcvtype,
+	       egrindex, wqe_idx, ( useegrbfr ? "" : "(unused)" ),
+	       ( header_offs / LINDA_RECV_HEADER_SIZE ), rcvtype,
 	       pktlen, header_len, payload_len, ( err ? " [Err" : "" ),
 	       ( iberr ? " IB" : "" ), ( mkerr ? " MK" : "" ),
 	       ( tiderr ? " TID" : "" ), ( khdrerr ? " KHdr" : "" ),
