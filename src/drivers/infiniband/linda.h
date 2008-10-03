@@ -203,7 +203,7 @@ enum linda_eager_buffer_size {
  *
  * This is a policy decision.
  */
-#define LINDA_KCTX_NUM_RECV_WQES 2
+#define LINDA_KCTX_NUM_RECV_WQES 4
 
 /** Maximum time for wait for external parallel bus request, in us */
 #define LINDA_EPB_REQUEST_MAX_WAIT_US 500
