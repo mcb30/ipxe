@@ -478,7 +478,7 @@ static int linda_post_recv ( struct ib_device *ibdev,
 		     BufSize, bufsize );
 	linda_writeq_array8b ( linda, &rcvegr,
 			       context->eager_array, eager_prod );
-	DBGC ( linda, "Linda %p QPN %ld posted RX %d(%d) [%lx,%lx)\n",
+	DBGC ( linda, "Linda %p QPN %ld posted RX egr %d(%d) [%lx,%lx)\n",
 	       linda, qp->qpn, eager_prod, wqe_idx, addr, ( addr + len ) );
 
 	return 0;
@@ -534,18 +534,20 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	payload_len = ( pktlen - header_len - 4 /* ICRC */ );
 	err = ( iberr | mkerr | tiderr | khdrerr | mtuerr |
 		lenerr | parityerr | vcrcerr | icrcerr );
-	DBGC ( linda, "Linda %p QPN %ld RX hdr %d type %d len %d(%d+%d+4) "
-	       "egr %d%s%s%s%s%s%s%s%s%s%s%s%s\n", linda, wq->qp->qpn,
-	       ( header_offs / LINDA_RX_HEADER_SIZE ), rcvtype,
-	       pktlen, header_len, payload_len, egrindex,
-	       ( useegrbfr ? "" : "(unused)" ), ( err ? " [Err" : "" ),
+	assert ( egrindex == context->eager_cons );
+	wqe_idx = ( context->eager_cons & ( wq->num_wqes - 1 ) );
+	DBGC ( linda, "Linda %p QPN %ld RX hdr %d egr %d(%d)%s type %d len "
+	       "%d(%d+%d+4)%s%s%s%s%s%s%s%s%s%s%s\n", linda, wq->qp->qpn,
+	       ( header_offs / LINDA_RX_HEADER_SIZE ), egrindex, wqe_idx,
+	       ( useegrbfr ? "" : "(unused)" ), rcvtype,
+	       pktlen, header_len, payload_len, ( err ? " [Err" : "" ),
 	       ( iberr ? " IB" : "" ), ( mkerr ? " MK" : "" ),
 	       ( tiderr ? " TID" : "" ), ( khdrerr ? " KHdr" : "" ),
 	       ( mtuerr ? " MTU" : "" ), ( lenerr ? " Len" : "" ),
 	       ( parityerr ? " Parity" : "" ), ( vcrcerr ? " VCRC" : "" ),
 	       ( icrcerr ? " ICRC" : "" ), ( err ? "]" : "" ) );
 	/* IB header is placed immediately before RcvHdrFlags */
-	DBGC_HDA ( linda, 0,
+	DBGC_HDA ( linda, hdrqoffset,
 		   ( ( ( void * ) rcvhdrflags ) - header_len ),
 		   ( header_len + sizeof ( *rcvhdrflags ) ) );
 
@@ -558,10 +560,6 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 		 */
 		completion.syndrome = IB_SYN_LOCAL_QP;
 	}
-
-	/* Locate work queue entry */
-	assert ( egrindex == context->eager_cons );
-	wqe_idx = ( context->eager_cons & ( wq->num_wqes - 1 ) );
 
 	/* Complete work queue entry */
 	if ( wq->iobufs[wqe_idx] != NULL ) {
@@ -1324,6 +1322,7 @@ static int linda_init_rx ( struct linda *linda ) {
 	struct QIB_7220_scalar rcvegrbase;
 	struct QIB_7220_scalar rcvhdrentsize;
 	struct QIB_7220_scalar rcvhdrcnt;
+	struct QIB_7220_RcvBTHQP rcvbthqp;
 	unsigned int portcfg;
 	unsigned long egrbase;
 	unsigned int eager_array_size_0;
@@ -1386,6 +1385,11 @@ static int linda_init_rx ( struct linda *linda ) {
 		       linda->context[ctx].eager_array,
 		       linda->context[ctx].eager_entries );
 	}
+
+	/* Set the BTH QP for Infinipath packets to an unused value */
+	memset ( &rcvbthqp, 0, sizeof ( rcvbthqp ) );
+	BIT_FILL_1 ( &rcvbthqp, RcvBTHQP, LINDA_QP_IDETH );
+	linda_writeq ( linda, &rcvbthqp, QIB_7220_RcvBTHQP_offset );
 
 	return 0;
 }
