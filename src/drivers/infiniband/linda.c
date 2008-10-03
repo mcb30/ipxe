@@ -75,6 +75,9 @@ struct linda {
 	struct linda_send_work_queue send_wq[LINDA_NUM_CONTEXTS];
 	/** Receive work queues */
 	struct linda_recv_work_queue recv_wq[LINDA_NUM_CONTEXTS];
+
+	/** Offset within register space of the first send buffer */
+	unsigned long send_buffer_base;
 	/** Send buffer availability (reported by hardware) */
 	struct QIB_7220_SendBufAvail *sendbufavail;
 	/** Send buffer availability (maintained by software) */
@@ -159,6 +162,18 @@ static void linda_writeq ( struct linda *linda, const uint32_t *dwords,
 	linda_writeq ( (_linda), (_ptr), ( (_offset) + ( (_idx) * 8 ) ) )
 #define linda_writeq_array64k( _linda, _ptr, _offset, _idx ) \
 	linda_writeq ( (_linda), (_ptr), ( (_offset) + ( (_idx) * 65536 ) ) )
+
+/**
+ * Write Linda dword register
+ *
+ * @v linda		Linda device
+ * @v dword		Value to write
+ * @v offset		Register offset
+ */
+static void linda_writel ( struct linda *linda, uint32_t dword,
+			   unsigned long offset ) {
+	writel ( dword, ( linda->regs + offset ) );
+}
 
 /***************************************************************************
  *
@@ -295,6 +310,20 @@ static int linda_send_buf_in_use ( struct linda *linda,
 }
 
 /**
+ * Calculate starting offset for send buffer
+ *
+ * @v linda		Linda device
+ * @v send_buf		Send buffer
+ * @ret offset		Starting offset
+ */
+static unsigned long linda_send_buffer_offset ( struct linda *linda,
+						unsigned int send_buf ) {
+	return ( linda->send_buffer_base +
+		 ( ( send_buf & ~LINDA_SEND_BUF_TOGGLE ) *
+		   LINDA_SEND_BUF_SIZE ) );
+}
+
+/**
  * Create send work queue
  *
  * @v linda		Linda device
@@ -358,10 +387,18 @@ static void linda_destroy_send_wq ( struct linda *linda,
  * @ret rc		Return status code
  */
 static int linda_init_send ( struct linda *linda ) {
+	struct QIB_7220_SendBufBase sendbufbase;
 	struct QIB_7220_SendBufAvailAddr sendbufavailaddr;
 	struct QIB_7220_SendCtrl sendctrl;
 	unsigned int i;
 	int rc;
+
+	/* Retrieve SendBufBase */
+	linda_readq ( linda, &sendbufbase, QIB_7220_SendBufBase_offset );
+	linda->send_buffer_base = BIT_GET ( &sendbufbase,
+					    BaseAddr_SmallPIO );
+	DBGC ( linda, "Linda %p send buffers at %lx\n",
+	       linda, linda->send_buffer_base );
 
 	/* Initialise the send_buf[] array */
 	for ( i = 0 ; i < LINDA_MAX_SEND_BUFS ; i++ )
@@ -766,20 +803,64 @@ static int linda_post_send ( struct ib_device *ibdev,
 	struct linda *linda = ib_get_drvdata ( ibdev );
 	struct ib_work_queue *wq = &qp->send;
 	struct linda_send_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
+	struct QIB_7220_SendPbc sendpbc;
 	unsigned int send_buf;
+	unsigned long start_offset;
+	unsigned long offset;
+	size_t len;
+	ssize_t frag_len;
+	uint32_t *data;
 
-	/* Allocate send buffer */
+	static const uint8_t testbuf[] = {
+		0xf0, 0x02, 0xff, 0xff, 0x00, 0x48, 0x00, 0x01,
+		0x64, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0xa3, 0x66, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00 
+	};
+
+	/* Allocate send buffer and calculate offset */
 	send_buf = linda_alloc_send_buf ( linda );
+	start_offset = offset = linda_send_buffer_offset ( linda, send_buf );
 
 	/* Store I/O buffer and send buffer index */
 	assert ( wq->iobufs[linda_wq->prod] == NULL );
 	wq->iobufs[linda_wq->prod] = iobuf;
 	linda_wq->send_buf[linda_wq->prod] = send_buf;
 
+	/* Calculate packet length */
+	len = ( sizeof ( sendpbc ) + sizeof ( testbuf ) +
+		iob_len ( iobuf ) );
+
+	/* Construct send per-buffer control word */
+	memset ( &sendpbc, 0, sizeof ( sendpbc ) );
+	BIT_FILL_2 ( &sendpbc,
+		     LengthP1_toibc, ( ( len >> 2 ) - 1 ),
+		     VL15, 1 );
+
+	/* Write SendPbc */
+	DBG_DISABLE ( DBGLVL_IO );
+	linda_writeq ( linda, &sendpbc, offset );
+	offset += sizeof ( sendpbc );
+
+	/* Write headers */
+	for ( data = ( ( uint32_t * ) testbuf ), frag_len = sizeof ( testbuf ) ;
+	      frag_len > 0 ; data++, offset += 4, frag_len -= 4 ) {
+		linda_writel ( linda, *data, offset );
+	}
+
+	/* Write data */
+	for ( data = iobuf->data, frag_len = iob_len ( iobuf ) ;
+	      frag_len > 0 ; data++, offset += 4, frag_len -= 4 ) {
+		linda_writel ( linda, *data, offset );
+	}
+	DBG_ENABLE ( DBGLVL_IO );
+
 	( void ) av;
 
-	DBGC ( linda, "Linda %p QPN %ld posted TX %d(%d)\n",
-	       linda, qp->qpn, send_buf, linda_wq->prod );
+	assert ( ( start_offset + len ) == offset );
+	DBGC ( linda, "Linda %p QPN %ld posted TX %d(%d) [%lx,%lx)\n",
+	       linda, qp->qpn, send_buf, linda_wq->prod,
+	       start_offset, offset );
 
 	/* Increment producer counter */
 	linda_wq->prod = ( ( linda_wq->prod + 1 ) & ( wq->num_wqes - 1 ) );
@@ -835,10 +916,16 @@ static void linda_poll_send_wq ( struct ib_device *ibdev,
 	/* Look for completions */
 	while ( linda_wq->cons != linda_wq->prod ) {
 
+		DBG ( "***** polling with prod=%d cons=%d\n",
+		      linda_wq->prod, linda_wq->cons );
+
 		/* Check to see if send buffer has completed */
 		send_buf = linda_wq->send_buf[linda_wq->cons];
-		if ( linda_send_buf_in_use ( linda, send_buf ) )
+		if ( linda_send_buf_in_use ( linda, send_buf ) ) {
+			DBG ( "**** in use\n" );
+			DBG_HD ( linda->sendbufavail, 20 );
 			break;
+		}
 
 		/* Complete this buffer */
 		linda_complete_send ( ibdev, qp, linda_wq->cons );
@@ -1280,8 +1367,8 @@ static int linda_mad_get_node_info ( struct ib_device *ibdev,
 	}
 	node_info = ( ( struct ib_node_info * ) mad );
 
-	DBGC ( linda, "Get node info:\n" );
-	DBGC_HDA ( linda, 0, node_info, sizeof ( *node_info ) );
+	DBGCP ( linda, "Linda %p get node info:\n", linda );
+	DBGCP_HDA ( linda, 0, node_info, sizeof ( *node_info ) );
 
 	// send back the same packet
 	return 0;
@@ -1332,6 +1419,7 @@ static int linda_mad ( struct ib_device *ibdev, struct ib_mad_hdr *mad,
 		     ( handler->attr_id == mad->attr_id ) ) {
 			if ( ( rc = handler->mad ( ibdev, mad, len ) ) != 0 )
 				return rc;
+			return 0;
 		}
 	}
 
@@ -2213,15 +2301,14 @@ static void linda_kctx_refill_recv ( struct ib_device *ibdev ) {
  * @v iobuf		I/O buffer
  */
 static void linda_kctx_complete_send ( struct ib_device *ibdev,
-				       struct ib_queue_pair *qp,
+				       struct ib_queue_pair *qp __unused,
 				       struct ib_completion *completion,
 				       struct io_buffer *iobuf ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
 
-	( void ) linda;
-	( void ) qp;
-	( void ) completion;
-	( void ) iobuf;
+	DBGC2 ( linda, "Linda %p KCTX send completed%s\n",
+		linda, ( completion->syndrome ? " [err]" : "" ) );
+	free_iob ( iobuf );
 }
 
 /**
@@ -2257,6 +2344,7 @@ static void linda_kctx_complete_recv ( struct ib_device *ibdev,
 	}
 
 	/* Send MAD response */
+	// address vector?
 	if ( ( rc = ib_post_send ( ibdev, qp, NULL, iobuf ) ) != 0 ){ 
 		DBGC ( linda, "Linda %p KCTX could not send MAD "
 		       "response: %s\n", linda, strerror ( rc ) );

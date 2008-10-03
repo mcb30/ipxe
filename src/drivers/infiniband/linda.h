@@ -31,6 +31,22 @@ struct QIB_7220_scalar {
 	PSEUDO_BIT_STRUCT ( struct QIB_7220_scalar_pb );
 };
 
+/** Linda send per-buffer control word */
+struct QIB_7220_SendPbc_pb {
+	pseudo_bit_t LengthP1_toibc[11];
+	pseudo_bit_t Reserved1[4];
+	pseudo_bit_t LengthP1_trigger[11];
+	pseudo_bit_t Reserved2[3];
+	pseudo_bit_t TestEbp[1];
+	pseudo_bit_t Test[1];
+	pseudo_bit_t Intr[1];
+	pseudo_bit_t Reserved3[31];
+	pseudo_bit_t VL15[1];
+};
+struct QIB_7220_SendPbc {
+	PSEUDO_BIT_STRUCT ( struct QIB_7220_SendPbc_pb );
+};
+
 /** Linda send buffer availability */
 struct QIB_7220_SendBufAvail_pb {
 	pseudo_bit_t InUseCheck[144][2];
@@ -106,6 +122,9 @@ struct QIB_7220_RcvHdrFlags {
  * number of send buffers supported by the hardware (128).
  */
 #define LINDA_MAX_SEND_BUFS 32
+
+/** Linda send buffer size */
+#define LINDA_SEND_BUF_SIZE 4096
 
 /** Number of contexts (including kernel context)
  *
