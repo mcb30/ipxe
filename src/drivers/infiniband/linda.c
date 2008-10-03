@@ -547,9 +547,9 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	       ( parityerr ? " Parity" : "" ), ( vcrcerr ? " VCRC" : "" ),
 	       ( icrcerr ? " ICRC" : "" ), ( err ? "]" : "" ) );
 	/* IB header is placed immediately before RcvHdrFlags */
-	DBGC_HDA ( linda, hdrqoffset,
-		   ( ( ( void * ) rcvhdrflags ) - header_len ),
-		   ( header_len + sizeof ( *rcvhdrflags ) ) );
+	DBGCP_HDA ( linda, hdrqoffset,
+		    ( ( ( void * ) rcvhdrflags ) - header_len ),
+		    ( header_len + sizeof ( *rcvhdrflags ) ) );
 
 	/* Construct IB completion indicator */
 	memset ( &completion, 0, sizeof ( completion ) );
@@ -801,6 +801,48 @@ static void linda_mcast_detach ( struct ib_device *ibdev,
  ***************************************************************************
  */
 
+/** A Linda MAD handler */
+struct linda_mad_handler {
+	/** Base version */
+	uint8_t base_version;
+	/** Management class */
+	uint8_t mgmt_class;
+	/** Class version */
+	uint8_t class_version;
+	/** Method */
+	uint8_t method;
+	/** Attribute ID */
+	uint16_t attr_id;
+	/** Handler */
+	int ( *mad ) ( struct ib_device *ibdev, struct ib_mad_hdr *mad,
+		       size_t len );
+};
+
+/**
+ * Get node information
+ *
+ * @v ibdev		Infiniband device
+ * @v mad		Management datagram
+ * @v len		Length of management datagram
+ * @ret rc		Return status code
+ */
+static int linda_mad_get_node_info ( struct ib_device *ibdev,
+				     struct ib_mad_hdr *mad, size_t len ) {
+	DBG ( "*******************************\n" );
+	
+	( void ) ibdev;
+	( void ) mad;
+	( void ) len;
+	return -EIO;
+}
+
+/** Linda MAD handlers */
+struct linda_mad_handler linda_mad_handlers[] = {
+	{ IB_MGMT_BASE_VERSION, IB_MGMT_CLASS_SUBN_DIRECTED_ROUTE, 1,
+	  IB_MGMT_METHOD_GET, ntohs ( IB_SMP_ATTR_NODE_INFO ),
+	  linda_mad_get_node_info },
+};
+
 /**
  * Issue management datagram
  *
@@ -808,15 +850,46 @@ static void linda_mcast_detach ( struct ib_device *ibdev,
  * @v mad		Management datagram
  * @v len		Length of management datagram
  * @ret rc		Return status code
+ *
+ * This function is used to respond to both local MAD request (via the
+ * IB device's mad() method) and to MADs received via the network.
  */
 static int linda_mad ( struct ib_device *ibdev, struct ib_mad_hdr *mad,
 		       size_t len ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct linda_mad_handler *handler;
+	unsigned int i;
+	int rc;
 
-	( void ) linda;
-	( void ) mad;
-	( void ) len;
+	/* Sanity checks */
+	if ( len < sizeof ( *mad ) ) {
+		DBGC ( linda, "Linda %p MAD too short (%zd bytes)\n",
+		       linda, len );
+		return -EINVAL;
+	}
+
+	/* Locate a handler */
+	for ( i = 0 ; i < ( sizeof ( linda_mad_handlers ) /
+			    sizeof ( linda_mad_handlers[0] ) ) ; i++ ) {
+		handler = &linda_mad_handlers[i];
+		if ( ( handler->base_version == mad->base_version ) &&
+		     ( handler->mgmt_class == mad->mgmt_class ) &&
+		     ( handler->class_version == mad->class_version ) &&
+		     ( handler->method == mad->method ) &&
+		     ( handler->attr_id == mad->attr_id ) ) {
+			if ( ( rc = handler->mad ( ibdev, mad, len ) ) != 0 )
+				return rc;
+		}
+	}
+
+	DBGC ( linda, "Linda %p MAD unrecognised method %02x attr_id %04x\n",
+	       linda, mad->method, ntohs ( mad->attr_id ) );
+
+	// don't inhibit device registration with gPXE
 	return 0;
+
+
+	return -ENOTSUP;
 }
 
 /** Linda Infiniband operations */
@@ -1802,13 +1875,27 @@ static void linda_kctx_complete_recv ( struct ib_device *ibdev,
 				       struct ib_completion *completion,
 				       struct io_buffer *iobuf ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
+	int rc;
 
-	DBGC ( linda, "Linda %p KCTX RX %zd bytes%s\n",
-	       linda, completion->len,
-	       ( completion->syndrome ? " [err]" : "" ) );
+	/* Ignore errors */
+	if ( completion->syndrome ) {
+		DBGC ( linda, "Linda %p KCTX RX error %d\n",
+		       linda, completion->syndrome );
+		goto done;
+	}
+
+	/* Respond to MAD */
 	iob_put ( iobuf, completion->len );
-	DBGC_HDA ( linda, 0, iobuf->data, iob_len ( iobuf ) );
+	if ( ( rc = linda_mad ( ibdev, iobuf->data,
+				iob_len ( iobuf ) ) ) != 0 ) {
+		DBGC ( linda, "Linda %p KCTX could not respond to MAD: %s\n",
+		       linda, strerror ( rc ) );
+		goto done;
+	}
 
+	// send out the MAD response...
+
+ done:
 	free_iob ( iobuf );
 }
 
