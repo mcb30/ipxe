@@ -133,7 +133,7 @@ enum linda_eager_buffer_size {
  *
  * This is a policy decision.  Must be divisible by 4.
  */
-#define LINDA_RX_HEADER_SIZE 64
+#define LINDA_RX_HEADER_SIZE 96
 
 /** Total size of an RX header ring */
 #define LINDA_RX_HEADERS_SIZE ( LINDA_RX_HEADER_SIZE * LINDA_RX_HEADER_COUNT )
@@ -146,6 +146,13 @@ enum linda_eager_buffer_size {
  * This is a policy decision.  Must be a valid eager buffer size.
  */
 #define LINDA_RX_PAYLOAD_SIZE 2048
+
+/** QPN used for Infinipath Packets
+ *
+ * This is a policy decision.  Must have bit 0 clear.  Must not be a
+ * QPN that we will use.
+ */
+#define LINDA_QP_IDETH 0xdead0
 
 /** Context 0 number of send WQEs
  *
