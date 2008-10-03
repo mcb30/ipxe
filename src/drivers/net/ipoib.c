@@ -60,8 +60,6 @@ struct ipoib_queue_set {
 	struct ib_completion_queue *cq;
 	/** Queue pair */
 	struct ib_queue_pair *qp;
-	/** Receive work queue fill level */
-	unsigned int recv_fill;
 	/** Receive work queue maximum fill level */
 	unsigned int recv_max_fill;
 };
@@ -553,7 +551,7 @@ static void ipoib_data_complete_recv ( struct ib_device *ibdev __unused,
 
 	if ( completion->syndrome ) {
 		netdev_rx_err ( netdev, iobuf, -EIO );
-		goto done;
+		return;
 	}
 
 	iob_put ( iobuf, completion->len );
@@ -562,7 +560,7 @@ static void ipoib_data_complete_recv ( struct ib_device *ibdev __unused,
 		       "contain GRH\n", ipoib );
 		DBGC_HD ( ipoib, iobuf->data, iob_len ( iobuf ) );
 		netdev_rx_err ( netdev, iobuf, -EIO );
-		goto done;
+		return;
 	}
 	iob_pull ( iobuf, sizeof ( struct ib_global_route_header ) );
 
@@ -571,16 +569,13 @@ static void ipoib_data_complete_recv ( struct ib_device *ibdev __unused,
 		       "contain IPoIB header\n", ipoib );
 		DBGC_HD ( ipoib, iobuf->data, iob_len ( iobuf ) );
 		netdev_rx_err ( netdev, iobuf, -EIO );
-		goto done;
+		return;
 	}
 
 	ipoib_pshdr = iob_push ( iobuf, sizeof ( *ipoib_pshdr ) );
 	/* FIXME: fill in a MAC address for the sake of AoE! */
 
 	netdev_rx ( netdev, iobuf );
-
- done:
-	ipoib->data.recv_fill--;
 }
 
 /**
@@ -720,7 +715,6 @@ static void ipoib_meta_complete_recv ( struct ib_device *ibdev __unused,
 	}
 
  done:
-	ipoib->meta.recv_fill--;
 	free_iob ( iobuf );
 }
 
@@ -735,7 +729,7 @@ static void ipoib_refill_recv ( struct ipoib_device *ipoib,
 	struct io_buffer *iobuf;
 	int rc;
 
-	while ( qset->recv_fill < qset->recv_max_fill ) {
+	while ( qset->qp->recv.fill < qset->recv_max_fill ) {
 		iobuf = alloc_iob ( IPOIB_MTU );
 		if ( ! iobuf )
 			break;
@@ -743,7 +737,6 @@ static void ipoib_refill_recv ( struct ipoib_device *ipoib,
 			free_iob ( iobuf );
 			break;
 		}
-		qset->recv_fill++;
 	}
 }
 
