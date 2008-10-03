@@ -29,6 +29,20 @@ struct ib_gid {
 	} u;
 };
 
+/** An Infiniband Local Route Header */
+struct ib_local_route_header {
+	/** Virtual lane and link version */
+	uint8_t vl_lver;
+	/** Service level and next link header */
+	uint8_t sl_lnh;
+	/** Destination LID */
+	uint16_t dlid;
+	/** Packet length */
+	uint16_t length;
+	/** Source LID */
+	uint16_t slid;
+} __attribute__ (( packed ));
+
 /** An Infiniband Global Route Header */
 struct ib_global_route_header {
 	/** IP version, traffic class, and flow label

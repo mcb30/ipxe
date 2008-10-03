@@ -31,6 +31,18 @@ struct QIB_7220_scalar {
 	PSEUDO_BIT_STRUCT ( struct QIB_7220_scalar_pb );
 };
 
+/** Linda send buffer availability */
+struct QIB_7220_SendBufAvail_pb {
+	pseudo_bit_t InUseCheck[144][2];
+	pseudo_bit_t Reserved[32];
+};
+struct QIB_7220_SendBufAvail {
+	PSEUDO_BIT_STRUCT ( struct QIB_7220_SendBufAvail_pb );
+};
+
+/** DMA alignment for send buffer availability */
+#define LINDA_SENDBUFAVAIL_ALIGN 64
+
 /** A Linda eager receive descriptor */
 struct QIB_7220_RcvEgr_pb {
 	pseudo_bit_t Addr[37];
@@ -88,11 +100,18 @@ struct QIB_7220_RcvHdrFlags {
 /** Board serial number size within EEPROM */
 #define LINDA_EEPROM_SERIAL_SIZE 12
 
+/** Maximum number of send buffers used
+ *
+ * This is a policy decision.  Must be less than or equal to the total
+ * number of send buffers supported by the hardware (128).
+ */
+#define LINDA_MAX_SEND_BUFS 32
+
 /** Number of contexts (including kernel context)
  *
  * This is a policy decision.  Must be 5, 9 or 17.
  */
-#define LINDA_NUM_CONTEXTS 17
+#define LINDA_NUM_CONTEXTS 5
 
 /** PortCfg values for different numbers of contexts */
 enum linda_portcfg {
@@ -127,25 +146,26 @@ enum linda_eager_buffer_size {
  *
  * This is a policy decision. 
  */
-#define LINDA_RX_HEADER_COUNT 8
+#define LINDA_RECV_HEADER_COUNT 8
 
 /** Maximum size of each RX header
  *
  * This is a policy decision.  Must be divisible by 4.
  */
-#define LINDA_RX_HEADER_SIZE 96
+#define LINDA_RECV_HEADER_SIZE 96
 
 /** Total size of an RX header ring */
-#define LINDA_RX_HEADERS_SIZE ( LINDA_RX_HEADER_SIZE * LINDA_RX_HEADER_COUNT )
+#define LINDA_RECV_HEADERS_SIZE \
+	( LINDA_RECV_HEADER_SIZE * LINDA_RECV_HEADER_COUNT )
 
 /** RX header alignment */
-#define LINDA_RX_HEADERS_ALIGN 64
+#define LINDA_RECV_HEADERS_ALIGN 64
 
 /** RX payload size
  *
  * This is a policy decision.  Must be a valid eager buffer size.
  */
-#define LINDA_RX_PAYLOAD_SIZE 2048
+#define LINDA_RECV_PAYLOAD_SIZE 2048
 
 /** QPN used for Infinipath Packets
  *

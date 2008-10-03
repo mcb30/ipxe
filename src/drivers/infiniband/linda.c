@@ -36,10 +36,18 @@
  *
  */
 
-/** A Linda context */
-struct linda_context {
-	/** Context is in use */
-	unsigned int active;
+/** A Linda send work queue */
+struct linda_send_work_queue {
+	/** Send buffer usage */
+	uint8_t *send_buf;
+	/** Producer index */
+	unsigned int prod;
+	/** Consumer index */
+	unsigned int cons;
+};
+
+/** A Linda receive work queue */
+struct linda_recv_work_queue {
 	/** Receive header ring */
 	void *header;
 	/** Receive header producer offset (written by hardware) */
@@ -61,8 +69,22 @@ struct linda {
 	/** Base GUID */
 	uint8_t guid[LINDA_EEPROM_GUID_SIZE];
 
-	/** Contexts */
-	struct linda_context context[LINDA_NUM_CONTEXTS];
+	/** In-use contexts */
+	uint8_t used_ctx[LINDA_NUM_CONTEXTS];
+	/** Send work queues */
+	struct linda_send_work_queue send_wq[LINDA_NUM_CONTEXTS];
+	/** Receive work queues */
+	struct linda_recv_work_queue recv_wq[LINDA_NUM_CONTEXTS];
+	/** Send buffer availability (reported by hardware) */
+	struct QIB_7220_SendBufAvail *sendbufavail;
+	/** Send buffer availability (maintained by software) */
+	uint8_t send_buf[LINDA_MAX_SEND_BUFS];
+	/** Send buffer availability producer counter */
+	unsigned int send_buf_prod;
+	/** Send buffer availability consumer counter */
+	unsigned int send_buf_cons;
+	/** Number of reserved send buffers (across all QPs) */
+	unsigned int reserved_send_bufs;
 
 	/** Kernel context completion queue */
 	struct ib_completion_queue *kernel_cq;
@@ -140,6 +162,456 @@ static void linda_writeq ( struct linda *linda, const uint32_t *dwords,
 
 /***************************************************************************
  *
+ * Context allocation
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Map context number to QPN
+ *
+ * @v ctx		Context index
+ * @ret qpn		Queue pair number
+ */
+static int linda_ctx_to_qpn ( unsigned int ctx ) {
+	/* This mapping is fixed by hardware */
+	return ( ctx * 2 );
+}
+
+/**
+ * Map QPN to context number
+ *
+ * @v qpn		Queue pair number
+ * @ret ctx		Context index
+ */
+static int linda_qpn_to_ctx ( unsigned int qpn ) {
+	/* This mapping is fixed by hardware */
+	return ( qpn / 2 );
+}
+
+/**
+ * Allocate a context
+ *
+ * @v linda		Linda device
+ * @ret ctx		Context index, or negative error
+ */
+static int linda_alloc_ctx ( struct linda *linda ) {
+	unsigned int ctx;
+
+	for ( ctx = 0 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
+
+		if ( ! linda->used_ctx[ctx] ) {
+			linda->used_ctx[ctx ] = 1;
+			DBGC2 ( linda, "Linda %p CTX %d allocated\n",
+				linda, ctx );
+			return ctx;
+		}
+	}
+
+	DBGC ( linda, "Linda %p out of available contexts\n", linda );
+	return -ENOENT;
+}
+
+/**
+ * Free a context
+ *
+ * @v linda		Linda device
+ * @v ctx		Context index
+ */
+static void linda_free_ctx ( struct linda *linda, unsigned int ctx ) {
+
+	linda->used_ctx[ctx] = 0;
+	DBGC2 ( linda, "Linda %p CTX %d freed\n", linda, ctx );
+}
+
+/***************************************************************************
+ *
+ * Send datapath
+ *
+ ***************************************************************************
+ */
+
+/** Send buffer toggle bit
+ *
+ * We encode send buffers as 7 bits of send buffer index plus a single
+ * bit which should match the "check" bit in the SendBufAvail array.
+ */
+#define LINDA_SEND_BUF_TOGGLE 0x80
+
+/**
+ * Allocate a send buffer
+ *
+ * @v linda		Linda device
+ * @ret send_buf	Send buffer
+ *
+ * You must guarantee that a send buffer is available.  This is done
+ * by refusing to allocate more TX WQEs in total than the number of
+ * available send buffers.
+ */
+static unsigned int linda_alloc_send_buf ( struct linda *linda ) {
+	unsigned int send_buf;
+
+	send_buf = linda->send_buf[linda->send_buf_cons];
+	send_buf ^= LINDA_SEND_BUF_TOGGLE;
+	linda->send_buf_cons = ( ( linda->send_buf_cons + 1 ) %
+				 LINDA_MAX_SEND_BUFS );
+	return send_buf;
+}
+
+/**
+ * Free a send buffer
+ *
+ * @v linda		Linda device
+ * @v send_buf		Send buffer
+ */
+static void linda_free_send_buf ( struct linda *linda,
+				  unsigned int send_buf ) {
+	linda->send_buf[linda->send_buf_prod] = send_buf;
+	linda->send_buf_prod = ( ( linda->send_buf_prod + 1 ) %
+				 LINDA_MAX_SEND_BUFS );
+}
+
+/**
+ * Check to see if send buffer is in use
+ *
+ * @v linda		Linda device
+ * @v send_buf		Send buffer
+ * @ret in_use		Send buffer is in use
+ */
+static int linda_send_buf_in_use ( struct linda *linda,
+				   unsigned int send_buf ) {
+	unsigned int send_idx;
+	unsigned int send_check;
+	unsigned int inusecheck;
+	unsigned int inuse;
+	unsigned int check;
+
+	send_idx = ( send_buf & ~LINDA_SEND_BUF_TOGGLE );
+	send_check = ( !! ( send_buf & LINDA_SEND_BUF_TOGGLE ) );
+	inusecheck = BIT_GET ( linda->sendbufavail, InUseCheck[send_idx] );
+	inuse = ( !! ( inusecheck & 0x01 ) );
+	check = ( !! ( inusecheck & 0x02 ) );
+	return ( inuse || ( check != send_check ) );
+}
+
+/**
+ * Create send work queue
+ *
+ * @v linda		Linda device
+ * @v qp		Queue pair
+ */
+static int linda_create_send_wq ( struct linda *linda,
+				  struct ib_queue_pair *qp ) {
+	struct ib_work_queue *wq = &qp->send;
+	struct linda_send_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
+	int rc;
+
+	/* Reserve send buffers */
+	if ( ( linda->reserved_send_bufs + qp->send.num_wqes ) >
+	     LINDA_MAX_SEND_BUFS ) {
+		DBGC ( linda, "Linda %p out of send buffers (have %d, used "
+		       "%d, need %d)\n", linda, LINDA_MAX_SEND_BUFS,
+		       linda->reserved_send_bufs, qp->send.num_wqes );
+		rc = -ENOBUFS;
+		goto err_reserve_bufs;
+	}
+	linda->reserved_send_bufs += qp->send.num_wqes;
+
+	/* Reset work queue */
+	linda_wq->prod = 0;
+	linda_wq->cons = 0;
+
+	/* Allocate space for send buffer uasge list */
+	linda_wq->send_buf = zalloc ( qp->send.num_wqes *
+				      sizeof ( linda_wq->send_buf[0] ) );
+	if ( ! linda_wq->send_buf )
+		goto err_alloc_send_buf;
+	
+	return 0;
+
+	free ( linda_wq->send_buf );
+ err_alloc_send_buf:
+	linda->reserved_send_bufs -= qp->send.num_wqes;
+ err_reserve_bufs:
+	return rc;
+}
+
+/**
+ * Destroy send work queue
+ *
+ * @v linda		Linda device
+ * @v qp		Queue pair
+ */
+static void linda_destroy_send_wq ( struct linda *linda,
+				    struct ib_queue_pair *qp ) {
+	struct ib_work_queue *wq = &qp->send;
+	struct linda_send_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
+
+	free ( linda_wq->send_buf );
+	linda->reserved_send_bufs -= qp->send.num_wqes;
+}
+
+/**
+ * Initialise send datapath
+ *
+ * @v linda		Linda device
+ * @ret rc		Return status code
+ */
+static int linda_init_send ( struct linda *linda ) {
+	struct QIB_7220_SendBufAvailAddr sendbufavailaddr;
+	struct QIB_7220_SendCtrl sendctrl;
+	unsigned int i;
+	int rc;
+
+	/* Initialise the send_buf[] array */
+	for ( i = 0 ; i < LINDA_MAX_SEND_BUFS ; i++ )
+		linda->send_buf[i] = i;
+
+	/* Allocate space for the SendBufAvail array */
+	linda->sendbufavail = malloc_dma ( sizeof ( *linda->sendbufavail ),
+					   LINDA_SENDBUFAVAIL_ALIGN );
+	if ( ! linda->sendbufavail ) {
+		rc = -ENOMEM;
+		goto err_alloc_sendbufavail;
+	}
+	memset ( linda->sendbufavail, 0, sizeof ( linda->sendbufavail ) );
+
+	/* Program SendBufAvailAddr into the hardware */
+	memset ( &sendbufavailaddr, 0, sizeof ( sendbufavailaddr ) );
+	BIT_FILL_1 ( &sendbufavailaddr, SendBufAvailAddr,
+		     ( virt_to_bus ( linda->sendbufavail ) >> 6 ) );
+	linda_writeq ( linda, &sendbufavailaddr,
+		       QIB_7220_SendBufAvailAddr_offset );
+
+	/* Enable sending and DMA of SendBufAvail */
+	memset ( &sendctrl, 0, sizeof ( sendctrl ) );
+	BIT_FILL_2 ( &sendctrl,
+		     SendBufAvailUpd, 1,
+		     SPioEnable, 1 );
+	linda_writeq ( linda, &sendctrl, QIB_7220_SendCtrl_offset );
+
+	return 0;
+
+	free_dma ( linda->sendbufavail, sizeof ( *linda->sendbufavail ) );
+ err_alloc_sendbufavail:
+	return rc;
+}
+
+/**
+ * Shut down send datapath
+ *
+ * @v linda		Linda device
+ */
+static void linda_fini_send ( struct linda *linda ) {
+	struct QIB_7220_SendCtrl sendctrl;
+
+	/* Disable sending and DMA of SendBufAvail */
+	memset ( &sendctrl, 0, sizeof ( sendctrl ) );
+	linda_writeq ( linda, &sendctrl, QIB_7220_SendCtrl_offset );
+	mb();
+
+	/* Ensure hardware has seen this disable */
+	linda_readq ( linda, &sendctrl, QIB_7220_SendCtrl_offset );
+
+	free_dma ( linda->sendbufavail, sizeof ( *linda->sendbufavail ) );
+}
+
+/***************************************************************************
+ *
+ * Receive datapath
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Create receive work queue
+ *
+ * @v linda		Linda device
+ * @v qp		Queue pair
+ * @ret rc		Return status code
+ */
+static int linda_create_recv_wq ( struct linda *linda,
+				  struct ib_queue_pair *qp ) {
+	struct ib_work_queue *wq = &qp->recv;
+	struct linda_recv_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
+	struct QIB_7220_RcvHdrAddr0 rcvhdraddr;
+	struct QIB_7220_RcvHdrTailAddr0 rcvhdrtailaddr;
+	struct QIB_7220_RcvHdrHead0 rcvhdrhead;
+	struct QIB_7220_RcvCtrl rcvctrl;
+	unsigned int ctx = linda_qpn_to_ctx ( qp->qpn );
+	int rc;
+
+	/* Reset context information */
+	memset ( &linda_wq->header_prod, 0,
+		 sizeof ( linda_wq->header_prod ) );
+	linda_wq->header_cons = 0;
+	linda_wq->eager_cons = 0;
+
+	/* Allocate receive header buffer */
+	linda_wq->header = malloc_dma ( LINDA_RECV_HEADERS_SIZE,
+					LINDA_RECV_HEADERS_ALIGN );
+	if ( ! linda_wq->header ) {
+		rc = -ENOMEM;
+		goto err_alloc_header;
+	}
+
+	/* Enable context in hardware */
+	memset ( &rcvhdraddr, 0, sizeof ( rcvhdraddr ) );
+	BIT_FILL_1 ( &rcvhdraddr, RcvHdrAddr0,
+		     ( virt_to_bus ( linda_wq->header ) >> 2 ) );
+	linda_writeq_array8b ( linda, &rcvhdraddr,
+			       QIB_7220_RcvHdrAddr0_offset, ctx );
+	memset ( &rcvhdrtailaddr, 0, sizeof ( rcvhdrtailaddr ) );
+	BIT_FILL_1 ( &rcvhdrtailaddr, RcvHdrTailAddr0,
+		     ( virt_to_bus ( &linda_wq->header_prod ) >> 2 ) );
+	linda_writeq_array8b ( linda, &rcvhdrtailaddr,
+			       QIB_7220_RcvHdrTailAddr0_offset, ctx );
+	memset ( &rcvhdrhead, 0, sizeof ( rcvhdrhead ) );
+	BIT_FILL_1 ( &rcvhdrhead, counter, 1 );
+	linda_writeq_array64k ( linda, &rcvhdrhead,
+				QIB_7220_RcvHdrHead0_offset, ctx );
+	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+	BIT_SET ( &rcvctrl, PortEnable[ctx], 1 );
+	BIT_SET ( &rcvctrl, IntrAvail[ctx], 1 );
+	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+
+	DBGC ( linda, "Linda %p QPN %ld CTX %d hdrs [%lx,%lx) prod %lx\n",
+	       linda, qp->qpn, ctx, virt_to_bus ( linda_wq->header ),
+	       ( virt_to_bus ( linda_wq->header ) + LINDA_RECV_HEADERS_SIZE ),
+	       virt_to_bus ( &linda_wq->header_prod ) );
+	return 0;
+
+	free_dma ( linda_wq->header, LINDA_RECV_HEADERS_SIZE );
+ err_alloc_header:
+	return rc;
+}
+
+/**
+ * Destroy receive work queue
+ *
+ * @v linda		Linda device
+ * @v qp		Queue pair
+ */
+static void linda_destroy_recv_wq ( struct linda *linda,
+				    struct ib_queue_pair *qp ) {
+	struct ib_work_queue *wq = &qp->recv;
+	struct linda_recv_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
+	struct QIB_7220_RcvCtrl rcvctrl;
+	unsigned int ctx = linda_qpn_to_ctx ( qp->qpn );
+
+	/* Disable context in hardware */
+	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+	BIT_SET ( &rcvctrl, PortEnable[ctx], 0 );
+	BIT_SET ( &rcvctrl, IntrAvail[ctx], 0 );
+	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+
+	/* Make sure the hardware has seen that the context is disabled */
+	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+	mb();
+
+	/* Free headers ring */
+	free_dma ( linda_wq->header, LINDA_RECV_HEADERS_SIZE );
+
+	/* Free context */
+	linda_free_ctx ( linda, ctx );
+}
+
+/**
+ * Initialise receive datapath
+ *
+ * @v linda		Linda device
+ * @ret rc		Return status code
+ */
+static int linda_init_recv ( struct linda *linda ) {
+	struct QIB_7220_RcvCtrl rcvctrl;
+	struct QIB_7220_scalar rcvegrbase;
+	struct QIB_7220_scalar rcvhdrentsize;
+	struct QIB_7220_scalar rcvhdrcnt;
+	struct QIB_7220_RcvBTHQP rcvbthqp;
+	unsigned int portcfg;
+	unsigned long egrbase;
+	unsigned int eager_array_size_0;
+	unsigned int eager_array_size_other;
+	unsigned int ctx;
+
+	/* Select configuration based on number of contexts */
+	switch ( LINDA_NUM_CONTEXTS ) {
+	case 5:
+		portcfg = LINDA_PORTCFG_5CTX;
+		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_5CTX_0;
+		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_5CTX_OTHER;
+		break;
+	case 9:
+		portcfg = LINDA_PORTCFG_9CTX;
+		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_9CTX_0;
+		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_9CTX_OTHER;
+		break;
+	case 17:
+		portcfg = LINDA_PORTCFG_17CTX;
+		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_17CTX_0;
+		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_17CTX_OTHER;
+		break;
+	default:
+		linker_assert ( 0, invalid_LINDA_NUM_CONTEXTS );
+		return -EINVAL;
+	}
+
+	/* Configure number of contexts */
+	memset ( &rcvctrl, 0, sizeof ( rcvctrl ) );
+	BIT_FILL_3 ( &rcvctrl,
+		     TailUpd, 1,
+		     PortCfg, portcfg,
+		     RcvQPMapEnable, 1 );
+	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+
+	/* Configure receive header buffer sizes */
+	memset ( &rcvhdrcnt, 0, sizeof ( rcvhdrcnt ) );
+	BIT_FILL_1 ( &rcvhdrcnt, Value, LINDA_RECV_HEADER_COUNT );
+	linda_writeq ( linda, &rcvhdrcnt, QIB_7220_RcvHdrCnt_offset );
+	memset ( &rcvhdrentsize, 0, sizeof ( rcvhdrentsize ) );
+	BIT_FILL_1 ( &rcvhdrentsize, Value, ( LINDA_RECV_HEADER_SIZE >> 2 ) );
+	linda_writeq ( linda, &rcvhdrentsize, QIB_7220_RcvHdrEntSize_offset );
+
+	/* Calculate eager array start addresses for each context */
+	linda_readq ( linda, &rcvegrbase, QIB_7220_RcvEgrBase_offset );
+	egrbase = BIT_GET ( &rcvegrbase, Value );
+	linda->recv_wq[0].eager_array = egrbase;
+	linda->recv_wq[0].eager_entries = eager_array_size_0;
+	egrbase += ( eager_array_size_0 * sizeof ( struct QIB_7220_RcvEgr ) );
+	for ( ctx = 1 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
+		linda->recv_wq[ctx].eager_array = egrbase;
+		linda->recv_wq[ctx].eager_entries = eager_array_size_other;
+		egrbase += ( eager_array_size_other *
+			     sizeof ( struct QIB_7220_RcvEgr ) );
+	}
+	for ( ctx = 0 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
+		DBGC ( linda, "Linda %p CTX %d eager array at %lx (%d "
+		       "entries)\n", linda, ctx,
+		       linda->recv_wq[ctx].eager_array,
+		       linda->recv_wq[ctx].eager_entries );
+	}
+
+	/* Set the BTH QP for Infinipath packets to an unused value */
+	memset ( &rcvbthqp, 0, sizeof ( rcvbthqp ) );
+	BIT_FILL_1 ( &rcvbthqp, RcvBTHQP, LINDA_QP_IDETH );
+	linda_writeq ( linda, &rcvbthqp, QIB_7220_RcvBTHQP_offset );
+
+	return 0;
+}
+
+/**
+ * Shut down receive datapath
+ *
+ * @v linda		Linda device
+ */
+static void linda_fini_recv ( struct linda *linda __unused ) {
+	/* Nothing to do; all contexts were already disabled when the
+	 * queue pairs were destroyed
+	 */
+}
+
+/***************************************************************************
+ *
  * Completion queue operations
  *
  ***************************************************************************
@@ -192,74 +664,6 @@ static void linda_destroy_cq ( struct ib_device *ibdev,
  */
 
 /**
- * Map context number to QPN
- *
- * @v ctx		Context index
- * @ret qpn		Queue pair number
- */
-static int linda_ctx_to_qpn ( unsigned int ctx ) {
-	/* This mapping is fixed by hardware */
-	return ( ctx * 2 );
-}
-
-/**
- * Map QPN to context number
- *
- * @v qpn		Queue pair number
- * @ret ctx		Context index
- */
-static int linda_qpn_to_ctx ( unsigned int qpn ) {
-	/* This mapping is fixed by hardware */
-	return ( qpn / 2 );
-}
-
-/**
- * Allocate a context
- *
- * @v linda		Linda device
- * @v num_recv_wqes	Number of receive work queue entries
- * @ret ctx		Context index, or negative error
- */
-static int linda_alloc_ctx ( struct linda *linda,
-			     unsigned int num_recv_wqes ) {
-	struct linda_context *context;
-	unsigned int ctx;
-
-	for ( ctx = 0 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
-		context = &linda->context[ctx];
-
-		if ( context->active )
-			continue;
-
-		/* Sanity check */
-		if ( num_recv_wqes > context->eager_entries )
-			continue;
-
-		DBGC2 ( linda, "Linda %p CTX %d allocated with %d RX WQEs\n",
-			linda, ctx, num_recv_wqes );
-		linda->context[ctx].active = 1;
-		return ctx;
-	}
-
-	DBGC ( linda, "Linda %p out of available contexts for %d RX WQEs\n",
-	       linda, num_recv_wqes );
-	return -ENOENT;
-}
-
-/**
- * Free a context
- *
- * @v linda		Linda device
- * @v ctx		Context index
- */
-static void linda_free_ctx ( struct linda *linda, unsigned int ctx ) {
-	struct linda_context *context = &linda->context[ctx];
-
-	context->active = 0;
-	DBGC2 ( linda, "Linda %p CTX %d freed\n", linda, ctx );
-}
-
-/**
  * Create queue pair
  *
  * @v ibdev		Infiniband device
@@ -269,64 +673,37 @@ static void linda_free_ctx ( struct linda *linda, unsigned int ctx ) {
 static int linda_create_qp ( struct ib_device *ibdev,
 			     struct ib_queue_pair *qp ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct linda_context *context;
-	struct QIB_7220_RcvHdrAddr0 rcvhdraddr;
-	struct QIB_7220_RcvHdrTailAddr0 rcvhdrtailaddr;
-	struct QIB_7220_RcvHdrHead0 rcvhdrhead;
-	struct QIB_7220_RcvCtrl rcvctrl;
 	int ctx;
 	int rc;
 
 	/* Locate an available context */
-	ctx = linda_alloc_ctx ( linda, qp->recv.num_wqes );
+	ctx = linda_alloc_ctx ( linda );
 	if ( ctx < 0 ) {
 		rc = ctx;
 		goto err_alloc_ctx;
 	}
+
+	/* Set queue pair number based on context index */
 	qp->qpn = linda_ctx_to_qpn ( ctx );
-	context = &linda->context[ctx];
 
-	/* Reset context information */
-	memset ( &context->header_prod, 0, sizeof ( context->header_prod ) );
-	context->header_cons = 0;
-	context->eager_cons = 0;
+	/* Set work-queue private data pointers */
+	ib_wq_set_drvdata ( &qp->send, &linda->send_wq[ctx] );
+	ib_wq_set_drvdata ( &qp->recv, &linda->recv_wq[ctx] );
 
-	/* Allocate receive header buffer */
-	context->header = malloc_dma ( LINDA_RX_HEADERS_SIZE,
-				       LINDA_RX_HEADERS_ALIGN );
-	if ( ! context->header ) {
-		rc = -ENOMEM;
-		goto err_alloc_header;
-	}
+	/* Create receive work queue */
+	if ( ( rc = linda_create_recv_wq ( linda, qp ) ) != 0 )
+		goto err_create_recv_wq;
 
-	/* Enable context in hardware */
-	memset ( &rcvhdraddr, 0, sizeof ( rcvhdraddr ) );
-	BIT_FILL_1 ( &rcvhdraddr, RcvHdrAddr0,
-		     ( virt_to_bus ( context->header ) >> 2 ) );
-	linda_writeq_array8b ( linda, &rcvhdraddr,
-			       QIB_7220_RcvHdrAddr0_offset, ctx );
-	memset ( &rcvhdrtailaddr, 0, sizeof ( rcvhdrtailaddr ) );
-	BIT_FILL_1 ( &rcvhdrtailaddr, RcvHdrTailAddr0,
-		     ( virt_to_bus ( &context->header_prod ) >> 2 ) );
-	linda_writeq_array8b ( linda, &rcvhdrtailaddr,
-			       QIB_7220_RcvHdrTailAddr0_offset, ctx );
-	memset ( &rcvhdrhead, 0, sizeof ( rcvhdrhead ) );
-	BIT_FILL_1 ( &rcvhdrhead, counter, 1 );
-	linda_writeq_array64k ( linda, &rcvhdrhead,
-				QIB_7220_RcvHdrHead0_offset, ctx );
-	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
-	BIT_SET ( &rcvctrl, PortEnable[ctx], 1 );
-	BIT_SET ( &rcvctrl, IntrAvail[ctx], 1 );
-	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+	/* Create send work queue */
+	if ( ( rc = linda_create_send_wq ( linda, qp ) ) != 0 )
+		goto err_create_send_wq;
 
-	DBGC ( linda, "Linda %p QPN %ld using CTX %d hdrs [%lx,%lx) prod "
-	       "%lx\n", linda, qp->qpn, ctx, virt_to_bus ( context->header ),
-	       ( virt_to_bus ( context->header ) + LINDA_RX_HEADERS_SIZE ),
-	       virt_to_bus ( &context->header_prod ) );
 	return 0;
 
-	free_dma ( context->header, LINDA_RX_HEADERS_SIZE );
- err_alloc_header:
+	linda_destroy_send_wq ( linda, qp );
+ err_create_send_wq:
+	linda_destroy_recv_wq ( linda, qp );
+ err_create_recv_wq:
 	linda_free_ctx ( linda, ctx );
  err_alloc_ctx:
 	return rc;
@@ -361,25 +738,9 @@ static int linda_modify_qp ( struct ib_device *ibdev,
 static void linda_destroy_qp ( struct ib_device *ibdev,
 			       struct ib_queue_pair *qp ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
-	unsigned int ctx = linda_qpn_to_ctx ( qp->qpn );
-	struct linda_context *context = &linda->context[ctx];
-	struct QIB_7220_RcvCtrl rcvctrl;
 
-	/* Disable context in hardware */
-	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
-	BIT_SET ( &rcvctrl, PortEnable[ctx], 0 );
-	BIT_SET ( &rcvctrl, IntrAvail[ctx], 0 );
-	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
-
-	/* Make sure the hardware has seen that the context is disabled */
-	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
-	mb();
-
-	/* Free headers ring */
-	free_dma ( context->header, LINDA_RX_HEADERS_SIZE );
-
-	/* Free context */
-	linda_free_ctx ( linda, ctx );
+	linda_destroy_send_wq ( linda, qp );
+	linda_destroy_recv_wq ( linda, qp );
 }
 
 /***************************************************************************
@@ -403,12 +764,89 @@ static int linda_post_send ( struct ib_device *ibdev,
 			     struct ib_address_vector *av,
 			     struct io_buffer *iobuf ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct ib_work_queue *wq = &qp->send;
+	struct linda_send_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
+	unsigned int send_buf;
 
-	( void ) linda;
-	( void ) qp;
+	/* Allocate send buffer */
+	send_buf = linda_alloc_send_buf ( linda );
+
+	/* Store I/O buffer and send buffer index */
+	assert ( wq->iobufs[linda_wq->prod] == NULL );
+	wq->iobufs[linda_wq->prod] = iobuf;
+	linda_wq->send_buf[linda_wq->prod] = send_buf;
+
 	( void ) av;
-	( void ) iobuf;
-	return -ENOTSUP;
+
+	DBGC ( linda, "Linda %p QPN %ld posted TX %d(%d)\n",
+	       linda, qp->qpn, send_buf, linda_wq->prod );
+
+	/* Increment producer counter */
+	linda_wq->prod = ( ( linda_wq->prod + 1 ) & ( wq->num_wqes - 1 ) );
+
+	return 0;
+}
+
+/**
+ * Complete send work queue entry
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ * @v wqe_idx		Work queue entry index
+ */
+static void linda_complete_send ( struct ib_device *ibdev,
+				  struct ib_queue_pair *qp,
+				  unsigned int wqe_idx ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct ib_work_queue *wq = &qp->send;
+	struct linda_send_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
+	struct io_buffer *iobuf;
+	struct ib_completion completion;
+
+	/* Complete work queue entry */
+	iobuf = wq->iobufs[wqe_idx];
+	assert ( iobuf != NULL );
+	memset ( &completion, 0, sizeof ( completion ) );
+	completion.len = iob_len ( iobuf );
+	ib_complete_send ( ibdev, qp, &completion, iobuf );
+	wq->iobufs[wqe_idx] = NULL;
+
+	/* Free send buffer */
+	linda_free_send_buf ( linda, linda_wq->send_buf[wqe_idx] );
+}
+
+/**
+ * Poll send work queue
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ */
+static void linda_poll_send_wq ( struct ib_device *ibdev,
+				 struct ib_queue_pair *qp ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct ib_work_queue *wq = &qp->send;
+	struct linda_send_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
+	unsigned int send_buf;
+
+	/* Do nothing if queue is empty */
+	if ( ! wq->fill )
+		return;
+
+	/* Look for completions */
+	while ( linda_wq->cons != linda_wq->prod ) {
+
+		/* Check to see if send buffer has completed */
+		send_buf = linda_wq->send_buf[linda_wq->cons];
+		if ( linda_send_buf_in_use ( linda, send_buf ) )
+			break;
+
+		/* Complete this buffer */
+		linda_complete_send ( ibdev, qp, linda_wq->cons );
+
+		/* Increment consumer counter */
+		linda_wq->cons = ( ( linda_wq->cons + 1 ) &
+				   ( wq->num_wqes - 1 ) );
+	}
 }
 
 /**
@@ -424,11 +862,10 @@ static int linda_post_recv ( struct ib_device *ibdev,
 			     struct io_buffer *iobuf ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
 	struct ib_work_queue *wq = &qp->recv;
-	struct linda_context *context;
+	struct linda_recv_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
 	struct QIB_7220_RcvEgr rcvegr;
 	physaddr_t addr;
 	size_t len;
-	unsigned int ctx;
 	unsigned int eager_prod;
 	unsigned int wqe_idx;
 	unsigned int bufsize;
@@ -441,18 +878,14 @@ static int linda_post_recv ( struct ib_device *ibdev,
 		       "(%08lx)\n", linda, qp->qpn, addr );
 		return -EINVAL;
 	}
-	if ( len != LINDA_RX_PAYLOAD_SIZE ) {
+	if ( len != LINDA_RECV_PAYLOAD_SIZE ) {
 		DBGC ( linda, "Linda %p QPN %ld wrong RX buffer size (%d)\n",
 		       linda, qp->qpn, len );
 		return -EINVAL;
 	}
 
-	/* Identify context for this queue */
-	ctx = linda_qpn_to_ctx ( qp->qpn );
-	context = &linda->context[ctx];
-
 	/* Calculate eager producer index and WQE index */
-	eager_prod = ( context->eager_cons + wq->fill );
+	eager_prod = ( linda_wq->eager_cons + wq->fill );
 	wqe_idx = ( eager_prod & ( wq->num_wqes - 1 ) );
 	assert ( wq->iobufs[wqe_idx] == NULL );
 
@@ -460,7 +893,7 @@ static int linda_post_recv ( struct ib_device *ibdev,
 	wq->iobufs[wqe_idx] = iobuf;
 
 	/* Calculate buffer size */
-	switch ( LINDA_RX_PAYLOAD_SIZE ) {
+	switch ( LINDA_RECV_PAYLOAD_SIZE ) {
 	case 2048:  bufsize = LINDA_EAGER_BUFFER_2K;  break;
 	case 4096:  bufsize = LINDA_EAGER_BUFFER_4K;  break;
 	case 8192:  bufsize = LINDA_EAGER_BUFFER_8K;  break;
@@ -477,7 +910,7 @@ static int linda_post_recv ( struct ib_device *ibdev,
 		     Addr, ( addr >> 11 ),
 		     BufSize, bufsize );
 	linda_writeq_array8b ( linda, &rcvegr,
-			       context->eager_array, eager_prod );
+			       linda_wq->eager_array, eager_prod );
 	DBGC ( linda, "Linda %p QPN %ld posted RX egr %d(%d) [%lx,%lx)\n",
 	       linda, qp->qpn, eager_prod, wqe_idx, addr, ( addr + len ) );
 
@@ -488,15 +921,15 @@ static int linda_post_recv ( struct ib_device *ibdev,
  * Complete receive work queue entry
  *
  * @v ibdev		Infiniband device
- * @v wq		Receive work queue
- * @v context		Linda context
+ * @v qp		Queue pair
  * @v header_offs	Header offset
  */
 static void linda_complete_recv ( struct ib_device *ibdev,
-				  struct ib_work_queue *wq,
-				  struct linda_context *context,
+				  struct ib_queue_pair *qp,
 				  unsigned int header_offs ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct ib_work_queue *wq = &qp->recv;
+	struct linda_recv_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
 	struct QIB_7220_RcvHdrFlags *rcvhdrflags;
 	struct QIB_7220_RcvEgr rcvegr;
 	struct ib_completion completion;
@@ -513,8 +946,8 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	unsigned int wqe_idx;
 
 	/* RcvHdrFlags are at the end of the header entry */
-	rcvhdrflags = ( context->header + header_offs + LINDA_RX_HEADER_SIZE -
-			sizeof ( *rcvhdrflags ) );
+	rcvhdrflags = ( linda_wq->header + header_offs +
+			LINDA_RECV_HEADER_SIZE - sizeof ( *rcvhdrflags ) );
 	rcvtype = BIT_GET ( rcvhdrflags, RcvType );
 	pktlen = ( BIT_GET ( rcvhdrflags, PktLen ) << 2 );
 	egrindex = BIT_GET ( rcvhdrflags, EgrIndex );
@@ -529,16 +962,16 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	parityerr = BIT_GET ( rcvhdrflags, ParityErr );
 	vcrcerr = BIT_GET ( rcvhdrflags, VCRCErr );
 	icrcerr = BIT_GET ( rcvhdrflags, ICRCErr );
-	header_len = ( LINDA_RX_HEADER_SIZE - hdrqoffset -
+	header_len = ( LINDA_RECV_HEADER_SIZE - hdrqoffset -
 		       sizeof ( *rcvhdrflags ) );
 	payload_len = ( pktlen - header_len - 4 /* ICRC */ );
 	err = ( iberr | mkerr | tiderr | khdrerr | mtuerr |
 		lenerr | parityerr | vcrcerr | icrcerr );
-	assert ( egrindex == context->eager_cons );
-	wqe_idx = ( context->eager_cons & ( wq->num_wqes - 1 ) );
+	assert ( egrindex == linda_wq->eager_cons );
+	wqe_idx = ( linda_wq->eager_cons & ( wq->num_wqes - 1 ) );
 	DBGC ( linda, "Linda %p QPN %ld RX hdr %d egr %d(%d)%s type %d len "
-	       "%d(%d+%d+4)%s%s%s%s%s%s%s%s%s%s%s\n", linda, wq->qp->qpn,
-	       ( header_offs / LINDA_RX_HEADER_SIZE ), egrindex, wqe_idx,
+	       "%d(%d+%d+4)%s%s%s%s%s%s%s%s%s%s%s\n", linda, qp->qpn,
+	       ( header_offs / LINDA_RECV_HEADER_SIZE ), egrindex, wqe_idx,
 	       ( useegrbfr ? "" : "(unused)" ), rcvtype,
 	       pktlen, header_len, payload_len, ( err ? " [Err" : "" ),
 	       ( iberr ? " IB" : "" ), ( mkerr ? " MK" : "" ),
@@ -563,19 +996,59 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 
 	/* Complete work queue entry */
 	if ( wq->iobufs[wqe_idx] != NULL ) {
-		ib_complete_recv ( ibdev, wq->qp, &completion,
+		ib_complete_recv ( ibdev, qp, &completion,
 				   wq->iobufs[wqe_idx] );
 		wq->iobufs[wqe_idx] = NULL;
 	}
 
 	/* Clear eager buffer */
 	memset ( &rcvegr, 0, sizeof ( rcvegr ) );
-	linda_writeq_array8b ( linda, &rcvegr,
-			       context->eager_array, context->eager_cons );
+	linda_writeq_array8b ( linda, &rcvegr, linda_wq->eager_array,
+			       linda_wq->eager_cons );
 
 	/* Update consumer index */
-	context->eager_cons = ( ( context->eager_cons + 1 ) &
-				( context->eager_entries - 1 ) );
+	linda_wq->eager_cons = ( ( linda_wq->eager_cons + 1 ) &
+				 ( linda_wq->eager_entries - 1 ) );
+}
+
+/**
+ * Poll receive work queue
+ *
+ * @v ibdev		Infiniband device
+ * @v qp		Queue pair
+ */
+static void linda_poll_recv_wq ( struct ib_device *ibdev,
+				 struct ib_queue_pair *qp ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct ib_work_queue *wq = &qp->recv;
+	struct linda_recv_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
+	struct QIB_7220_RcvHdrHead0 rcvhdrhead;
+	unsigned int ctx = linda_qpn_to_ctx ( qp->qpn );
+	unsigned int header_prod;
+
+	/* Check for received packets */
+	header_prod = ( BIT_GET ( &linda_wq->header_prod, Value ) << 2 );
+	if ( header_prod == linda_wq->header_cons )
+		return;
+
+	/* Process all received packets */
+	while ( linda_wq->header_cons != header_prod ) {
+
+		/* Complete the receive */
+		linda_complete_recv ( ibdev, qp, linda_wq->header_cons );
+			
+		/* Increment the consumer offset */
+		linda_wq->header_cons += LINDA_RECV_HEADER_SIZE;
+		linda_wq->header_cons %= LINDA_RECV_HEADERS_SIZE;
+	}
+
+	/* Update consumer offset */
+	memset ( &rcvhdrhead, 0, sizeof ( rcvhdrhead ) );
+	BIT_FILL_2 ( &rcvhdrhead,
+		     RcvHeadPointer, ( linda_wq->header_cons >> 2 ),
+		     counter, 1 );
+	linda_writeq_array64k ( linda, &rcvhdrhead,
+				QIB_7220_RcvHdrHead0_offset, ctx );
 }
 
 /**
@@ -586,47 +1059,15 @@ static void linda_complete_recv ( struct ib_device *ibdev,
  */
 static void linda_poll_cq ( struct ib_device *ibdev,
 			    struct ib_completion_queue *cq ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
 	struct ib_work_queue *wq;
-	struct linda_context *context;
-	struct QIB_7220_RcvHdrHead0 rcvhdrhead;
-	unsigned int ctx;
-	unsigned int header_prod;
 
-	/* Poll associated RX queues */
+	/* Poll associated send and receive queues */
 	list_for_each_entry ( wq, &cq->work_queues, list ) {
-		if ( wq->is_send )
-			continue;
-
-		/* Identify context for this queue */
-		ctx = linda_qpn_to_ctx ( wq->qp->qpn );
-		context = &linda->context[ctx];
-
-		/* Check for received packets */
-		header_prod =
-			( BIT_GET ( &context->header_prod, Value ) << 2 );
-		if ( header_prod == context->header_cons )
-			continue;
-
-		/* Process all received packets */
-		while ( context->header_cons != header_prod ) {
-
-			/* Complete the receive */
-			linda_complete_recv ( ibdev, wq, context,
-					      context->header_cons );
-			
-			/* Increment the consumer offset */
-			context->header_cons += LINDA_RX_HEADER_SIZE;
-			context->header_cons %= LINDA_RX_HEADERS_SIZE;
+		if ( wq->is_send ) {
+			linda_poll_send_wq ( ibdev, wq->qp );
+		} else {
+			linda_poll_recv_wq ( ibdev, wq->qp );
 		}
-		
-		/* Update consumer offset */
-		memset ( &rcvhdrhead, 0, sizeof ( rcvhdrhead ) );
-		BIT_FILL_2 ( &rcvhdrhead,
-			     RcvHeadPointer, ( context->header_cons >> 2 ),
-			     counter, 1 );
-		linda_writeq_array64k ( linda, &rcvhdrhead,
-					QIB_7220_RcvHdrHead0_offset, ctx );
 	}
 }
 
@@ -841,6 +1282,9 @@ static int linda_mad_get_node_info ( struct ib_device *ibdev,
 
 	DBGC ( linda, "Get node info:\n" );
 	DBGC_HDA ( linda, 0, node_info, sizeof ( *node_info ) );
+
+	// send back the same packet
+	return 0;
 
 	return -EIO;
 }
@@ -1388,96 +1832,6 @@ static int linda_ib_epb_ram_xfer ( struct linda *linda, unsigned int address,
 
 /***************************************************************************
  *
- * RX initialisation
- *
- ***************************************************************************
- */
-
-/**
- * Initialise RX contexts
- *
- * @v linda		Linda device
- * @ret rc		Return status code
- */
-static int linda_init_rx ( struct linda *linda ) {
-	struct QIB_7220_RcvCtrl rcvctrl;
-	struct QIB_7220_scalar rcvegrbase;
-	struct QIB_7220_scalar rcvhdrentsize;
-	struct QIB_7220_scalar rcvhdrcnt;
-	struct QIB_7220_RcvBTHQP rcvbthqp;
-	unsigned int portcfg;
-	unsigned long egrbase;
-	unsigned int eager_array_size_0;
-	unsigned int eager_array_size_other;
-	unsigned int ctx;
-
-	/* Select configuration based on number of contexts */
-	switch ( LINDA_NUM_CONTEXTS ) {
-	case 5:
-		portcfg = LINDA_PORTCFG_5CTX;
-		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_5CTX_0;
-		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_5CTX_OTHER;
-		break;
-	case 9:
-		portcfg = LINDA_PORTCFG_9CTX;
-		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_9CTX_0;
-		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_9CTX_OTHER;
-		break;
-	case 17:
-		portcfg = LINDA_PORTCFG_17CTX;
-		eager_array_size_0 = LINDA_EAGER_ARRAY_SIZE_17CTX_0;
-		eager_array_size_other = LINDA_EAGER_ARRAY_SIZE_17CTX_OTHER;
-		break;
-	default:
-		linker_assert ( 0, invalid_LINDA_NUM_CONTEXTS );
-		return -EINVAL;
-	}
-
-	/* Configure number of contexts */
-	memset ( &rcvctrl, 0, sizeof ( rcvctrl ) );
-	BIT_FILL_3 ( &rcvctrl,
-		     TailUpd, 1,
-		     PortCfg, portcfg,
-		     RcvQPMapEnable, 1 );
-	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
-
-	/* Configure receive header buffer sizes */
-	memset ( &rcvhdrcnt, 0, sizeof ( rcvhdrcnt ) );
-	BIT_FILL_1 ( &rcvhdrcnt, Value, LINDA_RX_HEADER_COUNT );
-	linda_writeq ( linda, &rcvhdrcnt, QIB_7220_RcvHdrCnt_offset );
-	memset ( &rcvhdrentsize, 0, sizeof ( rcvhdrentsize ) );
-	BIT_FILL_1 ( &rcvhdrentsize, Value, ( LINDA_RX_HEADER_SIZE >> 2 ) );
-	linda_writeq ( linda, &rcvhdrentsize, QIB_7220_RcvHdrEntSize_offset );
-
-	/* Calculate eager array start addresses for each context */
-	linda_readq ( linda, &rcvegrbase, QIB_7220_RcvEgrBase_offset );
-	egrbase = BIT_GET ( &rcvegrbase, Value );
-	linda->context[0].eager_array = egrbase;
-	linda->context[0].eager_entries = eager_array_size_0;
-	egrbase += ( eager_array_size_0 * sizeof ( struct QIB_7220_RcvEgr ) );
-	for ( ctx = 1 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
-		linda->context[ctx].eager_array = egrbase;
-		linda->context[ctx].eager_entries = eager_array_size_other;
-		egrbase += ( eager_array_size_other *
-			     sizeof ( struct QIB_7220_RcvEgr ) );
-	}
-	for ( ctx = 0 ; ctx < LINDA_NUM_CONTEXTS ; ctx++ ) {
-		DBGC ( linda, "Linda %p CTX %d eager array at %lx (%d "
-		       "entries)\n", linda, ctx,
-		       linda->context[ctx].eager_array,
-		       linda->context[ctx].eager_entries );
-	}
-
-	/* Set the BTH QP for Infinipath packets to an unused value */
-	memset ( &rcvbthqp, 0, sizeof ( rcvbthqp ) );
-	BIT_FILL_1 ( &rcvbthqp, RcvBTHQP, LINDA_QP_IDETH );
-	linda_writeq ( linda, &rcvbthqp, QIB_7220_RcvBTHQP_offset );
-
-	return 0;
-}
-
-/***************************************************************************
- *
  * Infiniband SerDes initialisation
  *
  ***************************************************************************
@@ -1753,8 +2107,8 @@ static int linda_init_ib_serdes ( struct linda *linda ) {
 	BIT_FILL_6 ( &ibcctrl, /* Tuning values taken from Linux driver */
 		     FlowCtrlPeriod, 0x03,
 		     FlowCtrlWaterMark, 0x05,
-		     MaxPktLen, ( ( LINDA_RX_HEADER_SIZE +
-				    LINDA_RX_PAYLOAD_SIZE +
+		     MaxPktLen, ( ( LINDA_RECV_HEADER_SIZE +
+				    LINDA_RECV_PAYLOAD_SIZE +
 				    4 /* ICRC */ ) >> 2 ),
 		     PhyerrThreshold, 0xf,
 		     OverrunThreshold, 0xf,
@@ -1831,7 +2185,7 @@ static void linda_kctx_refill_recv ( struct ib_device *ibdev ) {
 	while ( linda->kernel_qp->recv.fill < LINDA_KCTX_NUM_SEND_WQES ) {
 
 		/* Allocate I/O buffer */
-		iobuf = alloc_iob ( LINDA_RX_PAYLOAD_SIZE );
+		iobuf = alloc_iob ( LINDA_RECV_PAYLOAD_SIZE );
 		if ( ! iobuf ) {
 			/* Non-fatal; we will refill on next attempt */
 			return;
@@ -1880,7 +2234,7 @@ static void linda_kctx_complete_send ( struct ib_device *ibdev,
  * @v iobuf		I/O buffer
  */
 static void linda_kctx_complete_recv ( struct ib_device *ibdev,
-				       struct ib_queue_pair *qp __unused,
+				       struct ib_queue_pair *qp,
 				       struct ib_completion *completion,
 				       struct io_buffer *iobuf ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
@@ -1890,21 +2244,28 @@ static void linda_kctx_complete_recv ( struct ib_device *ibdev,
 	if ( completion->syndrome ) {
 		DBGC ( linda, "Linda %p KCTX RX error %d\n",
 		       linda, completion->syndrome );
-		goto done;
+		goto err;
 	}
 
-	/* Respond to MAD */
+	/* Construct MAD response */
 	iob_put ( iobuf, completion->len );
 	if ( ( rc = linda_mad ( ibdev, iobuf->data,
 				iob_len ( iobuf ) ) ) != 0 ) {
-		DBGC ( linda, "Linda %p KCTX could not respond to MAD: %s\n",
-		       linda, strerror ( rc ) );
-		goto done;
+		DBGC ( linda, "Linda %p KCTX could not construct MAD "
+		       "response: %s\n", linda, strerror ( rc ) );
+		goto err;
 	}
 
-	// send out the MAD response...
+	/* Send MAD response */
+	if ( ( rc = ib_post_send ( ibdev, qp, NULL, iobuf ) ) != 0 ){ 
+		DBGC ( linda, "Linda %p KCTX could not send MAD "
+		       "response: %s\n", linda, strerror ( rc ) );
+		goto err;
+	}
 
- done:
+	return;
+	
+ err:
 	free_iob ( iobuf );
 }
 
@@ -2033,9 +2394,13 @@ static int linda_probe ( struct pci_device *pci,
 	if ( ( rc = linda_read_eeprom ( linda ) ) != 0 )
 		goto err_read_eeprom;
 
+	/* Initialise send datapath */
+	if ( ( rc = linda_init_send ( linda ) ) != 0 )
+		goto err_init_send;
+
 	/* Initialise receive datapath */
-	if ( ( rc = linda_init_rx ( linda ) ) != 0 )
-		goto err_init_rx;
+	if ( ( rc = linda_init_recv ( linda ) ) != 0 )
+		goto err_init_recv;
 
 	/* Initialise the IB SerDes */
 	if ( ( rc = linda_init_ib_serdes ( linda ) ) != 0 )
@@ -2058,7 +2423,10 @@ static int linda_probe ( struct pci_device *pci,
  err_register_ibdev:
 	linda_destroy_kctx ( ibdev );
  err_create_kctx:
- err_init_rx:
+	linda_fini_recv ( linda );
+ err_init_recv:
+	linda_fini_send ( linda );
+ err_init_send:
  err_init_ib_serdes:
  err_read_eeprom:
  err_init_i2c:
@@ -2074,8 +2442,11 @@ static int linda_probe ( struct pci_device *pci,
  */
 static void linda_remove ( struct pci_device *pci ) {
 	struct ib_device *ibdev = pci_get_drvdata ( pci );
+	struct linda *linda = ib_get_drvdata ( ibdev );
 
 	linda_destroy_kctx ( ibdev );
+	linda_fini_recv ( linda );
+	linda_fini_send ( linda );
 	unregister_ibdev ( ibdev );
 	ibdev_put ( ibdev );
 }
