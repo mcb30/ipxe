@@ -109,6 +109,20 @@ enum linda_portcfg {
 #define LINDA_EAGER_ARRAY_SIZE_17CTX_0 2048
 #define LINDA_EAGER_ARRAY_SIZE_17CTX_OTHER 1024
 
+/** Eager buffer required alignment */
+#define LINDA_EAGER_BUFFER_ALIGN 2048
+
+/** Eager buffer size encodings */
+enum linda_eager_buffer_size {
+	LINDA_EAGER_BUFFER_NONE = 0,
+	LINDA_EAGER_BUFFER_2K = 1,
+	LINDA_EAGER_BUFFER_4K = 2,
+	LINDA_EAGER_BUFFER_8K = 3,
+	LINDA_EAGER_BUFFER_16K = 4,
+	LINDA_EAGER_BUFFER_32K = 5,
+	LINDA_EAGER_BUFFER_64K = 6,
+};
+
 /** Number of RX headers per context
  *
  * This is a policy decision. 
@@ -126,6 +140,12 @@ enum linda_portcfg {
 
 /** RX header alignment */
 #define LINDA_RX_HEADERS_ALIGN 64
+
+/** RX payload size
+ *
+ * This is a policy decision.  Must be a valid eager buffer size.
+ */
+#define LINDA_RX_PAYLOAD_SIZE 2048
 
 /** Context 0 number of send WQEs
  *

@@ -26,6 +26,7 @@
 #include <gpxe/i2c.h>
 #include <gpxe/bitbash.h>
 #include <gpxe/malloc.h>
+#include <gpxe/iobuf.h>
 #include "linda.h"
 
 /**
@@ -39,16 +40,18 @@
 struct linda_context {
 	/** Context is in use */
 	unsigned int active;
-	/** Offset within register space of the eager array */
-	unsigned long eager_array;
-	/** Number of entries in eager array */
-	unsigned int eager_entries;
 	/** Receive header ring */
 	void *header;
 	/** Receive header producer offset (written by hardware) */
 	struct QIB_7220_scalar header_prod;
 	/** Receive header consumer offset */
 	unsigned int header_cons;
+	/** Offset within register space of the eager array */
+	unsigned long eager_array;
+	/** Number of entries in eager array */
+	unsigned int eager_entries;
+	/** Eager array producer offset */
+	unsigned int eager_prod;
 };
 
 /** A Linda HCA */
@@ -65,12 +68,16 @@ struct linda {
 	struct ib_completion_queue *kernel_cq;
 	/** Kernel context queue pair */
 	struct ib_queue_pair *kernel_qp;
+	/** Kernel context receive work queue fill level */
+	unsigned int kernel_recv_fill;
 
 	/** I2C bit-bashing interface */
 	struct i2c_bit_basher i2c;
 	/** I2C serial EEPROM */
 	struct i2c_device eeprom;
 };
+
+static void linda_poll_kctx ( struct ib_device *ibdev );
 
 /***************************************************************************
  *
@@ -128,6 +135,10 @@ static void linda_writeq ( struct linda *linda, const uint32_t *dwords,
 }
 #define linda_writeq( _linda, _ptr, _offset ) \
 	linda_writeq ( (_linda), (_ptr)->u.dwords, (_offset) )
+#define linda_writeq_array8b( _linda, _ptr, _offset, _idx ) \
+	linda_writeq ( (_linda), (_ptr), ( (_offset) + ( (_idx) * 8 ) ) )
+#define linda_writeq_array64k( _linda, _ptr, _offset, _idx ) \
+	linda_writeq ( (_linda), (_ptr), ( (_offset) + ( (_idx) * 65536 ) ) )
 
 /***************************************************************************
  *
@@ -280,20 +291,17 @@ static int linda_create_qp ( struct ib_device *ibdev,
 	memset ( &rcvhdraddr, 0, sizeof ( rcvhdraddr ) );
 	BIT_FILL_1 ( &rcvhdraddr, RcvHdrAddr0,
 		     ( virt_to_bus ( context->header ) >> 2 ) );
-	linda_writeq ( linda, &rcvhdraddr,
-		       ( QIB_7220_RcvHdrAddr0_offset +
-			 ( ctx * sizeof ( rcvhdraddr ) ) ) );
+	linda_writeq_array8b ( linda, &rcvhdraddr,
+			       QIB_7220_RcvHdrAddr0_offset, ctx );
 	memset ( &rcvhdrtailaddr, 0, sizeof ( rcvhdrtailaddr ) );
 	BIT_FILL_1 ( &rcvhdrtailaddr, RcvHdrTailAddr0,
 		     ( virt_to_bus ( &context->header_prod ) >> 2 ) );
-	linda_writeq ( linda, &rcvhdrtailaddr,
-		       ( QIB_7220_RcvHdrTailAddr0_offset +
-			 ( ctx * sizeof ( rcvhdrtailaddr ) ) ) );
+	linda_writeq_array8b ( linda, &rcvhdrtailaddr,
+			       QIB_7220_RcvHdrTailAddr0_offset, ctx );
 	memset ( &rcvhdrhead, 0, sizeof ( rcvhdrhead ) );
 	BIT_FILL_1 ( &rcvhdrhead, counter, 1 );
-	linda_writeq ( linda, &rcvhdrhead,
-		       ( QIB_7220_RcvHdrHead0_offset +
-			 ( ctx * sizeof ( rcvhdrhead ) ) ) );
+	linda_writeq_array64k ( linda, &rcvhdrhead,
+				QIB_7220_RcvHdrHead0_offset, ctx );
 	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
 	BIT_SET ( &rcvctrl, PortEnable[ctx], 1 );
 	BIT_SET ( &rcvctrl, IntrAvail[ctx], 1 );
@@ -403,11 +411,77 @@ static int linda_post_recv ( struct ib_device *ibdev,
 			     struct ib_queue_pair *qp,
 			     struct io_buffer *iobuf ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct ib_work_queue *wq = &qp->recv;
+	struct linda_context *context;
+	struct QIB_7220_RcvEgr rcvegr;
+	struct QIB_7220_scalar rcvegrindexhead;
+	unsigned int ctx;
+	unsigned int wqe_idx_mask;
+	unsigned int bufsize;
+	physaddr_t addr;
+	size_t len;
 
-	( void ) linda;
-	( void ) qp;
-	( void ) iobuf;
-	return -ENOTSUP;
+	/* Allocate work queue entry */
+	wqe_idx_mask = ( wq->num_wqes - 1 );
+	if ( wq->iobufs[wq->next_idx & wqe_idx_mask] ) {
+		DBGC ( linda, "Linda %p QPN %ld receive queue full\n",
+		       linda, qp->qpn );
+		return -ENOBUFS;
+	}
+
+	/* Sanity checks */
+	addr = virt_to_bus ( iobuf->data );
+	len = iob_tailroom ( iobuf );
+	if ( addr & ( LINDA_EAGER_BUFFER_ALIGN - 1 ) ) {
+		DBGC ( linda, "Linda %p QPN %ld misaligned RX buffer "
+		       "(%08lx)\n", linda, qp->qpn, addr );
+		return -EINVAL;
+	}
+	if ( len != LINDA_RX_PAYLOAD_SIZE ) {
+		DBGC ( linda, "Linda %p QPN %ld wrong RX buffer size (%d)\n",
+		       linda, qp->qpn, len );
+		return -EINVAL;
+	}
+
+	/* Identify context for this queue */
+	ctx = linda_qpn_to_ctx ( qp->qpn );
+	context = &linda->context[ctx];
+
+	/* Calculate buffer size */
+	switch ( LINDA_RX_PAYLOAD_SIZE ) {
+	case 2048:  bufsize = LINDA_EAGER_BUFFER_2K;  break;
+	case 4096:  bufsize = LINDA_EAGER_BUFFER_4K;  break;
+	case 8192:  bufsize = LINDA_EAGER_BUFFER_8K;  break;
+	case 16384: bufsize = LINDA_EAGER_BUFFER_16K; break;
+	case 32768: bufsize = LINDA_EAGER_BUFFER_32K; break;
+	case 65536: bufsize = LINDA_EAGER_BUFFER_64K; break;
+	default:    linker_assert ( 0, invalid_rx_payload_size );
+		    bufsize = LINDA_EAGER_BUFFER_NONE;
+	}
+
+	/* Post eager buffer */
+	memset ( &rcvegr, 0, sizeof ( rcvegr ) );
+	BIT_FILL_2 ( &rcvegr, 
+		     Addr, ( addr >> 11 ),
+		     BufSize, bufsize );
+	linda_writeq_array8b ( linda, &rcvegr,
+			       context->eager_array, context->eager_prod );
+	DBGC ( linda, "Linda %p QPN %ld posted RX idx %d [%lx,%lx)\n",
+	       linda, qp->qpn, context->eager_prod, addr, ( addr + len ) );
+
+	/* Increment producer offset */
+	context->eager_prod = ( ( context->eager_prod + 1 ) &
+				( context->eager_entries - 1 ) );
+	memset ( &rcvegrindexhead, 0, sizeof ( rcvegrindexhead ) );
+	BIT_FILL_1 ( &rcvegrindexhead, Value, context->eager_prod );
+	linda_writeq_array64k ( linda, &rcvegrindexhead,
+				QIB_7220_RcvEgrIndexHead0_offset, ctx );
+
+	/* Update work queue's index */
+	wq->iobufs[wq->next_idx & wqe_idx_mask] = iobuf;
+	wq->next_idx++;
+
+	return 0;
 }
 
 /**
@@ -440,7 +514,7 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	rcvhdrflags = ( context->header + header_offs + LINDA_RX_HEADER_SIZE -
 			sizeof ( *rcvhdrflags ) );
 	rcvtype = BIT_GET ( rcvhdrflags, RcvType );
-	pktlen = BIT_GET ( rcvhdrflags, PktLen );
+	pktlen = ( BIT_GET ( rcvhdrflags, PktLen ) << 2 );
 	egrindex = BIT_GET ( rcvhdrflags, EgrIndex );
 	useegrbfr = BIT_GET ( rcvhdrflags, UseEgrBfr );
 	hdrqoffset = ( BIT_GET ( rcvhdrflags, HdrqOffset ) << 2 );
@@ -531,9 +605,8 @@ static void linda_poll_cq ( struct ib_device *ibdev,
 		BIT_FILL_2 ( &rcvhdrhead,
 			     RcvHeadPointer, ( context->header_cons >> 2 ),
 			     counter, 1 );
-		linda_writeq ( linda, &rcvhdrhead,
-			       ( QIB_7220_RcvHdrHead0_offset +
-				 ( ctx * sizeof ( rcvhdrhead ) ) ) );
+		linda_writeq_array64k ( linda, &rcvhdrhead,
+					QIB_7220_RcvHdrHead0_offset, ctx );
 	}
 }
 
@@ -613,8 +686,10 @@ static void linda_poll_eq ( struct ib_device *ibdev ) {
 		linda_writeq ( linda, &errclear, QIB_7220_ErrClear_offset );
 	}
 
-	/* Poll the kernel completion queue */
-	ib_poll_cq ( ibdev, linda->kernel_cq );
+	/* Poll the kernel context.  This seems the most logical place
+	 * to hook it in.
+	 */
+	linda_poll_kctx ( ibdev );
 }
 
 /***************************************************************************
@@ -1570,9 +1645,9 @@ static int linda_init_ib_serdes ( struct linda *linda ) {
 	BIT_FILL_6 ( &ibcctrl, /* Tuning values taken from Linux driver */
 		     FlowCtrlPeriod, 0x03,
 		     FlowCtrlWaterMark, 0x05,
-		     MaxPktLen,
-		     ( ( ( 2048 /* payload */ + 128 /* max headers */ ) >> 2 )
-		       + 1 /* ICRC */ ),
+		     MaxPktLen, ( ( LINDA_RX_HEADER_SIZE +
+				    LINDA_RX_PAYLOAD_SIZE +
+				    4 /* ICRC */ ) >> 2 ),
 		     PhyerrThreshold, 0xf,
 		     OverrunThreshold, 0xf,
 		     CreditScale, 0x4 );
@@ -1636,6 +1711,39 @@ static int linda_init_ib_serdes ( struct linda *linda ) {
  */
 
 /**
+ * Refill context 0 receive ring
+ *
+ * @v ibdev		Infiniband device
+ */
+static void linda_kctx_refill_recv ( struct ib_device *ibdev ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct io_buffer *iobuf;
+	int rc;
+
+	while ( linda->kernel_recv_fill < LINDA_KCTX_NUM_SEND_WQES ) {
+
+		/* Allocate I/O buffer */
+		iobuf = alloc_iob ( LINDA_RX_PAYLOAD_SIZE );
+		if ( ! iobuf ) {
+			/* Non-fatal; we will refill on next attempt */
+			return;
+		}
+
+		/* Post I/O buffer */
+		if ( ( rc = ib_post_recv ( ibdev, linda->kernel_qp,
+					   iobuf ) ) != 0 ) {
+			DBGC ( linda, "Linda %p KCTX could not refill: %s\n",
+			       linda, strerror ( rc ) );
+			free_iob ( iobuf );
+			/* Give up */
+			return;
+		}
+
+		linda->kernel_recv_fill++;
+	}
+}
+
+/**
  * Complete send in context 0
  *
  *
@@ -1666,15 +1774,21 @@ static void linda_kctx_complete_send ( struct ib_device *ibdev,
  * @v iobuf		I/O buffer
  */
 static void linda_kctx_complete_recv ( struct ib_device *ibdev,
-				       struct ib_queue_pair *qp,
+				       struct ib_queue_pair *qp __unused,
 				       struct ib_completion *completion,
 				       struct io_buffer *iobuf ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
 
-	( void ) linda;
-	( void ) qp;
-	( void ) completion;
-	( void ) iobuf;
+	DBGC ( linda, "Linda %p KCTX RX %zd bytes%s\n",
+	       linda, completion->len,
+	       ( completion->syndrome ? " [err]" : "" ) );
+	iob_put ( iobuf, completion->len );
+	DBGC_HDA ( linda, 0, iobuf->data, iob_len ( iobuf ) );
+
+	free_iob ( iobuf );
+
+	/* Reduce receive ring fill level */
+	linda->kernel_recv_fill--;
 }
 
 /**
@@ -1708,6 +1822,8 @@ static int linda_create_kctx ( struct ib_device *ibdev ) {
 	/* If this isn't context 0, we're screwed */
 	assert ( linda_qpn_to_ctx ( linda->kernel_qp->qpn ) == 0 );
 
+	/* Fill receive ring */
+	linda_kctx_refill_recv ( ibdev );
 	return 0;
 
 	ib_destroy_qp ( ibdev, linda->kernel_qp );
@@ -1727,6 +1843,21 @@ static void linda_destroy_kctx ( struct ib_device *ibdev ) {
 
 	ib_destroy_qp ( ibdev, linda->kernel_qp );
 	ib_destroy_cq ( ibdev, linda->kernel_cq );
+}
+
+/**
+ * Poll context 0
+ *
+ * @v ibdev		Infiniband device
+ */
+static void linda_poll_kctx ( struct ib_device *ibdev ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	/* Poll the kernel completion queue */
+	ib_poll_cq ( ibdev, linda->kernel_cq );
+
+	/* Refill the receive ring */
+	linda_kctx_refill_recv ( ibdev );
 }
 
 /***************************************************************************
