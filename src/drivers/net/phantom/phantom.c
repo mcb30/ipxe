@@ -1848,6 +1848,11 @@ static int phantom_probe ( struct pci_device *pci,
 	if ( ( rc = phantom_map_crb ( phantom, pci ) ) != 0 )
 		goto err_map_crb;
 
+	/* Unlock the SPI bus, in case some previous firmware
+	 * (e.g. BOFM) left it locked.
+	 */
+	phantom_spi_unlock ( phantom );
+
 	/* Read flash information */
 	if ( ( rc = phantom_read_flash ( phantom ) ) != 0 )
 		goto err_read_flash;
