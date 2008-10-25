@@ -1589,11 +1589,26 @@ static struct net_device_operations phantom_operations = {
  *
  */
 
-/** Phantom CLP data */
+/** Phantom CLP data
+ *
+ */
 union phantom_clp_data {
+	/** Data bytes
+	 *
+	 * This field is right-aligned; if only N bytes are present
+	 * then bytes[0]..bytes[7-N] should be zero, and the data
+	 * should be in bytes[7-N+1] to bytes[7];
+	 */
 	uint8_t bytes[8];
-	uint32_t dwords[2];
+	/** Dwords for the CLP interface */
+	struct {
+		/** High dword, in network byte order */
+		uint32_t hi;
+		/** Low dword, in network byte order */
+		uint32_t lo;
+	} dwords;
 };
+#define PHN_CLP_BLKSIZE ( sizeof ( union phantom_clp_data ) )
 
 /**
  * Wait for Phantom CLP command to complete
@@ -1603,25 +1618,24 @@ union phantom_clp_data {
  */
 static int phantom_clp_wait ( struct phantom_nic *phantom ) {
 	unsigned int retries;
-	uint32_t clp_status;
+	uint32_t status;
 
 	for ( retries = 0 ; retries < PHN_CLP_CMD_TIMEOUT_MS ; retries++ ) {
-		clp_status = phantom_readl ( phantom, UNM_CAM_RAM_CLP_STATUS );
-		if ( clp_status == UNM_CAM_RAM_CLP_STATUS_UNINITIALISED ) {
+		status = phantom_readl ( phantom, UNM_CAM_RAM_CLP_STATUS );
+		if ( status == UNM_CAM_RAM_CLP_STATUS_UNINITIALISED ) {
 			phantom_writel ( phantom, UNM_CAM_RAM_CLP_STATUS_DONE,
 					 UNM_CAM_RAM_CLP_STATUS );
 			DBGC ( phantom, "Phantom %p CLP initialised\n",
 			       phantom );
 			return 0;
 		}
-		if ( clp_status & UNM_CAM_RAM_CLP_STATUS_DONE ) {
-			if ( clp_status & UNM_CAM_RAM_CLP_STATUS_ERROR ) {
+		if ( status & UNM_CAM_RAM_CLP_STATUS_DONE ) {
+			if ( status & UNM_CAM_RAM_CLP_STATUS_ERROR ) {
 				DBGC ( phantom, "Phantom %p CLP command error "
-				       "status %08lx\n", phantom, clp_status );
+				       "status %08lx\n", phantom, status );
 				return -EIO;
-			} else {
-				return 0;
 			}
+			return 0;
 		}
 		mdelay ( 1 );
 	}
@@ -1634,31 +1648,64 @@ static int phantom_clp_wait ( struct phantom_nic *phantom ) {
 /**
  * Issue Phantom CLP command
  *
- * @v phantom_port	Phantom NIC port
+ * @v phantom		Phantom NIC
+ * @v port		Virtual port number
  * @v opcode		Opcode
- * @v index		Index within transfer
- * @v frag_len		Fragment length
- * @v data		Setting data
- * @ret rc		Return status code
+ * @v data_in		Data in, or NULL
+ * @v data_out		Data out, or NULL
+ * @v offset		Offset within data
+ * @v len		Data buffer length
+ * @ret len		Total transfer length (for reads), or negative error
  */
-static int phantom_clp_cmd ( struct phantom_nic_port *phantom_port,
-			     unsigned int opcode, unsigned int index,
-			     size_t frag_len, union phantom_clp_data *data ) {
-	struct phantom_nic *phantom = phantom_port->phantom;
+static int phantom_clp_cmd ( struct phantom_nic *phantom, unsigned int port,
+			     unsigned int opcode, const void *data_in,
+			     void *data_out, size_t offset, size_t len ) {
+	union phantom_clp_data data;
+	unsigned int index = ( offset / sizeof ( data ) );
+	unsigned int last = 0;
+	size_t in_frag_len;
+	uint8_t *in_frag;
 	uint32_t command;
+	uint32_t status;
+	size_t read_len;
+	size_t out_frag_len;
+	uint8_t *out_frag;
 	int rc;
+
+	/* Sanity checks */
+	assert ( ( offset % sizeof ( data ) ) == 0 );
+	assert ( offset < len );
+	if ( len > 255 ) {
+		DBGC ( phantom, "Phantom %p invalid CLP length %zd\n",
+		       phantom, len );
+		return -EINVAL;
+	}
 
 	/* Check that CLP interface is ready */
 	if ( ( rc = phantom_clp_wait ( phantom ) ) != 0 )
 		return rc;
 
+	/* Copy data in */
+	memset ( &data, 0, sizeof ( data ) );
+	if ( data_in ) {
+		in_frag_len = ( len - offset );
+		if ( in_frag_len > sizeof ( data ) ) {
+			in_frag_len = sizeof ( data );
+		} else {
+			last = 1;
+		}
+		in_frag = &data.bytes[ sizeof ( data ) - in_frag_len ];
+		memcpy ( in_frag, ( data_in + offset ), in_frag_len );
+		phantom_writel ( phantom, be32_to_cpu ( data.dwords.lo ),
+				 UNM_CAM_RAM_CLP_DATA_LO );
+		phantom_writel ( phantom, be32_to_cpu ( data.dwords.hi ),
+				 UNM_CAM_RAM_CLP_DATA_HI );
+	}
+
 	/* Issue CLP command */
-	command = ( ( index << 24 ) | ( frag_len << 16 ) |
-		    ( phantom_port->port << 8 ) | opcode |
-		    UNM_CAM_RAM_CLP_COMMAND_LAST );
+	command = ( ( index << 24 ) | ( ( data_in ? len : 0 ) << 16 ) |
+		    ( port << 8 ) | ( last << 7 ) | ( opcode << 0 ) );
 	phantom_writel ( phantom, command, UNM_CAM_RAM_CLP_COMMAND );
-	phantom_writel ( phantom, data->dwords[0], UNM_CAM_RAM_CLP_DATA_LO );
-	phantom_writel ( phantom, data->dwords[1], UNM_CAM_RAM_CLP_DATA_HI );
 	mb();
 	phantom_writel ( phantom, UNM_CAM_RAM_CLP_STATUS_START,
 			 UNM_CAM_RAM_CLP_STATUS );
@@ -1667,67 +1714,93 @@ static int phantom_clp_cmd ( struct phantom_nic_port *phantom_port,
 	if ( ( rc = phantom_clp_wait ( phantom ) ) != 0 )
 		return rc;
 
-	/* Copy out data */
-	data->dwords[0] = phantom_readl ( phantom, UNM_CAM_RAM_CLP_DATA_LO );
-	data->dwords[1] = phantom_readl ( phantom, UNM_CAM_RAM_CLP_DATA_HI );
+	/* Get read length */
+	status = phantom_readl ( phantom, UNM_CAM_RAM_CLP_STATUS );
+	read_len = ( ( status >> 16 ) & 0xff );
 
+	/* Copy data out */
+	if ( data_out ) {
+		data.dwords.lo = cpu_to_be32 ( phantom_readl ( phantom,
+						  UNM_CAM_RAM_CLP_DATA_LO ) );
+		data.dwords.hi = cpu_to_be32 ( phantom_readl ( phantom,
+						  UNM_CAM_RAM_CLP_DATA_HI ) );
+		out_frag_len = ( read_len - offset );
+		if ( out_frag_len > sizeof ( data ) )
+			out_frag_len = sizeof ( data );
+		out_frag = &data.bytes[ sizeof ( data ) - out_frag_len ];
+		if ( out_frag_len > ( len - offset ) )
+			out_frag_len = ( len - offset );
+		memcpy ( ( data_out + offset ), out_frag, out_frag_len );
+	}
+
+	return read_len;
+}
+
+/**
+ * Store Phantom CLP setting
+ *
+ * @v phantom		Phantom NIC
+ * @v port		Virtual port number
+ * @v setting		Setting number
+ * @v data		Data buffer
+ * @v len		Length of data buffer
+ * @ret rc		Return status code
+ */
+static int phantom_clp_store ( struct phantom_nic *phantom, unsigned int port,
+			       unsigned int setting, const void *data,
+			       size_t len ) {
+	unsigned int opcode = setting;
+	size_t offset = 0;
+	int rc;
+
+	while ( offset < len ) {
+		if ( ( rc = phantom_clp_cmd ( phantom, port, opcode, data,
+					      NULL, offset, len ) ) < 0 )
+			return rc;
+		offset += PHN_CLP_BLKSIZE;
+	}
 	return 0;
 }
 
 /**
- * Read or write Phantom CLP setting
+ * Fetch Phantom CLP setting
  *
- * @v phantom_port		Phantom NIC port
- * @v opcode			Opcode
- * @v data_in			Data in, or NULL
- * @v data_out			Data out, or NULL
- * @v len			Length of data
- * @ret rc			Return status code
+ * @v phantom		Phantom NIC
+ * @v port		Virtual port number
+ * @v setting		Setting number
+ * @v data		Data buffer
+ * @v len		Length of data buffer
+ * @ret len		Length of setting, or negative error
  */
-static int phantom_clp ( struct phantom_nic_port *phantom_port,
-			 unsigned int opcode, const void *data_in,
-			 void *data_out, size_t len ) {
-	union phantom_clp_data data;
-	size_t frag_len;
-	unsigned int index;
-	int rc;
+static int phantom_clp_fetch ( struct phantom_nic *phantom, unsigned int port,
+			       unsigned int setting, void *data, size_t len ) {
+	unsigned int opcode = ( setting + 1 );
+	size_t offset = 0;
+	int read_len = 0;
 
-	for ( index = 0 ; len ; index++, len -= frag_len ) {
-		frag_len = len;
-		if ( frag_len > sizeof ( data ) )
-			frag_len = sizeof ( data );
-		memset ( &data, 0, sizeof ( data ) );
-		if ( data_in ) {
-			memcpy ( data.bytes, data_in, frag_len );
-			data_in += frag_len;
-		}
-		if ( ( rc = phantom_clp_cmd ( phantom_port, opcode, index,
-					      frag_len, &data ) ) != 0 )
-			return rc;
-		if ( data_out ) {
-			memcpy ( data_out, data.bytes, frag_len );
-			data_out += frag_len;
-		}
+	while ( offset < len ) {
+		read_len = phantom_clp_cmd ( phantom, port, opcode, NULL,
+					     data, offset, len );
+		if ( read_len < 0 )
+			return read_len;
+		offset += PHN_CLP_BLKSIZE;
+		if ( offset >= ( unsigned ) read_len )
+			break;
 	}
-
-	return 0;
+	return read_len;
 }
 
 /** A Phantom CLP setting */
 struct phantom_clp_setting {
 	/** gPXE setting */
 	struct setting *setting;
-	/** Opcode for storing setting */
-	uint8_t opcode_store;
-	/** Opcode for fetching setting */
-	uint8_t opcode_fetch;
-	/** Setting length */
-	uint8_t len;
+	/** Setting number */
+	unsigned int number;
 };
 
 /** Phantom CLP settings */
 static struct phantom_clp_setting clp_settings[] = {
-	{ &mac_setting, 0x01, 0x02, ETH_ALEN },
+	{ &mac_setting, 0x01 },
 };
 
 /**
@@ -1778,17 +1851,10 @@ static int phantom_store_setting ( struct settings *settings,
 	if ( ! clp_setting )
 		return -ENOTSUP;
 
-	/* Sanity %checks */
-	if ( len != clp_setting->len ) {
-		DBGC ( phantom, "Phantom %p setting \"%s\" has incorrect "
-		       "length %zd (should be %zd)\n", phantom, setting->name,
-		       len, clp_setting->len );
-		return -EINVAL;
-	}
-
 	/* Store setting */
-	if ( ( rc = phantom_clp ( phantom_port, clp_setting->opcode_store,
-				  data, NULL, len ) ) != 0 ) {
+	if ( ( rc = phantom_clp_store ( phantom, phantom_port->port,
+					clp_setting->number,
+					data, len ) ) != 0 ) {
 		DBGC ( phantom, "Phantom %p could not store setting \"%s\": "
 		       "%s\n", phantom, setting->name, strerror ( rc ) );
 		return rc;
@@ -1813,6 +1879,7 @@ static int phantom_fetch_setting ( struct settings *settings,
 		container_of ( settings, struct phantom_nic_port, settings );
 	struct phantom_nic *phantom = phantom_port->phantom;
 	struct phantom_clp_setting *clp_setting;
+	int read_len;
 	int rc;
 
 	/* Find Phantom setting equivalent to gPXE setting */
@@ -1821,14 +1888,16 @@ static int phantom_fetch_setting ( struct settings *settings,
 		return -ENOTSUP;
 
 	/* Fetch setting */
-	if ( ( rc = phantom_clp ( phantom_port, clp_setting->opcode_fetch,
-				  NULL, data, len ) ) != 0 ) {
+	if ( ( read_len = phantom_clp_fetch ( phantom, phantom_port->port,
+					      clp_setting->number,
+					      data, len ) ) < 0 ) {
+		rc = read_len;
 		DBGC ( phantom, "Phantom %p could not fetch setting \"%s\": "
 		       "%s\n", phantom, setting->name, strerror ( rc ) );
 		return rc;
 	}
 
-	return clp_setting->len;
+	return read_len;
 }
 
 /** Phantom CLP settings operations */
