@@ -74,7 +74,7 @@
 #define PHN_TEST_MEM_TIMEOUT_MS 100
 
 /** Maximum time to wait for CLP command to be issued */
-#define PHN_CLP_CMD_TIMEOUT_MS 100
+#define PHN_CLP_CMD_TIMEOUT_MS 500
 
 /** Link state poll frequency
  *
@@ -1622,21 +1622,8 @@ static int phantom_clp_wait ( struct phantom_nic *phantom ) {
 
 	for ( retries = 0 ; retries < PHN_CLP_CMD_TIMEOUT_MS ; retries++ ) {
 		status = phantom_readl ( phantom, UNM_CAM_RAM_CLP_STATUS );
-		if ( status == UNM_CAM_RAM_CLP_STATUS_UNINITIALISED ) {
-			phantom_writel ( phantom, UNM_CAM_RAM_CLP_STATUS_DONE,
-					 UNM_CAM_RAM_CLP_STATUS );
-			DBGC ( phantom, "Phantom %p CLP initialised\n",
-			       phantom );
+		if ( status & UNM_CAM_RAM_CLP_STATUS_DONE )
 			return 0;
-		}
-		if ( status & UNM_CAM_RAM_CLP_STATUS_DONE ) {
-			if ( status & UNM_CAM_RAM_CLP_STATUS_ERROR ) {
-				DBGC ( phantom, "Phantom %p CLP command error "
-				       "status %08lx\n", phantom, status );
-				return -EIO;
-			}
-			return 0;
-		}
 		mdelay ( 1 );
 	}
 
@@ -1668,13 +1655,13 @@ static int phantom_clp_cmd ( struct phantom_nic *phantom, unsigned int port,
 	uint32_t command;
 	uint32_t status;
 	size_t read_len;
+	unsigned int error;
 	size_t out_frag_len;
 	uint8_t *out_frag;
 	int rc;
 
 	/* Sanity checks */
 	assert ( ( offset % sizeof ( data ) ) == 0 );
-	assert ( offset < len );
 	if ( len > 255 ) {
 		DBGC ( phantom, "Phantom %p invalid CLP length %zd\n",
 		       phantom, len );
@@ -1688,6 +1675,7 @@ static int phantom_clp_cmd ( struct phantom_nic *phantom, unsigned int port,
 	/* Copy data in */
 	memset ( &data, 0, sizeof ( data ) );
 	if ( data_in ) {
+		assert ( offset < len );
 		in_frag_len = ( len - offset );
 		if ( in_frag_len > sizeof ( data ) ) {
 			in_frag_len = sizeof ( data );
@@ -1714,9 +1702,15 @@ static int phantom_clp_cmd ( struct phantom_nic *phantom, unsigned int port,
 	if ( ( rc = phantom_clp_wait ( phantom ) ) != 0 )
 		return rc;
 
-	/* Get read length */
+	/* Get command status */
 	status = phantom_readl ( phantom, UNM_CAM_RAM_CLP_STATUS );
 	read_len = ( ( status >> 16 ) & 0xff );
+	error = ( ( status >> 8 ) & 0xff );
+	if ( error ) {
+		DBGC ( phantom, "Phantom %p CLP command error %02x\n",
+		       phantom, error );
+		return -EIO;
+	}
 
 	/* Copy data out */
 	if ( data_out ) {
@@ -1750,14 +1744,13 @@ static int phantom_clp_store ( struct phantom_nic *phantom, unsigned int port,
 			       unsigned int setting, const void *data,
 			       size_t len ) {
 	unsigned int opcode = setting;
-	size_t offset = 0;
+	size_t offset;
 	int rc;
 
-	while ( offset < len ) {
+	for ( offset = 0 ; offset < len ; offset += PHN_CLP_BLKSIZE ) {
 		if ( ( rc = phantom_clp_cmd ( phantom, port, opcode, data,
 					      NULL, offset, len ) ) < 0 )
 			return rc;
-		offset += PHN_CLP_BLKSIZE;
 	}
 	return 0;
 }
@@ -1776,15 +1769,17 @@ static int phantom_clp_fetch ( struct phantom_nic *phantom, unsigned int port,
 			       unsigned int setting, void *data, size_t len ) {
 	unsigned int opcode = ( setting + 1 );
 	size_t offset = 0;
-	int read_len = 0;
+	int read_len;
 
-	while ( offset < len ) {
+	while ( 1 ) {
 		read_len = phantom_clp_cmd ( phantom, port, opcode, NULL,
 					     data, offset, len );
 		if ( read_len < 0 )
 			return read_len;
 		offset += PHN_CLP_BLKSIZE;
 		if ( offset >= ( unsigned ) read_len )
+			break;
+		if ( offset >= len )
 			break;
 	}
 	return read_len;
