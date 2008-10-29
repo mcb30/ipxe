@@ -10,8 +10,6 @@
 #include <stdint.h>
 #include <gpxe/bitbash.h>
 
-struct bit_basher_operations;
-
 /** An I2C device
  *
  * An I2C device represents a specific slave device on an I2C bus.  It
