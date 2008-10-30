@@ -334,17 +334,18 @@ static void ib_sma_refill_recv ( struct ib_sma *sma ) {
  *
  * @v ibdev		Infiniband device
  * @v qp		Queue pair
- * @v completion	Completion
  * @v iobuf		I/O buffer
+ * @v rc		Completion status code
  */
 static void ib_sma_complete_send ( struct ib_device *ibdev __unused,
 				   struct ib_queue_pair *qp,
-				   struct ib_completion *completion,
-				   struct io_buffer *iobuf ) {
+				   struct io_buffer *iobuf, int rc ) {
 	struct ib_sma *sma = ib_qp_get_ownerdata ( qp );
 
-	DBGC2 ( sma, "SMA %p send completed%s\n",
-		sma, ( completion->syndrome ? " [err]" : "" ) );
+	if ( rc != 0 ) {
+		DBGC ( sma, "SMA %p send completion error: %s\n",
+		       sma, strerror ( rc ) );
+	}
 	free_iob ( iobuf );
 }
 
@@ -354,26 +355,24 @@ static void ib_sma_complete_send ( struct ib_device *ibdev __unused,
  *
  * @v ibdev		Infiniband device
  * @v qp		Queue pair
- * @v completion	Completion
+ * @v rqp		Remote queue pair
  * @v iobuf		I/O buffer
+ * @v rc		Completion status code
  */
 static void ib_sma_complete_recv ( struct ib_device *ibdev,
 				   struct ib_queue_pair *qp,
-				   struct ib_completion *completion,
-				   struct io_buffer *iobuf ) {
+				   struct ib_remote_queue_pair *rqp,
+				   struct io_buffer *iobuf, int rc ) {
 	struct ib_sma *sma = ib_qp_get_ownerdata ( qp );
 	union ib_mad *mad;
-	int rc;
 
 	/* Ignore errors */
-	if ( completion->syndrome ) {
-		DBGC ( sma, "SMA %p RX error %d\n",
-		       sma, completion->syndrome );
+	if ( rc != 0 ) {
+		DBGC ( sma, "SMA %p RX error: %s\n", sma, strerror ( rc ) );
 		goto err;
 	}
 
 	/* Sanity check */
-	iob_put ( iobuf, completion->len );
 	if ( iob_len ( iobuf ) < sizeof ( *mad ) ) {
 		DBGC ( sma, "SMA %p RX too short (%zd bytes)\n",
 		       sma, iob_len ( iobuf ) );
@@ -389,8 +388,7 @@ static void ib_sma_complete_recv ( struct ib_device *ibdev,
 	}
 
 	/* Send MAD response */
-	// address vector?
-	if ( ( rc = ib_post_send ( ibdev, qp, NULL, iobuf ) ) != 0 ) {
+	if ( ( rc = ib_post_send ( ibdev, qp, rqp, iobuf ) ) != 0 ) {
 		DBGC ( sma, "SMA %p could not send MAD response: %s\n",
 		       sma, strerror ( rc ) );
 		goto err;
@@ -402,6 +400,11 @@ static void ib_sma_complete_recv ( struct ib_device *ibdev,
 	free_iob ( iobuf );
 }
 
+/** SMA completion operations */
+static struct ib_completion_queue_operations ib_sma_completion_ops = {
+	.complete_send = ib_sma_complete_send,
+	.complete_recv = ib_sma_complete_recv,
+};
 
 /**
  * Poll SMA
@@ -439,8 +442,7 @@ int ib_create_sma ( struct ib_sma *sma, struct ib_device *ibdev,
 	process_init ( &sma->poll, ib_sma_step, &ibdev->refcnt );
 
 	/* Create completion queue */
-	sma->cq = ib_create_cq ( ibdev, 0, ib_sma_complete_send,
-				 ib_sma_complete_recv );
+	sma->cq = ib_create_cq ( ibdev, 0, &ib_sma_completion_ops );
 	if ( ! sma->cq ) {
 		rc = -ENOMEM;
 		goto err_create_cq;
