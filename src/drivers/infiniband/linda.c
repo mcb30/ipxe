@@ -782,6 +782,16 @@ static void linda_destroy_qp ( struct ib_device *ibdev,
  ***************************************************************************
  */
 
+// hack
+struct hack_header {
+	struct ib_local_route_header lrh;
+	struct ib_base_transport_header bth;
+	struct ib_datagram_extended_transport_header deth;
+} __attribute__ (( packed ));
+
+static struct hack_header hack_hdr;
+
+
 /**
  * Post send work queue entry
  *
@@ -806,12 +816,27 @@ static int linda_post_send ( struct ib_device *ibdev,
 	ssize_t frag_len;
 	uint32_t *data;
 
+#if 0
 	static const uint8_t testbuf[] = {
 		0xf0, 0x02, 0xff, 0xff, 0x00, 0x48, 0x00, 0x01,
 		0x64, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0xa3, 0x66, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00 
 	};
+#endif
+	struct hack_header testbuf;
+	static unsigned int psn = 1;
+	memcpy ( &testbuf, &hack_hdr, sizeof ( testbuf ) );
+	unsigned int tmp;
+	tmp = testbuf.lrh.dlid;
+	testbuf.lrh.dlid = testbuf.lrh.slid;
+	testbuf.lrh.slid = tmp;
+	tmp = testbuf.bth.dest_qp;
+	testbuf.bth.dest_qp = testbuf.deth.src_qp;
+	testbuf.deth.src_qp = tmp;
+	testbuf.bth.psn__ack = htonl ( psn++ );
+	DBG_HDA ( 0, &hack_hdr, sizeof ( hack_hdr ) );
+	DBG_HDA ( 0, &testbuf, sizeof ( testbuf ) );
 
 	/* Allocate send buffer and calculate offset */
 	send_buf = linda_alloc_send_buf ( linda );
@@ -838,7 +863,7 @@ static int linda_post_send ( struct ib_device *ibdev,
 	offset += sizeof ( sendpbc );
 
 	/* Write headers */
-	for ( data = ( ( uint32_t * ) testbuf ), frag_len = sizeof ( testbuf ) ;
+	for ( data = ( ( uint32_t * ) &testbuf ), frag_len = sizeof ( testbuf ) ;
 	      frag_len > 0 ; data++, offset += 4, frag_len -= 4 ) {
 		linda_writel ( linda, *data, offset );
 	}
@@ -1061,6 +1086,11 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	DBGCP_HDA ( linda, hdrqoffset,
 		    ( ( ( void * ) rcvhdrflags ) - header_len ),
 		    ( header_len + sizeof ( *rcvhdrflags ) ) );
+
+
+	assert ( header_len == sizeof ( hack_hdr ) );
+	memcpy ( &hack_hdr, ( ( ( void * ) rcvhdrflags ) - header_len ),
+		 sizeof ( hack_hdr ) );
 
 	/* Construct IB completion indicator */
 	memset ( &completion, 0, sizeof ( completion ) );

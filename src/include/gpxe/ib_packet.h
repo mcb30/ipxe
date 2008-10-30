@@ -57,4 +57,26 @@ struct ib_global_route_header {
 	struct ib_gid dgid;
 } __attribute__ (( packed ));
 
+/** An Infiniband Base Transport Header */
+struct ib_base_transport_header {
+	/** Opcode */
+	uint8_t opcode;
+	/** Transport header version, pad count, migration and solicitation */
+	uint8_t tver__padcnt__m__se;
+	/** Partition key */
+	uint16_t pkey;
+	/** Destination queue pair */
+	uint32_t dest_qp;
+	/** Packet sequence number and acknowledge request */
+	uint32_t psn__ack;
+} __attribute__ (( packed ));
+
+/** An Infiniband Datagram Extended Transport Header */
+struct ib_datagram_extended_transport_header {
+	/** Queue key */
+	uint32_t qkey;
+	/** Source queue pair */
+	uint32_t src_qp;
+} __attribute__ (( packed ));
+
 #endif /* _GPXE_IB_PACKET_H */

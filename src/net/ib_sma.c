@@ -212,13 +212,15 @@ static struct ib_sma_handler * ib_sma_handler ( uint16_t attr_id ) {
  */
 static int ib_sma_mad ( struct ib_sma *sma, union ib_mad *mad ) {
 	struct ib_mad_hdr *hdr = &mad->hdr;
+	struct ib_mad_smp *smp = &mad->smp;
 	struct ib_sma_handler *handler = NULL;
 	int rc;
 
-	DBGC ( sma, "SMA %p received %x:%x:%x:%x:%x:%lx\n", sma,
-	       hdr->base_version, hdr->mgmt_class,
-	       hdr->class_version, hdr->method, ntohs ( hdr->attr_id ),
-	       hdr->attr_mod );
+	DBGC ( sma, "SMA %p received SMP with bv=%02x mc=%02x cv=%02x "
+	       "meth=%02x attr=%04x mod=%08lx\n", sma, hdr->base_version,
+	       hdr->mgmt_class, hdr->class_version, hdr->method,
+	       ntohs ( hdr->attr_id ), hdr->attr_mod );
+	DBGC2_HDA ( sma, 0, smp, sizeof ( *smp ) );
 
 	/* Sanity checks */
 	if ( hdr->base_version != IB_MGMT_BASE_VERSION ) {
@@ -267,7 +269,7 @@ static int ib_sma_mad ( struct ib_sma *sma, union ib_mad *mad ) {
 		hdr->status = htons ( IB_MGMT_STATUS_UNSUPPORTED_METHOD_ATTR );
 		goto respond;
 	}
-	if ( ( rc = handler->set ( sma, &mad->smp.smp_data ) ) != 0 ) {
+	if ( ( rc = handler->set ( sma, &smp->smp_data ) ) != 0 ) {
 		DBGC ( sma, "SMA %p could not set attribute %x: %s\n",
 		       sma, ntohs ( hdr->attr_id ), strerror ( rc ) );
 		hdr->status = htons ( IB_MGMT_STATUS_UNSUPPORTED_METHOD_ATTR );
@@ -278,12 +280,20 @@ static int ib_sma_mad ( struct ib_sma *sma, union ib_mad *mad ) {
 
  respond:
 	/* Get attribute */
-	handler->get ( sma, &mad->smp.smp_data );
+	handler->get ( sma, &smp->smp_data );
 
  respond_without_data:
+
+	/* Set method to "Get Response" */
+	hdr->method = IB_MGMT_METHOD_GET_RESP;
+
 	/* For directed route SMPs, we must set the D bit */
 	if ( hdr->mgmt_class == IB_MGMT_CLASS_SUBN_DIRECTED_ROUTE )
 		hdr->status |= htons ( IB_SMP_STATUS_D_INBOUND );
+
+	DBGC ( sma, "SMA %p responding with status=%04x\n",
+	       sma, ntohs ( hdr->status ) );
+	DBGC2_HDA ( sma, 0, smp, sizeof ( *smp ) );
 
 	return 0;
 }
