@@ -494,7 +494,7 @@ static int ipoib_transmit ( struct net_device *netdev,
 	/* Attempting transmission while link is down will put the
 	 * queue pair into an error state, so don't try it.
 	 */
-	if ( ! ibdev->link_up )
+	if ( ib_link_ok ( ibdev ) )
 		return -ENETUNREACH;
 
 	/* Construct address vector */
@@ -706,13 +706,13 @@ static void ipoib_meta_complete_recv ( struct ib_device *ibdev __unused,
 	}
 	mad = iobuf->data;
 
-	if ( mad->mad_hdr.status != 0 ) {
+	if ( mad->hdr.status != 0 ) {
 		DBGC ( ipoib, "IPoIB %p metadata RX err status %04x\n",
-		       ipoib, ntohs ( mad->mad_hdr.status ) );
+		       ipoib, ntohs ( mad->hdr.status ) );
 		goto done;
 	}
 
-	switch ( mad->mad_hdr.tid[0] ) {
+	switch ( mad->hdr.tid[0] ) {
 	case IPOIB_TID_GET_PATH_REC:
 		ipoib_recv_path_record ( ipoib, &mad->path_record );
 		break;
@@ -947,7 +947,7 @@ static void ipoib_set_ib_params ( struct ipoib_device *ipoib ) {
 	ipoib->broadcast_gid.u.words[2] = htons ( ibdev->pkey );
 
 	/* Set net device link state to reflect Infiniband link state */
-	if ( ibdev->link_up ) {
+	if ( ib_link_ok ( ibdev ) ) {
 		netdev_link_up ( netdev );
 	} else {
 		netdev_link_down ( netdev );

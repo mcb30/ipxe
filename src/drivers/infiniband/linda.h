@@ -193,18 +193,6 @@ enum linda_eager_buffer_size {
  */
 #define LINDA_QP_IDETH 0xdead0
 
-/** Context 0 number of send WQEs
- *
- * This is a policy decision.
- */
-#define LINDA_KCTX_NUM_SEND_WQES 2
-
-/** Context 0 number of receive WQEs
- *
- * This is a policy decision.
- */
-#define LINDA_KCTX_NUM_RECV_WQES 4
-
 /** Maximum time for wait for external parallel bus request, in us */
 #define LINDA_EPB_REQUEST_MAX_WAIT_US 500
 

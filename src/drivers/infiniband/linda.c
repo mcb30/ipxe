@@ -27,6 +27,7 @@
 #include <gpxe/bitbash.h>
 #include <gpxe/malloc.h>
 #include <gpxe/iobuf.h>
+#include <gpxe/ib_sma.h>
 #include "linda.h"
 
 /**
@@ -66,8 +67,6 @@ struct linda_recv_work_queue {
 struct linda {
 	/** Registers */
 	void *regs;
-	/** Base GUID */
-	uint8_t guid[LINDA_EEPROM_GUID_SIZE];
 
 	/** In-use contexts */
 	uint8_t used_ctx[LINDA_NUM_CONTEXTS];
@@ -89,18 +88,14 @@ struct linda {
 	/** Number of reserved send buffers (across all QPs) */
 	unsigned int reserved_send_bufs;
 
-	/** Kernel context completion queue */
-	struct ib_completion_queue *kernel_cq;
-	/** Kernel context queue pair */
-	struct ib_queue_pair *kernel_qp;
-
 	/** I2C bit-bashing interface */
 	struct i2c_bit_basher i2c;
 	/** I2C serial EEPROM */
 	struct i2c_device eeprom;
-};
 
-static void linda_poll_kctx ( struct ib_device *ibdev );
+	/** Subnet management agent */
+	struct ib_sma sma;
+};
 
 /***************************************************************************
  *
@@ -1229,11 +1224,6 @@ static void linda_poll_eq ( struct ib_device *ibdev ) {
 		BIT_FILL_1 ( &errclear, IBStatusChangedClear, 1 );
 		linda_writeq ( linda, &errclear, QIB_7220_ErrClear_offset );
 	}
-
-	/* Poll the kernel context.  This seems the most logical place
-	 * to hook it in.
-	 */
-	linda_poll_kctx ( ibdev );
 }
 
 /***************************************************************************
@@ -1318,117 +1308,6 @@ static void linda_mcast_detach ( struct ib_device *ibdev,
 	( void ) gid;
 }
 
-/***************************************************************************
- *
- * MAD operations
- *
- ***************************************************************************
- */
-
-/** A Linda MAD handler */
-struct linda_mad_handler {
-	/** Base version */
-	uint8_t base_version;
-	/** Management class */
-	uint8_t mgmt_class;
-	/** Class version */
-	uint8_t class_version;
-	/** Method */
-	uint8_t method;
-	/** Attribute ID */
-	uint16_t attr_id;
-	/** Handler */
-	int ( *mad ) ( struct ib_device *ibdev, struct ib_mad_hdr *mad,
-		       size_t len );
-};
-
-/**
- * Get node information
- *
- * @v ibdev		Infiniband device
- * @v mad		Management datagram
- * @v len		Length of management datagram
- * @ret rc		Return status code
- */
-static int linda_mad_get_node_info ( struct ib_device *ibdev,
-				     struct ib_mad_hdr *mad, size_t len ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct ib_node_info *node_info;
-
-	/* Sanity check */
-	if ( len < sizeof ( *node_info ) ) {
-		DBGC ( linda, "Linda %p GET NODE_INFO too short (%zd "
-		       "bytes)\n", linda, len );
-		return -EINVAL;
-	}
-	node_info = ( ( struct ib_node_info * ) mad );
-
-	DBGCP ( linda, "Linda %p get node info:\n", linda );
-	DBGCP_HDA ( linda, 0, node_info, sizeof ( *node_info ) );
-
-	// send back the same packet
-	return 0;
-
-	return -EIO;
-}
-
-/** Linda MAD handlers */
-struct linda_mad_handler linda_mad_handlers[] = {
-	{ IB_MGMT_BASE_VERSION, IB_MGMT_CLASS_SUBN_DIRECTED_ROUTE, 1,
-	  IB_MGMT_METHOD_GET, ntohs ( IB_SMP_ATTR_NODE_INFO ),
-	  linda_mad_get_node_info },
-};
-
-/**
- * Issue management datagram
- *
- * @v ibdev		Infiniband device
- * @v mad		Management datagram
- * @v len		Length of management datagram
- * @ret rc		Return status code
- *
- * This function is used to respond to both local MAD request (via the
- * IB device's mad() method) and to MADs received via the network.
- */
-static int linda_mad ( struct ib_device *ibdev, struct ib_mad_hdr *mad,
-		       size_t len ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct linda_mad_handler *handler;
-	unsigned int i;
-	int rc;
-
-	/* Sanity checks */
-	if ( len < sizeof ( *mad ) ) {
-		DBGC ( linda, "Linda %p MAD too short (%zd bytes)\n",
-		       linda, len );
-		return -EINVAL;
-	}
-
-	/* Locate a handler */
-	for ( i = 0 ; i < ( sizeof ( linda_mad_handlers ) /
-			    sizeof ( linda_mad_handlers[0] ) ) ; i++ ) {
-		handler = &linda_mad_handlers[i];
-		if ( ( handler->base_version == mad->base_version ) &&
-		     ( handler->mgmt_class == mad->mgmt_class ) &&
-		     ( handler->class_version == mad->class_version ) &&
-		     ( handler->method == mad->method ) &&
-		     ( handler->attr_id == mad->attr_id ) ) {
-			if ( ( rc = handler->mad ( ibdev, mad, len ) ) != 0 )
-				return rc;
-			return 0;
-		}
-	}
-
-	DBGC ( linda, "Linda %p MAD unrecognised method %02x attr_id %04x\n",
-	       linda, mad->method, ntohs ( mad->attr_id ) );
-
-	// don't inhibit device registration with gPXE
-	return 0;
-
-
-	return -ENOTSUP;
-}
-
 /** Linda Infiniband operations */
 static struct ib_device_operations linda_ib_operations = {
 	.create_cq	= linda_create_cq,
@@ -1444,7 +1323,33 @@ static struct ib_device_operations linda_ib_operations = {
 	.close		= linda_close,
 	.mcast_attach	= linda_mcast_attach,
 	.mcast_detach	= linda_mcast_detach,
-	.mad		= linda_mad,
+};
+
+/***************************************************************************
+ *
+ * Subnet management operations
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Set port information
+ *
+ * @v ibdev		Infiniband device
+ * @v port_info		New port information
+ */
+static int linda_set_port_info ( struct ib_device *ibdev,
+				 const struct ib_port_info *port_info ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+
+	DBGC ( linda, "Linda %p set port info:\n", linda );
+	DBGC_HDA ( linda, 0, port_info, sizeof ( *port_info ) );
+	return 0;
+}
+
+/** Linda subnet management operations */
+static struct ib_sma_operations linda_sma_operations = {
+	.set_port_info	= linda_set_port_info,
 };
 
 /***************************************************************************
@@ -1574,23 +1479,25 @@ static int linda_init_i2c ( struct linda *linda ) {
  * Read EEPROM parameters
  *
  * @v linda		Linda device
+ * @v guid		GUID to fill in
  * @ret rc		Return status code
  */
-static int linda_read_eeprom ( struct linda *linda ) {
+static int linda_read_eeprom ( struct linda *linda,
+			       struct ib_gid_half *guid ) {
 	struct i2c_interface *i2c = &linda->i2c.i2c;
 	int rc;
 
 	/* Read GUID */
 	if ( ( rc = i2c->read ( i2c, &linda->eeprom, LINDA_EEPROM_GUID_OFFSET,
-				linda->guid, sizeof ( linda->guid ) ) ) != 0 ){
+				guid->bytes, sizeof ( *guid ) ) ) != 0 ) {
 		DBGC ( linda, "Linda %p could not read GUID: %s\n",
 		       linda, strerror ( rc ) );
 		return rc;
 	}
-	DBGC2 ( linda, "Linda %p has GUID %02x:%02x:%02x:%02x:"
-		"%02x:%02x:%02x:%02x\n", linda, linda->guid[0],
-		linda->guid[1], linda->guid[2], linda->guid[3], linda->guid[4],
-		linda->guid[5], linda->guid[6], linda->guid[7] );
+	DBGC2 ( linda, "Linda %p has GUID %02x:%02x:%02x:%02x:%02x:%02x:"
+		"%02x:%02x\n", linda, guid->bytes[0], guid->bytes[1],
+		guid->bytes[2], guid->bytes[3], guid->bytes[4],
+		guid->bytes[5], guid->bytes[6], guid->bytes[7] );
 
 	/* Read serial number (debug only) */
 	if ( DBG_LOG ) {
@@ -2251,179 +2158,6 @@ static int linda_init_ib_serdes ( struct linda *linda ) {
 
 /***************************************************************************
  *
- * Context 0 ("kernel" context)
- *
- ***************************************************************************
- */
-
-/**
- * Refill context 0 receive ring
- *
- * @v ibdev		Infiniband device
- */
-static void linda_kctx_refill_recv ( struct ib_device *ibdev ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct io_buffer *iobuf;
-	int rc;
-
-	while ( linda->kernel_qp->recv.fill < LINDA_KCTX_NUM_SEND_WQES ) {
-
-		/* Allocate I/O buffer */
-		iobuf = alloc_iob ( LINDA_RECV_PAYLOAD_SIZE );
-		if ( ! iobuf ) {
-			/* Non-fatal; we will refill on next attempt */
-			return;
-		}
-
-		/* Post I/O buffer */
-		if ( ( rc = ib_post_recv ( ibdev, linda->kernel_qp,
-					   iobuf ) ) != 0 ) {
-			DBGC ( linda, "Linda %p KCTX could not refill: %s\n",
-			       linda, strerror ( rc ) );
-			free_iob ( iobuf );
-			/* Give up */
-			return;
-		}
-	}
-}
-
-/**
- * Complete send in context 0
- *
- *
- * @v ibdev		Infiniband device
- * @v qp		Queue pair
- * @v completion	Completion
- * @v iobuf		I/O buffer
- */
-static void linda_kctx_complete_send ( struct ib_device *ibdev,
-				       struct ib_queue_pair *qp __unused,
-				       struct ib_completion *completion,
-				       struct io_buffer *iobuf ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	DBGC2 ( linda, "Linda %p KCTX send completed%s\n",
-		linda, ( completion->syndrome ? " [err]" : "" ) );
-	free_iob ( iobuf );
-}
-
-/**
- * Complete receive in context 0
- *
- *
- * @v ibdev		Infiniband device
- * @v qp		Queue pair
- * @v completion	Completion
- * @v iobuf		I/O buffer
- */
-static void linda_kctx_complete_recv ( struct ib_device *ibdev,
-				       struct ib_queue_pair *qp,
-				       struct ib_completion *completion,
-				       struct io_buffer *iobuf ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-	int rc;
-
-	/* Ignore errors */
-	if ( completion->syndrome ) {
-		DBGC ( linda, "Linda %p KCTX RX error %d\n",
-		       linda, completion->syndrome );
-		goto err;
-	}
-
-	/* Construct MAD response */
-	iob_put ( iobuf, completion->len );
-	if ( ( rc = linda_mad ( ibdev, iobuf->data,
-				iob_len ( iobuf ) ) ) != 0 ) {
-		DBGC ( linda, "Linda %p KCTX could not construct MAD "
-		       "response: %s\n", linda, strerror ( rc ) );
-		goto err;
-	}
-
-	/* Send MAD response */
-	// address vector?
-	if ( ( rc = ib_post_send ( ibdev, qp, NULL, iobuf ) ) != 0 ){ 
-		DBGC ( linda, "Linda %p KCTX could not send MAD "
-		       "response: %s\n", linda, strerror ( rc ) );
-		goto err;
-	}
-
-	return;
-	
- err:
-	free_iob ( iobuf );
-}
-
-/**
- * Create context 0
- *
- * @v ibdev		Infiniband device
- * @ret rc		Return status code
- */
-static int linda_create_kctx ( struct ib_device *ibdev ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-	int rc;
-
-	/* Create completion queue */
-	linda->kernel_cq = ib_create_cq ( ibdev, 0,
-					  linda_kctx_complete_send,
-					  linda_kctx_complete_recv );
-	if ( ! linda->kernel_cq ) {
-		rc = -ENOMEM;
-		goto err_create_cq;
-	}
-
-	/* Create queue pair */
-	linda->kernel_qp = ib_create_qp ( ibdev, LINDA_KCTX_NUM_SEND_WQES,
-					  linda->kernel_cq,
-					  LINDA_KCTX_NUM_RECV_WQES,
-					  linda->kernel_cq, 0 );
-	if ( ! linda->kernel_qp ) {
-		rc = -ENOMEM;
-		goto err_create_qp;
-	}
-	/* If this isn't context 0, we're screwed */
-	assert ( linda_qpn_to_ctx ( linda->kernel_qp->qpn ) == 0 );
-
-	/* Fill receive ring */
-	linda_kctx_refill_recv ( ibdev );
-	return 0;
-
-	ib_destroy_qp ( ibdev, linda->kernel_qp );
- err_create_qp:
-	ib_destroy_cq ( ibdev, linda->kernel_cq );
- err_create_cq:
-	return rc;
-}
-
-/**
- * Destroy context 0
- *
- * @v ibdev		Infiniband device
- */
-static void linda_destroy_kctx ( struct ib_device *ibdev ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	ib_destroy_qp ( ibdev, linda->kernel_qp );
-	ib_destroy_cq ( ibdev, linda->kernel_cq );
-}
-
-/**
- * Poll context 0
- *
- * @v ibdev		Infiniband device
- */
-static void linda_poll_kctx ( struct ib_device *ibdev ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	/* Poll the kernel completion queue */
-	ib_poll_cq ( ibdev, linda->kernel_cq );
-
-	/* Refill the receive ring */
-	linda_kctx_refill_recv ( ibdev );
-}
-
-/***************************************************************************
- *
  * PCI layer interface
  *
  ***************************************************************************
@@ -2475,7 +2209,8 @@ static int linda_probe ( struct pci_device *pci,
 		goto err_init_i2c;
 
 	/* Read EEPROM parameters */
-	if ( ( rc = linda_read_eeprom ( linda ) ) != 0 )
+	if ( ( rc = linda_read_eeprom ( linda,
+					&ibdev->port_gid.u.half[1] ) ) != 0 )
 		goto err_read_eeprom;
 
 	/* Initialise send datapath */
@@ -2490,9 +2225,12 @@ static int linda_probe ( struct pci_device *pci,
 	if ( ( rc = linda_init_ib_serdes ( linda ) ) != 0 )
 		goto err_init_ib_serdes;
 
-	/* Create the kernel context */
-	if ( ( rc = linda_create_kctx ( ibdev ) ) != 0 )
-		goto err_create_kctx;
+	/* Create the SMA */
+	if ( ( rc = ib_create_sma ( &linda->sma, ibdev,
+				    &linda_sma_operations ) ) != 0 )
+		goto err_create_sma;
+	/* If the SMA doesn't get context 0, we're screwed */
+	assert ( linda_qpn_to_ctx ( linda->sma.qp->qpn ) == 0 );
 
 	/* Register Infiniband device */
 	if ( ( rc = register_ibdev ( ibdev ) ) != 0 ) {
@@ -2505,8 +2243,8 @@ static int linda_probe ( struct pci_device *pci,
 
 	unregister_ibdev ( ibdev );
  err_register_ibdev:
-	linda_destroy_kctx ( ibdev );
- err_create_kctx:
+	ib_destroy_sma ( &linda->sma );
+ err_create_sma:
 	linda_fini_recv ( linda );
  err_init_recv:
 	linda_fini_send ( linda );
@@ -2528,10 +2266,10 @@ static void linda_remove ( struct pci_device *pci ) {
 	struct ib_device *ibdev = pci_get_drvdata ( pci );
 	struct linda *linda = ib_get_drvdata ( ibdev );
 
-	linda_destroy_kctx ( ibdev );
+	unregister_ibdev ( ibdev );
+	ib_destroy_sma ( &linda->sma );
 	linda_fini_recv ( linda );
 	linda_fini_send ( linda );
-	unregister_ibdev ( ibdev );
 	ibdev_put ( ibdev );
 }
 
