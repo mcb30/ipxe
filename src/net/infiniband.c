@@ -194,7 +194,7 @@ int ib_modify_qp ( struct ib_device *ibdev, struct ib_queue_pair *qp,
  */
 void ib_destroy_qp ( struct ib_device *ibdev, struct ib_queue_pair *qp ) {
 	struct io_buffer *iobuf;
-	struct ib_remote_queue_pair rqp;
+	struct ib_address_vector av;
 	unsigned int i;
 
 	DBGC ( ibdev, "IBDEV %p destroying QPN %#lx\n",
@@ -208,10 +208,10 @@ void ib_destroy_qp ( struct ib_device *ibdev, struct ib_queue_pair *qp ) {
 		if ( ( iobuf = qp->send.iobufs[i] ) != NULL )
 			ib_complete_send ( ibdev, qp, iobuf, -ECANCELED );
 	}
-	memset ( &rqp, 0, sizeof ( rqp ) );
+	memset ( &av, 0, sizeof ( av ) );
 	for ( i = 0 ; i < qp->recv.num_wqes ; i++ ) {
 		if ( ( iobuf = qp->recv.iobufs[i] ) != NULL ) {
-			ib_complete_recv ( ibdev, qp, &rqp, iobuf,
+			ib_complete_recv ( ibdev, qp, &av, iobuf,
 					   -ECANCELED );
 		}
 	}
@@ -248,12 +248,12 @@ struct ib_work_queue * ib_find_wq ( struct ib_completion_queue *cq,
  *
  * @v ibdev		Infiniband device
  * @v qp		Queue pair
- * @v rqp		Remote queue pair
+ * @v av		Address vector
  * @v iobuf		I/O buffer
  * @ret rc		Return status code
  */
 int ib_post_send ( struct ib_device *ibdev, struct ib_queue_pair *qp,
-		   struct ib_remote_queue_pair *rqp,
+		   struct ib_address_vector *av,
 		   struct io_buffer *iobuf ) {
 	int rc;
 
@@ -265,7 +265,7 @@ int ib_post_send ( struct ib_device *ibdev, struct ib_queue_pair *qp,
 	}
 
 	/* Post to hardware */
-	if ( ( rc = ibdev->op->post_send ( ibdev, qp, rqp, iobuf ) ) != 0 ) {
+	if ( ( rc = ibdev->op->post_send ( ibdev, qp, av, iobuf ) ) != 0 ) {
 		DBGC ( ibdev, "IBDEV %p QPN %#lx could not post send WQE: "
 		       "%s\n", ibdev, qp->qpn, strerror ( rc ) );
 		return rc;
@@ -324,14 +324,14 @@ void ib_complete_send ( struct ib_device *ibdev, struct ib_queue_pair *qp,
  *
  * @v ibdev		Infiniband device
  * @v qp		Queue pair
- * @v rqp		Remote queue pair
+ * @v av		Address vector
  * @v iobuf		I/O buffer
  * @v rc		Completion status code
  */
 void ib_complete_recv ( struct ib_device *ibdev, struct ib_queue_pair *qp,
-			struct ib_remote_queue_pair *rqp,
+			struct ib_address_vector *av,
 			struct io_buffer *iobuf, int rc ) {
-	qp->recv.cq->op->complete_recv ( ibdev, qp, rqp, iobuf, rc );
+	qp->recv.cq->op->complete_recv ( ibdev, qp, av, iobuf, rc );
 	qp->recv.fill--;
 }
 

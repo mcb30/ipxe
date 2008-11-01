@@ -361,7 +361,7 @@ static int ipoib_get_path_record ( struct ipoib_device *ipoib,
 	struct ib_device *ibdev = ipoib->ibdev;
 	struct io_buffer *iobuf;
 	struct ib_mad_path_record *path_record;
-	struct ib_remote_queue_pair rqp;
+	struct ib_address_vector av;
 	int rc;
 
 	/* Allocate I/O buffer */
@@ -386,14 +386,14 @@ static int ipoib_get_path_record ( struct ipoib_device *ipoib,
 	memcpy ( &path_record->sgid, &ibdev->port_gid,
 		 sizeof ( path_record->sgid ) );
 
-	/* Construct remote queue pair */
-	memset ( &rqp, 0, sizeof ( rqp ) );
-	rqp.lid = ibdev->sm_lid;
-	rqp.qpn = IB_SA_QPN;
-	rqp.qkey = IB_GLOBAL_QKEY;
+	/* Construct address vector */
+	memset ( &av, 0, sizeof ( av ) );
+	av.lid = ibdev->sm_lid;
+	av.qpn = IB_SA_QPN;
+	av.qkey = IB_GLOBAL_QKEY;
 
 	/* Post send request */
-	if ( ( rc = ib_post_send ( ibdev, ipoib->meta.qp, &rqp,
+	if ( ( rc = ib_post_send ( ibdev, ipoib->meta.qp, &av,
 				   iobuf ) ) != 0 ) {
 		DBGC ( ipoib, "IPoIB %p could not send get path record: %s\n",
 		       ipoib, strerror ( rc ) );
@@ -417,7 +417,7 @@ static int ipoib_mc_member_record ( struct ipoib_device *ipoib,
 	struct ib_device *ibdev = ipoib->ibdev;
 	struct io_buffer *iobuf;
 	struct ib_mad_mc_member_record *mc_member_record;
-	struct ib_remote_queue_pair rqp;
+	struct ib_address_vector av;
 	int rc;
 
 	/* Allocate I/O buffer */
@@ -447,13 +447,13 @@ static int ipoib_mc_member_record ( struct ipoib_device *ipoib,
 		 sizeof ( mc_member_record->port_gid ) );
 
 	/* Construct address vector */
-	memset ( &rqp, 0, sizeof ( rqp ) );
-	rqp.lid = ibdev->sm_lid;
-	rqp.qpn = IB_SA_QPN;
-	rqp.qkey = IB_GLOBAL_QKEY;
+	memset ( &av, 0, sizeof ( av ) );
+	av.lid = ibdev->sm_lid;
+	av.qpn = IB_SA_QPN;
+	av.qkey = IB_GLOBAL_QKEY;
 
 	/* Post send request */
-	if ( ( rc = ib_post_send ( ibdev, ipoib->meta.qp, &rqp,
+	if ( ( rc = ib_post_send ( ibdev, ipoib->meta.qp, &av,
 				   iobuf ) ) != 0 ) {
 		DBGC ( ipoib, "IPoIB %p could not send get path record: %s\n",
 		       ipoib, strerror ( rc ) );
@@ -476,7 +476,7 @@ static int ipoib_transmit ( struct net_device *netdev,
 	struct ipoib_device *ipoib = netdev->priv;
 	struct ib_device *ibdev = ipoib->ibdev;
 	struct ipoib_pseudo_hdr *ipoib_pshdr = iobuf->data;
-	struct ib_remote_queue_pair rqp;
+	struct ib_address_vector av;
 	struct ib_gid *gid;
 	struct ipoib_cached_path *path;
 	int rc;
@@ -495,13 +495,13 @@ static int ipoib_transmit ( struct net_device *netdev,
 		return -ENETUNREACH;
 
 	/* Construct address vector */
-	memset ( &rqp, 0, sizeof ( rqp ) );
-	rqp.qkey = IB_GLOBAL_QKEY;
-	rqp.gid_present = 1;
+	memset ( &av, 0, sizeof ( av ) );
+	av.qkey = IB_GLOBAL_QKEY;
+	av.gid_present = 1;
 	if ( ipoib_pshdr->peer.qpn == htonl ( IPOIB_BROADCAST_QPN ) ) {
 		/* Broadcast address */
-		rqp.qpn = IB_BROADCAST_QPN;
-		rqp.lid = ipoib->broadcast_lid;
+		av.qpn = IB_BROADCAST_QPN;
+		av.lid = ipoib->broadcast_lid;
 		gid = &ipoib->broadcast_gid;
 	} else {
 		/* Unicast - look in path cache */
@@ -513,15 +513,15 @@ static int ipoib_transmit ( struct net_device *netdev,
 			netdev_tx_complete ( netdev, iobuf );
 			return rc;
 		}
-		rqp.qpn = ntohl ( ipoib_pshdr->peer.qpn );
-		rqp.lid = path->dlid;
-		rqp.rate = path->rate;
-		rqp.sl = path->sl;
+		av.qpn = ntohl ( ipoib_pshdr->peer.qpn );
+		av.lid = path->dlid;
+		av.rate = path->rate;
+		av.sl = path->sl;
 		gid = &ipoib_pshdr->peer.gid;
 	}
-	memcpy ( &rqp.gid, gid, sizeof ( rqp.gid ) );
+	memcpy ( &av.gid, gid, sizeof ( av.gid ) );
 
-	return ib_post_send ( ibdev, ipoib->data.qp, &rqp, iobuf );
+	return ib_post_send ( ibdev, ipoib->data.qp, &av, iobuf );
 }
 
 /**
@@ -545,13 +545,13 @@ static void ipoib_data_complete_send ( struct ib_device *ibdev __unused,
  *
  * @v ibdev		Infiniband device
  * @v qp		Queue pair
- * @v rqp		Remote queue pair
+ * @v av		Address vector
  * @v iobuf		I/O buffer
  * @v rc		Completion status code
  */
 static void ipoib_data_complete_recv ( struct ib_device *ibdev __unused,
 				       struct ib_queue_pair *qp,
-				       struct ib_remote_queue_pair *rqp,
+				       struct ib_address_vector *av,
 				       struct io_buffer *iobuf, int rc ) {
 	struct net_device *netdev = ib_qp_get_ownerdata ( qp );
 	struct ipoib_device *ipoib = netdev->priv;
@@ -562,7 +562,7 @@ static void ipoib_data_complete_recv ( struct ib_device *ibdev __unused,
 		return;
 	}
 
-	// major screwup - the GRH will be in rqp, not iobuf
+	// major screwup - the GRH will be in av, not iobuf
 	//
 	// which means that the Arbel/Hermon drivers have to strip it
 	//
@@ -680,14 +680,14 @@ static void ipoib_recv_mc_member_record ( struct ipoib_device *ipoib,
  *
  * @v ibdev		Infiniband device
  * @v qp		Queue pair
- * @v rqp		Remote queue pair
+ * @v av		Address vector
  * @v iobuf		I/O buffer
  * @v rc		Completion status code
  */
 static void
 ipoib_meta_complete_recv ( struct ib_device *ibdev __unused,
 			   struct ib_queue_pair *qp,
-			   struct ib_remote_queue_pair *rqp __unused,
+			   struct ib_address_vector *av __unused,
 			   struct io_buffer *iobuf, int rc ) {
 	struct net_device *netdev = ib_qp_get_ownerdata ( qp );
 	struct ipoib_device *ipoib = netdev->priv;

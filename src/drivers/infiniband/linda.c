@@ -800,13 +800,13 @@ static struct hack_header hack_hdr;
  *
  * @v ibdev		Infiniband device
  * @v qp		Queue pair
- * @v rqp		Remote queue pair
+ * @v av		Address vector
  * @v iobuf		I/O buffer
  * @ret rc		Return status code
  */
 static int linda_post_send ( struct ib_device *ibdev,
 			     struct ib_queue_pair *qp,
-			     struct ib_remote_queue_pair *rqp,
+			     struct ib_address_vector *av,
 			     struct io_buffer *iobuf ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
 	struct ib_work_queue *wq = &qp->send;
@@ -878,7 +878,7 @@ static int linda_post_send ( struct ib_device *ibdev,
 	}
 	DBG_ENABLE ( DBGLVL_IO );
 
-	( void ) rqp;
+	( void ) av;
 
 	assert ( ( start_offset + len ) == offset );
 	DBGC ( linda, "Linda %p QPN %ld TX %d(%d) posted [%lx,%lx)\n",
@@ -1036,7 +1036,7 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	struct QIB_7220_RcvHdrFlags *rcvhdrflags;
 	struct QIB_7220_RcvEgr rcvegr;
 	struct io_buffer *iobuf;
-	struct ib_remote_queue_pair rqp;
+	struct ib_address_vector av;
 	unsigned int rcvtype;
 	unsigned int pktlen;
 	unsigned int egrindex;
@@ -1089,9 +1089,9 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 		    ( ( ( void * ) rcvhdrflags ) - header_len ),
 		    ( header_len + sizeof ( *rcvhdrflags ) ) );
 
-	/* Parse header to generate remote queue pair record */
+	/* Parse header to generate address vector */
 	// FIXME
-	memset ( &rqp, 0xaa, sizeof ( rqp ) );
+	memset ( &av, 0xaa, sizeof ( av ) );
 
 
 	assert ( header_len == sizeof ( hack_hdr ) );
@@ -1102,7 +1102,7 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	if ( ( iobuf = wq->iobufs[wqe_idx] ) != NULL ) {
 		iob_put ( iobuf, payload_len );
 		rc = ( err ? -EIO : ( useegrbfr ? 0 : -ECANCELED ) );
-		ib_complete_recv ( ibdev, qp, &rqp, iobuf, rc );
+		ib_complete_recv ( ibdev, qp, &av, iobuf, rc );
 		wq->iobufs[wqe_idx] = NULL;
 	}
 

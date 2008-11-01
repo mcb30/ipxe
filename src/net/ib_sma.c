@@ -355,13 +355,13 @@ static void ib_sma_complete_send ( struct ib_device *ibdev __unused,
  *
  * @v ibdev		Infiniband device
  * @v qp		Queue pair
- * @v rqp		Remote queue pair
+ * @v av		Address vector
  * @v iobuf		I/O buffer
  * @v rc		Completion status code
  */
 static void ib_sma_complete_recv ( struct ib_device *ibdev,
 				   struct ib_queue_pair *qp,
-				   struct ib_remote_queue_pair *rqp,
+				   struct ib_address_vector *av,
 				   struct io_buffer *iobuf, int rc ) {
 	struct ib_sma *sma = ib_qp_get_ownerdata ( qp );
 	union ib_mad *mad;
@@ -388,7 +388,7 @@ static void ib_sma_complete_recv ( struct ib_device *ibdev,
 	}
 
 	/* Send MAD response */
-	if ( ( rc = ib_post_send ( ibdev, qp, rqp, iobuf ) ) != 0 ) {
+	if ( ( rc = ib_post_send ( ibdev, qp, av, iobuf ) ) != 0 ) {
 		DBGC ( sma, "SMA %p could not send MAD response: %s\n",
 		       sma, strerror ( rc ) );
 		goto err;
