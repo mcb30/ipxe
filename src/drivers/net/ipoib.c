@@ -491,7 +491,7 @@ static int ipoib_transmit ( struct net_device *netdev,
 	/* Attempting transmission while link is down will put the
 	 * queue pair into an error state, so don't try it.
 	 */
-	if ( ib_link_ok ( ibdev ) )
+	if ( ! ib_link_ok ( ibdev ) )
 		return -ENETUNREACH;
 
 	/* Construct address vector */
