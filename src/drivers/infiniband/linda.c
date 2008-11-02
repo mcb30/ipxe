@@ -212,8 +212,8 @@ static void linda_link_state_changed ( struct ib_device *ibdev ) {
 	link_state = BIT_GET ( &ibcstatus, LinkState );
 	link_width = BIT_GET ( &ibcstatus, LinkWidthActive );
 	link_speed = BIT_GET ( &ibcstatus, LinkSpeedActive );
-	DBGC ( linda, "Linda %p link state %s (%s %s)\n",
-	       linda, linda_link_state_text ( link_state ),
+	DBGC ( linda, "Linda %p link state %s (%s %s)\n", linda,
+	       linda_link_state_text ( link_state ),
 	       ( link_speed ? "DDR" : "SDR" ), ( link_width ? "x4" : "x1" ) );
 
 	/* Set LEDs according to link state */
@@ -242,14 +242,22 @@ static void linda_link_state_changed ( struct ib_device *ibdev ) {
 static int linda_set_port_info ( struct ib_device *ibdev,
 				 const struct ib_port_info *port_info ) {
 	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct QIB_7220_IBCCtrl ibcctrl;
 	unsigned int port_state;
 	unsigned int link_state;
 
+	/* Set new link state */
 	port_state = ( port_info->link_speed_supported__port_state & 0xf );
-	link_state = ( port_state - 1 );
-	DBGC ( linda, "Linda %p set port state to %s (%x)\n",
-	       linda, linda_link_state_text ( link_state ), link_state );
+	if ( port_state ) {
+		link_state = ( port_state - 1 );
+		DBGC ( linda, "Linda %p set link state to %s (%x)\n", linda,
+		       linda_link_state_text ( link_state ), link_state );
+		linda_readq ( linda, &ibcctrl, QIB_7220_IBCCtrl_offset );
+		BIT_SET ( &ibcctrl, LinkCmd, link_state );
+		linda_writeq ( linda, &ibcctrl, QIB_7220_IBCCtrl_offset );
+	}
 
+	/* Detect and report link state change */
 	linda_link_state_changed ( ibdev );
 
 	return 0;
