@@ -2212,6 +2212,7 @@ static int linda_probe ( struct pci_device *pci,
 	linda = ib_get_drvdata ( ibdev );
 	ibdev->op = &linda_ib_operations;
 	ibdev->dev = &pci->dev;
+	ibdev->port = 1;
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );

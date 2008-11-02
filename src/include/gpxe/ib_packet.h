@@ -49,6 +49,9 @@ enum ib_lnh {
 	IB_LNH_GRH = 3
 };
 
+/** Default Infiniband LID */
+#define IB_LID_NONE 0xffff
+
 /** An Infiniband Global Route Header */
 struct ib_global_route_header {
 	/** IP version, traffic class, and flow label
@@ -92,6 +95,9 @@ struct ib_base_transport_header {
 enum ib_bth_opcode {
 	BTH_OPCODE_UD_SEND = 0x64,
 };
+
+/** Default Infiniband partition key */
+#define IB_PKEY_NONE 0xffff
 
 /** An Infiniband Datagram Extended Transport Header */
 struct ib_datagram_extended_transport_header {

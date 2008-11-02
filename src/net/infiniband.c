@@ -194,7 +194,6 @@ int ib_modify_qp ( struct ib_device *ibdev, struct ib_queue_pair *qp,
  */
 void ib_destroy_qp ( struct ib_device *ibdev, struct ib_queue_pair *qp ) {
 	struct io_buffer *iobuf;
-	struct ib_address_vector av;
 	unsigned int i;
 
 	DBGC ( ibdev, "IBDEV %p destroying QPN %#lx\n",
@@ -208,10 +207,9 @@ void ib_destroy_qp ( struct ib_device *ibdev, struct ib_queue_pair *qp ) {
 		if ( ( iobuf = qp->send.iobufs[i] ) != NULL )
 			ib_complete_send ( ibdev, qp, iobuf, -ECANCELED );
 	}
-	memset ( &av, 0, sizeof ( av ) );
 	for ( i = 0 ; i < qp->recv.num_wqes ; i++ ) {
 		if ( ( iobuf = qp->recv.iobufs[i] ) != NULL ) {
-			ib_complete_recv ( ibdev, qp, &av, iobuf,
+			ib_complete_recv ( ibdev, qp, NULL, iobuf,
 					   -ECANCELED );
 		}
 	}
@@ -394,6 +392,8 @@ struct ib_device * alloc_ibdev ( size_t priv_size ) {
 	if ( ibdev ) {
 		drv_priv = ( ( ( void * ) ibdev ) + sizeof ( *ibdev ) );
 		ib_set_drvdata ( ibdev, drv_priv );
+		ibdev->lid = IB_LID_NONE;
+		ibdev->pkey = IB_PKEY_NONE;
 	}
 	return ibdev;
 }

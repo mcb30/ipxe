@@ -195,6 +195,13 @@ union ib_smp_data {
 	struct ib_guid_info guid_info;
 	struct ib_port_info port_info;
 	struct ib_pkey_table pkey_table;
+	uint8_t bytes[64];
+} __attribute__ (( packed ));
+
+/** A subnet management directed route path */
+struct ib_smp_dr_path {
+	uint8_t reserved;
+	uint8_t hops[63];
 } __attribute__ (( packed ));
 
 /** A subnet management MAD */
@@ -202,6 +209,8 @@ struct ib_mad_smp {
 	struct ib_mad_hdr mad_hdr;
 	union ib_smp_hdr smp_hdr;
 	union ib_smp_data smp_data;
+	struct ib_smp_dr_path initial_path;
+	struct ib_smp_dr_path return_path;
 } __attribute__ (( packed ));
 
 

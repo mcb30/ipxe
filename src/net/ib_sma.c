@@ -57,6 +57,8 @@ static void ib_sma_get_node_info ( struct ib_sma *sma,
 		if ( tmp->dev != ibdev->dev )
 			continue;
 		if ( node_info->num_ports == 0 ) {
+			memcpy ( node_info->sys_guid, &tmp->gid.u.half[1],
+				 sizeof ( node_info->sys_guid ) );
 			memcpy ( node_info->node_guid, &tmp->gid.u.half[1],
 				 sizeof ( node_info->node_guid ) );
 		}
@@ -207,9 +209,12 @@ static struct ib_sma_handler * ib_sma_handler ( uint16_t attr_id ) {
  *
  * @v sma		Subnet management agent
  * @v mad		Management datagram
+ * @v av		Return address vector
  * @ret rc		Return status code
  */
-static int ib_sma_mad ( struct ib_sma *sma, union ib_mad *mad ) {
+static int ib_sma_mad ( struct ib_sma *sma, union ib_mad *mad,
+			struct ib_address_vector *av ) {
+	struct ib_device *ibdev = sma->ibdev;
 	struct ib_mad_hdr *hdr = &mad->hdr;
 	struct ib_mad_smp *smp = &mad->smp;
 	struct ib_sma_handler *handler = NULL;
@@ -219,34 +224,30 @@ static int ib_sma_mad ( struct ib_sma *sma, union ib_mad *mad ) {
 	       "meth=%02x attr=%04x mod=%08lx\n", sma, hdr->base_version,
 	       hdr->mgmt_class, hdr->class_version, hdr->method,
 	       ntohs ( hdr->attr_id ), hdr->attr_mod );
-	DBGC2_HDA ( sma, 0, smp, sizeof ( *smp ) );
+	DBGC2_HDA ( sma, 0, mad, sizeof ( *mad ) );
 
 	/* Sanity checks */
 	if ( hdr->base_version != IB_MGMT_BASE_VERSION ) {
 		DBGC ( sma, "SMA %p unsupported base version %x\n",
 		       sma, hdr->base_version );
-		hdr->status = htons ( IB_MGMT_STATUS_BAD_VERSION );
-		goto respond_without_data;
+		return -ENOTSUP;
 	}
 	if ( ( hdr->mgmt_class != IB_MGMT_CLASS_SUBN_DIRECTED_ROUTE ) &&
 	     ( hdr->mgmt_class != IB_MGMT_CLASS_SUBN_LID_ROUTED ) ) {
 		DBGC ( sma, "SMA %p unsupported management class %x\n",
 		       sma, hdr->mgmt_class );
-		hdr->status = htons ( IB_MGMT_STATUS_BAD_VERSION );
-		goto respond_without_data;
+		return -ENOTSUP;
 	}
 	if ( hdr->class_version != IB_SMP_CLASS_VERSION ) {
 		DBGC ( sma, "SMA %p unsupported class version %x\n",
 		       sma, hdr->class_version );
-		hdr->status = htons ( IB_MGMT_STATUS_BAD_VERSION );
-		goto respond_without_data;
+		return -ENOTSUP;
 	}
 	if ( ( hdr->method != IB_MGMT_METHOD_GET ) &&
 	     ( hdr->method != IB_MGMT_METHOD_SET ) ) {
 		DBGC ( sma, "SMA %p unsupported method %x\n",
 		       sma, hdr->method );
-		hdr->status = htons ( IB_MGMT_STATUS_UNSUPPORTED_METHOD );
-		goto respond_without_data;
+		return -ENOTSUP;
 	}
 
 	/* Identify handler */
@@ -286,13 +287,17 @@ static int ib_sma_mad ( struct ib_sma *sma, union ib_mad *mad ) {
 	/* Set method to "Get Response" */
 	hdr->method = IB_MGMT_METHOD_GET_RESP;
 
-	/* For directed route SMPs, we must set the D bit */
-	if ( hdr->mgmt_class == IB_MGMT_CLASS_SUBN_DIRECTED_ROUTE )
+	/* Set response fields for directed route SMPs */
+	if ( hdr->mgmt_class == IB_MGMT_CLASS_SUBN_DIRECTED_ROUTE ) {
 		hdr->status |= htons ( IB_SMP_STATUS_D_INBOUND );
+		//		av->lid = ntohs ( smp->smp_hdr.dr.dlid );
+		( void ) av;
+		smp->return_path.hops[0] = ibdev->port;
+	}
 
 	DBGC ( sma, "SMA %p responding with status=%04x\n",
 	       sma, ntohs ( hdr->status ) );
-	DBGC2_HDA ( sma, 0, smp, sizeof ( *smp ) );
+	DBGC2_HDA ( sma, 0, mad, sizeof ( *mad ) );
 
 	return 0;
 }
@@ -380,7 +385,7 @@ static void ib_sma_complete_recv ( struct ib_device *ibdev,
 	mad = iobuf->data;
 
 	/* Construct MAD response */
-	if ( ( rc = ib_sma_mad ( sma, mad ) ) != 0 ) {
+	if ( ( rc = ib_sma_mad ( sma, mad, av ) ) != 0 ) {
 		DBGC ( sma, "SMA %p could not construct MAD response: %s\n",
 		       sma, strerror ( rc ) );
 		goto err;

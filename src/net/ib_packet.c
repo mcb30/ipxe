@@ -54,6 +54,9 @@ int ib_push ( struct ib_device *ibdev, struct ib_queue_pair *qp,
 	size_t grh_len;
 	unsigned int lnh;
 
+	DBGC2 ( ibdev, "IBDEV %p TX to LID %04x QPN %08lx qkey %08lx\n",
+		ibdev, av->lid, av->qpn, av->qkey );
+
 	/* Calculate packet length */
 	payload_len = iob_len ( payload );
 	pad_len = ( (-payload_len) & 0x3 );
@@ -90,7 +93,7 @@ int ib_push ( struct ib_device *ibdev, struct ib_queue_pair *qp,
 
 	/* Construct BTH */
 	bth->opcode = BTH_OPCODE_UD_SEND;
-	bth->tver__padcnt__m__se = ( ( 1 /* SE */ << 7 ) | ( pad_len << 4 ) );
+	bth->tver__padcnt__m__se = ( pad_len << 4 );
 	bth->pkey = htons ( ibdev->pkey );
 	bth->dest_qp = htonl ( av->qpn );
 	bth->psn__ack = htonl ( ( ibdev->psn++ ) & 0xffffffUL );
@@ -176,6 +179,10 @@ int ib_pull ( struct ib_device *ibdev, struct io_buffer *iobuf,
 	iob_pull ( iobuf, sizeof ( *deth ) );
 	av->qpn = ntohl ( deth->src_qp );
 	av->qkey = ntohl ( deth->qkey );
+
+	DBGC2 ( ibdev, "IBDEV %p RX from LID %04x QPN %08lx qkey %08lx\n",
+		ibdev, av->lid, av->qpn, av->qkey );
+	DBGC2_HD ( ibdev, lrh, sizeof ( *lrh ) );
 
 	return 0;
 }
