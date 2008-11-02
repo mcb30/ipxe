@@ -1363,7 +1363,7 @@ static int linda_mcast_attach ( struct ib_device *ibdev,
 	( void ) linda;
 	( void ) qp;
 	( void ) gid;
-	return -ENOTSUP;
+	return 0;
 }
 
 /**

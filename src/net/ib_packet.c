@@ -52,6 +52,7 @@ int ib_push ( struct ib_device *ibdev, struct ib_queue_pair *qp,
 	size_t pad_len;
 	size_t lrh_len;
 	size_t grh_len;
+	unsigned int vl;
 	unsigned int lnh;
 
 	DBGC2 ( ibdev, "IBDEV %p TX to LID %04x QPN %08lx qkey %08lx\n",
@@ -73,7 +74,8 @@ int ib_push ( struct ib_device *ibdev, struct ib_queue_pair *qp,
 	lrh_len = ( payload_len + iob_len ( iobuf ) );
 
 	/* Construct LRH */
-	lrh->vl__lver = 0xf0; // ??
+	vl = ( ( av->qpn == IB_QPN_SMP ) ? IB_VL_SMP : IB_VL_DEFAULT );
+	lrh->vl__lver = ( vl << 4 );
 	lnh = ( grh ? IB_LNH_GRH : IB_LNH_BTH );
 	lrh->sl__lnh = ( ( av->sl << 4 ) | lnh );
 	lrh->dlid = htons ( av->lid );

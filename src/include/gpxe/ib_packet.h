@@ -41,6 +41,12 @@ struct ib_local_route_header {
 	uint16_t slid;
 } __attribute__ (( packed ));
 
+/** Infiniband virtual lanes */
+enum ib_vl {
+	IB_VL_DEFAULT = 0,
+	IB_VL_SMP = 15,
+};
+
 /** An Infiniband Link Next Header value */
 enum ib_lnh {
 	IB_LNH_RAW = 0,
@@ -98,6 +104,9 @@ enum ib_bth_opcode {
 
 /** Default Infiniband partition key */
 #define IB_PKEY_NONE 0xffff
+
+/** Subnet management queue pair number */
+#define IB_QPN_SMP 0
 
 /** An Infiniband Datagram Extended Transport Header */
 struct ib_datagram_extended_transport_header {
