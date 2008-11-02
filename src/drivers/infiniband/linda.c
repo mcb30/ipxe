@@ -782,19 +782,6 @@ static void linda_destroy_qp ( struct ib_device *ibdev,
  ***************************************************************************
  */
 
-
-
-
-// hack
-struct hack_header {
-	struct ib_local_route_header lrh;
-	struct ib_base_transport_header bth;
-	struct ib_datagram_extended_transport_header deth;
-} __attribute__ (( packed ));
-
-static struct hack_header hack_hdr;
-
-
 /**
  * Post send work queue entry
  *
@@ -812,6 +799,8 @@ static int linda_post_send ( struct ib_device *ibdev,
 	struct ib_work_queue *wq = &qp->send;
 	struct linda_send_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
 	struct QIB_7220_SendPbc sendpbc;
+	uint8_t header_buf[IB_MAX_HEADER_SIZE];
+	struct io_buffer headers;
 	unsigned int send_buf;
 	unsigned long start_offset;
 	unsigned long offset;
@@ -820,13 +809,6 @@ static int linda_post_send ( struct ib_device *ibdev,
 	uint32_t *data;
 
 #if 0
-	static const uint8_t testbuf[] = {
-		0xf0, 0x02, 0xff, 0xff, 0x00, 0x48, 0x00, 0x01,
-		0x64, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0xa3, 0x66, 0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00 
-	};
-#endif
 	struct hack_header testbuf;
 	static unsigned int psn = 1;
 	memcpy ( &testbuf, &hack_hdr, sizeof ( testbuf ) );
@@ -840,6 +822,7 @@ static int linda_post_send ( struct ib_device *ibdev,
 	testbuf.bth.psn__ack = htonl ( psn++ );
 	DBG_HDA ( 0, &hack_hdr, sizeof ( hack_hdr ) );
 	DBG_HDA ( 0, &testbuf, sizeof ( testbuf ) );
+#endif
 
 	/* Allocate send buffer and calculate offset */
 	send_buf = linda_alloc_send_buf ( linda );
@@ -850,8 +833,13 @@ static int linda_post_send ( struct ib_device *ibdev,
 	wq->iobufs[linda_wq->prod] = iobuf;
 	linda_wq->send_buf[linda_wq->prod] = send_buf;
 
+	/* Construct headers */
+	iob_populate ( &headers, header_buf, 0, sizeof ( header_buf ) );
+	iob_reserve ( &headers, sizeof ( header_buf ) );
+	ib_push ( ibdev, qp, &headers, iobuf, av );
+
 	/* Calculate packet length */
-	len = ( sizeof ( sendpbc ) + sizeof ( testbuf ) +
+	len = ( sizeof ( sendpbc ) + iob_len ( &headers ) +
 		iob_len ( iobuf ) );
 
 	/* Construct send per-buffer control word */
@@ -866,7 +854,7 @@ static int linda_post_send ( struct ib_device *ibdev,
 	offset += sizeof ( sendpbc );
 
 	/* Write headers */
-	for ( data = ( ( uint32_t * ) &testbuf ), frag_len = sizeof ( testbuf ) ;
+	for ( data = headers.data, frag_len = iob_len ( &headers ) ;
 	      frag_len > 0 ; data++, offset += 4, frag_len -= 4 ) {
 		linda_writel ( linda, *data, offset );
 	}
@@ -1035,6 +1023,7 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	struct linda_recv_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
 	struct QIB_7220_RcvHdrFlags *rcvhdrflags;
 	struct QIB_7220_RcvEgr rcvegr;
+	struct io_buffer headers;
 	struct io_buffer *iobuf;
 	struct ib_address_vector av;
 	unsigned int rcvtype;
@@ -1085,18 +1074,17 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	       ( parityerr ? " Parity" : "" ), ( vcrcerr ? " VCRC" : "" ),
 	       ( icrcerr ? " ICRC" : "" ), ( err ? "]" : "" ) );
 	/* IB header is placed immediately before RcvHdrFlags */
-	DBGCP_HDA ( linda, hdrqoffset,
-		    ( ( ( void * ) rcvhdrflags ) - header_len ),
+	iob_populate ( &headers, ( ( ( void * ) rcvhdrflags ) - header_len ),
+		       header_len, header_len );
+	DBGCP_HDA ( linda, hdrqoffset, headers.data,
 		    ( header_len + sizeof ( *rcvhdrflags ) ) );
 
 	/* Parse header to generate address vector */
-	// FIXME
-	memset ( &av, 0xaa, sizeof ( av ) );
-
-
-	assert ( header_len == sizeof ( hack_hdr ) );
-	memcpy ( &hack_hdr, ( ( ( void * ) rcvhdrflags ) - header_len ),
-		 sizeof ( hack_hdr ) );
+	if ( ( rc = ib_pull ( ibdev, &headers, &av ) ) != 0 ) {
+		DBGC ( linda, "Linda %p could not parse headers: %s\n",
+		       linda, strerror ( rc ) );
+		err = 1;
+	}
 
 	/* Complete work queue entry */
 	if ( ( iobuf = wq->iobufs[wqe_idx] ) != NULL ) {
@@ -2236,8 +2224,7 @@ static int linda_probe ( struct pci_device *pci,
 		goto err_init_i2c;
 
 	/* Read EEPROM parameters */
-	if ( ( rc = linda_read_eeprom ( linda,
-					&ibdev->port_gid.u.half[1] ) ) != 0 )
+	if ( ( rc = linda_read_eeprom ( linda, &ibdev->gid.u.half[1] ) ) != 0 )
 		goto err_read_eeprom;
 
 	/* Initialise send datapath */

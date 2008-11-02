@@ -286,13 +286,18 @@ struct ib_device {
 	unsigned int port;
 
 	/** Port GID */
-	struct ib_gid port_gid;
+	struct ib_gid gid;
+	/** Port LID */
+	uint16_t lid;
 	/** Subnet manager LID */
 	uint16_t sm_lid;
 	/** Port state */
 	uint8_t port_state;
 	/** Partition key */
 	uint16_t pkey;
+
+	/** Outbound packet sequence number */
+	uint32_t psn;
 
 	/** Driver private data */
 	void *drv_priv;

@@ -57,13 +57,12 @@ static void ib_sma_get_node_info ( struct ib_sma *sma,
 		if ( tmp->dev != ibdev->dev )
 			continue;
 		if ( node_info->num_ports == 0 ) {
-			memcpy ( node_info->node_guid,
-				 &tmp->port_gid.u.half[1],
+			memcpy ( node_info->node_guid, &tmp->gid.u.half[1],
 				 sizeof ( node_info->node_guid ) );
 		}
 		node_info->num_ports++;
 	}
-	memcpy ( node_info->port_guid, &ibdev->port_gid.u.half[1],
+	memcpy ( node_info->port_guid, &ibdev->gid.u.half[1],
 		 sizeof ( node_info->port_guid ) );
 	node_info->partition_cap = htons ( 1 );
 	node_info->local_port_num = ibdev->port;
@@ -81,7 +80,7 @@ static void ib_sma_get_guid_info ( struct ib_sma *sma,
 	struct ib_guid_info *guid_info = &get->guid_info;
 
 	memset ( guid_info, 0, sizeof ( *guid_info ) );
-	memcpy ( guid_info->guid[0], &ibdev->port_gid.u.half[1],
+	memcpy ( guid_info->guid[0], &ibdev->gid.u.half[1],
 		 sizeof ( guid_info->guid[0] ) );
 }
 
@@ -99,7 +98,7 @@ static void ib_sma_get_port_info ( struct ib_sma *sma,
 	memset ( port_info, 0, sizeof ( *port_info ) );
 	// hack
 	port_info->port_state__link_speed_supported = ibdev->port_state;
-	memcpy ( port_info->gid_prefix, &ibdev->port_gid.u.half[0],
+	memcpy ( port_info->gid_prefix, &ibdev->gid.u.half[0],
 		 sizeof ( port_info->gid_prefix ) );
 }
 

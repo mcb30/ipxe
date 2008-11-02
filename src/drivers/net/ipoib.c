@@ -383,7 +383,7 @@ static int ipoib_get_path_record ( struct ipoib_device *ipoib,
 	path_record->sa_hdr.comp_mask[1] =
 		htonl ( IB_SA_PATH_REC_DGID | IB_SA_PATH_REC_SGID );
 	memcpy ( &path_record->dgid, gid, sizeof ( path_record->dgid ) );
-	memcpy ( &path_record->sgid, &ibdev->port_gid,
+	memcpy ( &path_record->sgid, &ibdev->gid,
 		 sizeof ( path_record->sgid ) );
 
 	/* Construct address vector */
@@ -443,7 +443,7 @@ static int ipoib_mc_member_record ( struct ipoib_device *ipoib,
 	mc_member_record->scope__join_state = 1;
 	memcpy ( &mc_member_record->mgid, gid,
 		 sizeof ( mc_member_record->mgid ) );
-	memcpy ( &mc_member_record->port_gid, &ibdev->port_gid,
+	memcpy ( &mc_member_record->port_gid, &ibdev->gid,
 		 sizeof ( mc_member_record->port_gid ) );
 
 	/* Construct address vector */
@@ -568,6 +568,7 @@ static void ipoib_data_complete_recv ( struct ib_device *ibdev __unused,
 	//
 	// but, more importantly, means that we have no room to push
 	// the pseudo-header!
+	( void ) av;
 
 	if ( iob_len ( iobuf ) < sizeof ( struct ib_global_route_header ) ) {
 		DBGC ( ipoib, "IPoIB %p received data packet too short to "
@@ -944,7 +945,7 @@ static void ipoib_set_ib_params ( struct ipoib_device *ipoib ) {
 
 	/* Calculate GID portion of MAC address based on port GID */
 	mac = ( ( struct ipoib_mac * ) netdev->ll_addr );
-	memcpy ( &mac->gid, &ibdev->port_gid, sizeof ( mac->gid ) );
+	memcpy ( &mac->gid, &ibdev->gid, sizeof ( mac->gid ) );
 
 	/* Calculate broadcast GID based on partition key */
 	memcpy ( &ipoib->broadcast_gid, &ipv4_broadcast_gid,
