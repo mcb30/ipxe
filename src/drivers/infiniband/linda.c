@@ -1037,6 +1037,7 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	unsigned int header_len;
 	unsigned int payload_len;
 	unsigned int wqe_idx;
+	int last;
 	int rc;
 
 	/* RcvHdrFlags are at the end of the header entry */
@@ -1061,11 +1062,9 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	payload_len = ( pktlen - header_len - 4 /* ICRC */ );
 	err = ( iberr | mkerr | tiderr | khdrerr | mtuerr |
 		lenerr | parityerr | vcrcerr | icrcerr );
-	assert ( egrindex == linda_wq->eager_cons );
-	wqe_idx = ( linda_wq->eager_cons & ( wq->num_wqes - 1 ) );
-	DBGC ( linda, "Linda %p QPN %ld RX egr %d(%d)%s hdr %d type %d len "
+	DBGC ( linda, "Linda %p QPN %ld RX egr %d%s hdr %d type %d len "
 	       "%d(%d+%d+4)%s%s%s%s%s%s%s%s%s%s%s\n", linda, qp->qpn,
-	       egrindex, wqe_idx, ( useegrbfr ? "" : "(unused)" ),
+	       egrindex, ( useegrbfr ? "" : "(unused)" ),
 	       ( header_offs / LINDA_RECV_HEADER_SIZE ), rcvtype,
 	       pktlen, header_len, payload_len, ( err ? " [Err" : "" ),
 	       ( iberr ? " IB" : "" ), ( mkerr ? " MK" : "" ),
@@ -1086,22 +1085,33 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 		err = 1;
 	}
 
-	/* Complete work queue entry */
-	if ( ( iobuf = wq->iobufs[wqe_idx] ) != NULL ) {
-		iob_put ( iobuf, payload_len );
-		rc = ( err ? -EIO : ( useegrbfr ? 0 : -ECANCELED ) );
-		ib_complete_recv ( ibdev, qp, &av, iobuf, rc );
-		wq->iobufs[wqe_idx] = NULL;
-	}
+	/* Complete this buffer and any skipped buffers */
+	do {
+		/* Complete work queue entry */
+		wqe_idx = ( linda_wq->eager_cons & ( wq->num_wqes - 1 ) );
+		last = ( linda_wq->eager_cons == egrindex );
+		if ( ( iobuf = wq->iobufs[wqe_idx] ) != NULL ) {
+			if ( last ) {
+				iob_put ( iobuf, payload_len );
+				rc = ( err ? -EIO :
+				       ( useegrbfr ? 0 : -ECANCELED ) );
+			} else {
+				rc = -ECANCELED;
+			}
+			ib_complete_recv ( ibdev, qp, &av, iobuf, rc );
+			wq->iobufs[wqe_idx] = NULL;
+		}
 
-	/* Clear eager buffer */
-	memset ( &rcvegr, 0, sizeof ( rcvegr ) );
-	linda_writeq_array8b ( linda, &rcvegr, linda_wq->eager_array,
-			       linda_wq->eager_cons );
+		/* Clear eager buffer */
+		memset ( &rcvegr, 0, sizeof ( rcvegr ) );
+		linda_writeq_array8b ( linda, &rcvegr, linda_wq->eager_array,
+				       linda_wq->eager_cons );
 
-	/* Update consumer index */
-	linda_wq->eager_cons = ( ( linda_wq->eager_cons + 1 ) &
-				 ( linda_wq->eager_entries - 1 ) );
+		/* Increment consumer index */
+		linda_wq->eager_cons = ( ( linda_wq->eager_cons + 1 ) &
+					 ( linda_wq->eager_entries - 1 ) );
+
+	} while ( ! last );
 }
 
 /**
