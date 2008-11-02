@@ -389,6 +389,7 @@ static int ipoib_get_path_record ( struct ipoib_device *ipoib,
 	/* Construct address vector */
 	memset ( &av, 0, sizeof ( av ) );
 	av.lid = ibdev->sm_lid;
+	av.sl = ibdev->sm_sl;
 	av.qpn = IB_SA_QPN;
 	av.qkey = IB_GLOBAL_QKEY;
 
@@ -449,6 +450,7 @@ static int ipoib_mc_member_record ( struct ipoib_device *ipoib,
 	/* Construct address vector */
 	memset ( &av, 0, sizeof ( av ) );
 	av.lid = ibdev->sm_lid;
+	av.sl = ibdev->sm_sl;
 	av.qpn = IB_SA_QPN;
 	av.qkey = IB_GLOBAL_QKEY;
 

@@ -141,7 +141,9 @@ int ib_smc_update ( struct ib_device *ibdev, ib_local_mad_t local_mad ) {
 		( smp->port_info.link_speed_supported__port_state & 0x0f );
 	memcpy ( &ibdev->gid.u.half[0], smp->port_info.gid_prefix,
 		 sizeof ( ibdev->gid.u.half[0] ) );
+	ibdev->lid = ntohs ( smp->port_info.lid );
 	ibdev->sm_lid = ntohs ( smp->port_info.mastersm_lid );
+	ibdev->sm_sl = ( smp->port_info.neighbour_mtu__mastersm_sl & 0xf );
 
 	/* GUID info gives us the second half of the port GID */
 	if ( ( rc = ib_smc_get_guid_info ( ibdev, local_mad, &mad ) ) != 0 )

@@ -134,7 +134,8 @@ static void ib_sma_get_port_info ( struct ib_sma *sma,
 		  IB_PORT_PHYS_STATE_POLLING );
 	port_info->link_speed_active__link_speed_enabled =
 		( ( ibdev->link_speed << 4 ) | ibdev->link_speed );
-	port_info->neighbour_mtu__mastersm_sl = ( IB_MTU_2048 << 4 );
+	port_info->neighbour_mtu__mastersm_sl =
+		( ( IB_MTU_2048 << 4 ) | ibdev->sm_sl );
 	port_info->vl_cap__init_type = ( IB_VL_0 << 4 );
 	port_info->init_type_reply__mtu_cap = IB_MTU_2048;
 	port_info->operational_vls__enforcement = ( IB_VL_0 << 4 );
@@ -157,6 +158,7 @@ static int ib_sma_set_port_info ( struct ib_sma *sma,
 		 sizeof ( ibdev->gid.u.half[0] ) );
 	ibdev->lid = ntohs ( port_info->lid );
 	ibdev->sm_lid = ntohs ( port_info->mastersm_lid );
+	ibdev->sm_sl = ( port_info->neighbour_mtu__mastersm_sl & 0xf );
 
 	if ( ! sma->op->set_port_info ) {
 		/* Not an error; we just ignore all other settings */

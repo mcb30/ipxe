@@ -297,6 +297,8 @@ struct ib_device {
 	uint16_t lid;
 	/** Subnet manager LID */
 	uint16_t sm_lid;
+	/** Subnet manager SL */
+	uint8_t sm_sl;
 	/** Partition key */
 	uint16_t pkey;
 
