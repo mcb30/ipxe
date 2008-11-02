@@ -285,14 +285,18 @@ struct ib_device {
 	/** Port number */
 	unsigned int port;
 
+	/** Port state */
+	uint8_t port_state;
+	/** Link width */
+	uint8_t link_width;
+	/** Link speed */
+	uint8_t link_speed;
 	/** Port GID */
 	struct ib_gid gid;
 	/** Port LID */
 	uint16_t lid;
 	/** Subnet manager LID */
 	uint16_t sm_lid;
-	/** Port state */
-	uint8_t port_state;
 	/** Partition key */
 	uint16_t pkey;
 

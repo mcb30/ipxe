@@ -138,7 +138,7 @@ int ib_smc_update ( struct ib_device *ibdev, ib_local_mad_t local_mad ) {
 	if ( ( rc = ib_smc_get_port_info ( ibdev, local_mad, &mad ) ) != 0 )
 		return rc;
 	ibdev->port_state =
-		( smp->port_info.port_state__link_speed_supported & 0x0f );
+		( smp->port_info.link_speed_supported__port_state & 0x0f );
 	memcpy ( &ibdev->gid.u.half[0], smp->port_info.gid_prefix,
 		 sizeof ( ibdev->gid.u.half[0] ) );
 	ibdev->sm_lid = ntohs ( smp->port_info.mastersm_lid );

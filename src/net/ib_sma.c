@@ -20,6 +20,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <byteswap.h>
 #include <gpxe/infiniband.h>
@@ -71,6 +72,26 @@ static void ib_sma_get_node_info ( struct ib_sma *sma,
 }
 
 /**
+ * Get node description
+ *
+ * @v sma		Subnet management agent
+ * @v get		Attribute to get
+ */
+static void ib_sma_get_node_desc ( struct ib_sma *sma,
+				   union ib_smp_data *get ) {
+	struct ib_device *ibdev = sma->ibdev;
+	struct ib_node_desc *node_desc = &get->node_desc;
+	struct ib_gid_half *guid = &ibdev->gid.u.half[1];
+
+	memset ( node_desc, 0, sizeof ( *node_desc ) );
+	snprintf ( node_desc->node_string, sizeof ( node_desc->node_string ),
+		   "gPXE %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x (%s)",
+		   guid->bytes[0], guid->bytes[1], guid->bytes[2],
+		   guid->bytes[3], guid->bytes[4], guid->bytes[5],
+		   guid->bytes[6], guid->bytes[7], ibdev->dev->name );
+}
+
+/**
  * Get GUID information
  *
  * @v sma		Subnet management agent
@@ -98,10 +119,26 @@ static void ib_sma_get_port_info ( struct ib_sma *sma,
 	struct ib_port_info *port_info = &get->port_info;
 
 	memset ( port_info, 0, sizeof ( *port_info ) );
-	// hack
-	port_info->port_state__link_speed_supported = ibdev->port_state;
 	memcpy ( port_info->gid_prefix, &ibdev->gid.u.half[0],
 		 sizeof ( port_info->gid_prefix ) );
+	port_info->lid = ntohs ( ibdev->lid );
+	port_info->mastersm_lid = ntohs ( ibdev->sm_lid );
+	port_info->local_port_num = ibdev->port;
+	port_info->link_width_enabled = ibdev->link_width;
+	port_info->link_width_supported = ibdev->link_width;
+	port_info->link_width_active = ibdev->link_width;
+	port_info->link_speed_supported__port_state =
+		( ( ibdev->link_speed << 4 ) | ibdev->port_state );
+	port_info->port_phys_state__link_down_def_state =
+		( ( IB_PORT_PHYS_STATE_POLLING << 4 ) |
+		  IB_PORT_PHYS_STATE_POLLING );
+	port_info->link_speed_active__link_speed_enabled =
+		( ( ibdev->link_speed << 4 ) | ibdev->link_speed );
+	port_info->neighbour_mtu__mastersm_sl = ( IB_MTU_2048 << 4 );
+	port_info->vl_cap__init_type = ( IB_VL_0 << 4 );
+	port_info->init_type_reply__mtu_cap = IB_MTU_2048;
+	port_info->operational_vls__enforcement = ( IB_VL_0 << 4 );
+	port_info->guid_cap = 1;
 }
 
 /**
@@ -116,8 +153,15 @@ static int ib_sma_set_port_info ( struct ib_sma *sma,
 	struct ib_device *ibdev = sma->ibdev;
 	const struct ib_port_info *port_info = &set->port_info;
 
-	if ( ! sma->op->set_port_info )
-		return -ENOTSUP;
+	memcpy ( &ibdev->gid.u.half[0], port_info->gid_prefix,
+		 sizeof ( ibdev->gid.u.half[0] ) );
+	ibdev->lid = ntohs ( port_info->lid );
+	ibdev->sm_lid = ntohs ( port_info->mastersm_lid );
+
+	if ( ! sma->op->set_port_info ) {
+		/* Not an error; we just ignore all other settings */
+		return 0;
+	}
 
 	return sma->op->set_port_info ( ibdev, port_info );
 }
@@ -174,6 +218,8 @@ struct ib_sma_handler {
 
 /** List of attribute handlers */
 static struct ib_sma_handler ib_sma_handlers[] = {
+	{ htons ( IB_SMP_ATTR_NODE_DESC ),
+	  ib_sma_get_node_desc, NULL },
 	{ htons ( IB_SMP_ATTR_NODE_INFO ),
 	  ib_sma_get_node_info, NULL },
 	{ htons ( IB_SMP_ATTR_GUID_INFO ),
@@ -209,11 +255,9 @@ static struct ib_sma_handler * ib_sma_handler ( uint16_t attr_id ) {
  *
  * @v sma		Subnet management agent
  * @v mad		Management datagram
- * @v av		Return address vector
  * @ret rc		Return status code
  */
-static int ib_sma_mad ( struct ib_sma *sma, union ib_mad *mad,
-			struct ib_address_vector *av ) {
+static int ib_sma_mad ( struct ib_sma *sma, union ib_mad *mad ) {
 	struct ib_device *ibdev = sma->ibdev;
 	struct ib_mad_hdr *hdr = &mad->hdr;
 	struct ib_mad_smp *smp = &mad->smp;
@@ -290,8 +334,6 @@ static int ib_sma_mad ( struct ib_sma *sma, union ib_mad *mad,
 	/* Set response fields for directed route SMPs */
 	if ( hdr->mgmt_class == IB_MGMT_CLASS_SUBN_DIRECTED_ROUTE ) {
 		hdr->status |= htons ( IB_SMP_STATUS_D_INBOUND );
-		//		av->lid = ntohs ( smp->smp_hdr.dr.dlid );
-		( void ) av;
 		smp->return_path.hops[0] = ibdev->port;
 	}
 
@@ -385,7 +427,7 @@ static void ib_sma_complete_recv ( struct ib_device *ibdev,
 	mad = iobuf->data;
 
 	/* Construct MAD response */
-	if ( ( rc = ib_sma_mad ( sma, mad, av ) ) != 0 ) {
+	if ( ( rc = ib_sma_mad ( sma, mad ) ) != 0 ) {
 		DBGC ( sma, "SMA %p could not construct MAD response: %s\n",
 		       sma, strerror ( rc ) );
 		goto err;

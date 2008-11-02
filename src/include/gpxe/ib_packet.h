@@ -82,13 +82,13 @@ struct ib_base_transport_header {
 	/** Opcode */
 	uint8_t opcode;
 	/** Transport header version, pad count, migration and solicitation */
-	uint8_t tver__padcnt__m__se;
+	uint8_t se__m__padcnt__tver;
 	/** Partition key */
 	uint16_t pkey;
 	/** Destination queue pair */
 	uint32_t dest_qp;
 	/** Packet sequence number and acknowledge request */
-	uint32_t psn__ack;
+	uint32_t ack__psn;
 } __attribute__ (( packed ));
 
 /** An Infiniband BTH opcode */

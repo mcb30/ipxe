@@ -114,6 +114,15 @@ union ib_smp_hdr {
 #define IB_SMP_ATTR_LED_INFO			0x0031
 #define IB_SMP_ATTR_VENDOR_MASK			0xFF00
 
+/**
+ * A Node Description attribute
+ *
+ * Defined in section 14.2.5.2 of the IBA
+ */
+struct ib_node_desc {
+	char node_string[64];
+} __attribute__ (( packed ));
+
 /** A Node Information attribute
  *
  * Defined in section 14.2.5.3 of the IBA.
@@ -161,10 +170,27 @@ struct ib_port_info {
 	uint8_t link_width_enabled;
 	uint8_t link_width_supported;
 	uint8_t link_width_active;
-	uint8_t port_state__link_speed_supported;
-	uint8_t link_down_def_state__port_phys_state;
-	uint8_t lmc__r1__mkey_prot_bits;
-	uint8_t link_speed_enabled__link_speed_active;
+	uint8_t link_speed_supported__port_state;
+	uint8_t port_phys_state__link_down_def_state;
+	uint8_t mkey_prot_bits__lmc;
+	uint8_t link_speed_active__link_speed_enabled;
+	uint8_t neighbour_mtu__mastersm_sl;
+	uint8_t vl_cap__init_type;
+	uint8_t vl_high_limit;
+	uint8_t vl_arbitration_high_cap;
+	uint8_t vl_arbitration_low_cap;
+	uint8_t init_type_reply__mtu_cap;
+	uint8_t vl_stall_count__hoq_life;
+	uint8_t operational_vls__enforcement;
+	uint16_t mkey_violations;
+	uint16_t pkey_violations;
+	uint16_t qkey_violations;
+	uint8_t guid_cap;
+	uint8_t client_reregister__subnet_timeout;
+	uint8_t resp_time_value;
+	uint8_t local_phy_errors__overrun_errors;
+	uint16_t max_credit_hint;
+	uint32_t link_round_trip_latency;
 } __attribute__ (( packed ));
 
 #define IB_LINK_WIDTH_1X		0x01
@@ -172,14 +198,29 @@ struct ib_port_info {
 #define IB_LINK_WIDTH_8X		0x04
 #define IB_LINK_WIDTH_12X		0x08
 
-#define IB_LINK_SPEED_2_5		0x01
-#define IB_LINK_SPEED_5_0		0x02
-#define IB_LINK_SPEED_10_0		0x04
+#define IB_LINK_SPEED_SDR		0x01
+#define IB_LINK_SPEED_DDR		0x02
+#define IB_LINK_SPEED_QDR		0x04
 
 #define IB_PORT_STATE_DOWN		0x01
 #define IB_PORT_STATE_INIT		0x02
 #define IB_PORT_STATE_ARMED		0x03
 #define IB_PORT_STATE_ACTIVE		0x04
+
+#define IB_PORT_PHYS_STATE_SLEEP	0x01
+#define IB_PORT_PHYS_STATE_POLLING	0x02
+
+#define IB_MTU_256			0x01
+#define IB_MTU_512			0x02
+#define IB_MTU_1024			0x03
+#define IB_MTU_2048			0x04
+#define IB_MTU_4096			0x05
+
+#define IB_VL_0				0x01
+#define IB_VL_0_1			0x02
+#define IB_VL_0_3			0x03
+#define IB_VL_0_7			0x04
+#define IB_VL_0_14			0x05
 
 /** A Partition Key Table attribute
  *
@@ -191,6 +232,7 @@ struct ib_pkey_table {
 
 /** A subnet management attribute */
 union ib_smp_data {
+	struct ib_node_desc node_desc;
 	struct ib_node_info node_info;
 	struct ib_guid_info guid_info;
 	struct ib_port_info port_info;

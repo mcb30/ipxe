@@ -172,6 +172,96 @@ static void linda_writel ( struct linda *linda, uint32_t dword,
 
 /***************************************************************************
  *
+ * Link state management
+ *
+ ***************************************************************************
+ */
+
+/**
+ * Textual representation of link state
+ *
+ * @v link_state	Link state
+ * @ret link_text	Link state text
+ */
+static const char * linda_link_state_text ( unsigned int link_state ) {
+	switch ( link_state ) {
+	case LINDA_LINK_STATE_DOWN:	return "DOWN";
+	case LINDA_LINK_STATE_INIT:	return "INIT";
+	case LINDA_LINK_STATE_ARM:	return "ARM";
+	case LINDA_LINK_STATE_ACTIVE:	return "ACTIVE";
+	case LINDA_LINK_STATE_ACT_DEFER:return "ACT_DEFER";
+	default:			return "UNKNOWN";
+	}
+}
+
+/**
+ * Handle link state change
+ *
+ * @v linda		Linda device
+ */
+static void linda_link_state_changed ( struct ib_device *ibdev ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	struct QIB_7220_IBCStatus ibcstatus;
+	struct QIB_7220_EXTCtrl extctrl;
+	unsigned int link_state;
+	unsigned int link_width;
+	unsigned int link_speed;
+
+	/* Read link state */
+	linda_readq ( linda, &ibcstatus, QIB_7220_IBCStatus_offset );
+	link_state = BIT_GET ( &ibcstatus, LinkState );
+	link_width = BIT_GET ( &ibcstatus, LinkWidthActive );
+	link_speed = BIT_GET ( &ibcstatus, LinkSpeedActive );
+	DBGC ( linda, "Linda %p link state %s (%s %s)\n",
+	       linda, linda_link_state_text ( link_state ),
+	       ( link_speed ? "DDR" : "SDR" ), ( link_width ? "x4" : "x1" ) );
+
+	/* Set LEDs according to link state */
+	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+	BIT_SET ( &extctrl, LEDPriPortGreenOn,
+		  ( ( link_state >= LINDA_LINK_STATE_INIT ) ? 1 : 0 ) );
+	BIT_SET ( &extctrl, LEDPriPortYellowOn,
+		  ( ( link_state >= LINDA_LINK_STATE_ACTIVE ) ? 1 : 0 ) );
+	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
+
+	/* Notify Infiniband core of link state change */
+	ibdev->port_state = ( link_state + 1 );
+	ibdev->link_width =
+		( link_width ? IB_LINK_WIDTH_4X : IB_LINK_WIDTH_1X );
+	ibdev->link_speed =
+		( link_speed ? IB_LINK_SPEED_DDR : IB_LINK_SPEED_SDR );
+	ib_link_state_changed ( ibdev );
+}
+
+/**
+ * Set port information
+ *
+ * @v ibdev		Infiniband device
+ * @v port_info		New port information
+ */
+static int linda_set_port_info ( struct ib_device *ibdev,
+				 const struct ib_port_info *port_info ) {
+	struct linda *linda = ib_get_drvdata ( ibdev );
+	unsigned int port_state;
+	unsigned int link_state;
+
+	port_state = ( port_info->link_speed_supported__port_state & 0xf );
+	link_state = ( port_state - 1 );
+	DBGC ( linda, "Linda %p set port state to %s (%x)\n",
+	       linda, linda_link_state_text ( link_state ), link_state );
+
+	linda_link_state_changed ( ibdev );
+
+	return 0;
+}
+
+/** Linda subnet management operations */
+static struct ib_sma_operations linda_sma_operations = {
+	.set_port_info	= linda_set_port_info,
+};
+
+/***************************************************************************
+ *
  * Context allocation
  *
  ***************************************************************************
@@ -1182,54 +1272,6 @@ static void linda_poll_cq ( struct ib_device *ibdev,
  */
 
 /**
- * Textual representation of link state
- *
- * @v link_state	Link state
- * @ret link_text	Link state text
- */
-static const char * linda_link_state_text ( unsigned int link_state ) {
-	switch ( link_state ) {
-	case LINDA_LINK_STATE_DOWN:	return "DOWN";
-	case LINDA_LINK_STATE_INIT:	return "INIT";
-	case LINDA_LINK_STATE_ARM:	return "ARM";
-	case LINDA_LINK_STATE_ACTIVE:	return "ACTIVE";
-	case LINDA_LINK_STATE_ACT_DEFER:return "ACT_DEFER";
-	default:			return "UNKNOWN";
-	}
-}
-
-/**
- * Handle link state change
- *
- * @v linda		Linda device
- */
-static void linda_link_state_changed ( struct ib_device *ibdev ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-	struct QIB_7220_IBCStatus ibcstatus;
-	struct QIB_7220_EXTCtrl extctrl;
-	unsigned int link_state;
-
-	/* Read link state */
-	linda_readq ( linda, &ibcstatus, QIB_7220_IBCStatus_offset );
-	link_state = BIT_GET ( &ibcstatus, LinkState );
-	DBGC ( linda, "Linda %p link state %s (%s %s)\n", linda,
-	       linda_link_state_text ( link_state ),
-	       ( BIT_GET ( &ibcstatus, LinkSpeedActive ) ? "DDR" : "SDR" ),
-	       ( BIT_GET ( &ibcstatus, LinkWidthActive ) ? "x4" : "x1" ) );
-
-	/* Set LEDs according to link state */
-	linda_readq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
-	BIT_SET ( &extctrl, LEDPriPortGreenOn,
-		  ( ( link_state >= LINDA_LINK_STATE_INIT ) ? 1 : 0 ) );
-	BIT_SET ( &extctrl, LEDPriPortYellowOn,
-		  ( ( link_state >= LINDA_LINK_STATE_ACTIVE ) ? 1 : 0 ) );
-	linda_writeq ( linda, &extctrl, QIB_7220_EXTCtrl_offset );
-
-	/* Notify Infiniband core of link state change */
-	ib_link_state_changed ( ibdev );
-}
-
-/**
  * Poll event queue
  *
  * @v ibdev		Infiniband device
@@ -1348,33 +1390,6 @@ static struct ib_device_operations linda_ib_operations = {
 	.close		= linda_close,
 	.mcast_attach	= linda_mcast_attach,
 	.mcast_detach	= linda_mcast_detach,
-};
-
-/***************************************************************************
- *
- * Subnet management operations
- *
- ***************************************************************************
- */
-
-/**
- * Set port information
- *
- * @v ibdev		Infiniband device
- * @v port_info		New port information
- */
-static int linda_set_port_info ( struct ib_device *ibdev,
-				 const struct ib_port_info *port_info ) {
-	struct linda *linda = ib_get_drvdata ( ibdev );
-
-	DBGC ( linda, "Linda %p set port info:\n", linda );
-	DBGC_HDA ( linda, 0, port_info, sizeof ( *port_info ) );
-	return 0;
-}
-
-/** Linda subnet management operations */
-static struct ib_sma_operations linda_sma_operations = {
-	.set_port_info	= linda_set_port_info,
 };
 
 /***************************************************************************

@@ -93,10 +93,10 @@ int ib_push ( struct ib_device *ibdev, struct ib_queue_pair *qp,
 
 	/* Construct BTH */
 	bth->opcode = BTH_OPCODE_UD_SEND;
-	bth->tver__padcnt__m__se = ( pad_len << 4 );
+	bth->se__m__padcnt__tver = ( pad_len << 4 );
 	bth->pkey = htons ( ibdev->pkey );
 	bth->dest_qp = htonl ( av->qpn );
-	bth->psn__ack = htonl ( ( ibdev->psn++ ) & 0xffffffUL );
+	bth->ack__psn = htonl ( ( ibdev->psn++ ) & 0xffffffUL );
 
 	/* Construct DETH */
 	deth->qkey = htonl ( av->qkey );
@@ -182,7 +182,6 @@ int ib_pull ( struct ib_device *ibdev, struct io_buffer *iobuf,
 
 	DBGC2 ( ibdev, "IBDEV %p RX from LID %04x QPN %08lx qkey %08lx\n",
 		ibdev, av->lid, av->qpn, av->qkey );
-	DBGC2_HD ( ibdev, lrh, sizeof ( *lrh ) );
 
 	return 0;
 }
