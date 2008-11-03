@@ -906,22 +906,6 @@ static int linda_post_send ( struct ib_device *ibdev,
 	ssize_t frag_len;
 	uint32_t *data;
 
-#if 0
-	struct hack_header testbuf;
-	static unsigned int psn = 1;
-	memcpy ( &testbuf, &hack_hdr, sizeof ( testbuf ) );
-	unsigned int tmp;
-	tmp = testbuf.lrh.dlid;
-	testbuf.lrh.dlid = testbuf.lrh.slid;
-	testbuf.lrh.slid = tmp;
-	tmp = testbuf.bth.dest_qp;
-	testbuf.bth.dest_qp = testbuf.deth.src_qp;
-	testbuf.deth.src_qp = tmp;
-	testbuf.bth.psn__ack = htonl ( psn++ );
-	DBG_HDA ( 0, &hack_hdr, sizeof ( hack_hdr ) );
-	DBG_HDA ( 0, &testbuf, sizeof ( testbuf ) );
-#endif
-
 	/* Allocate send buffer and calculate offset */
 	send_buf = linda_alloc_send_buf ( linda );
 	start_offset = offset = linda_send_buffer_offset ( linda, send_buf );
@@ -964,9 +948,7 @@ static int linda_post_send ( struct ib_device *ibdev,
 	}
 	DBG_ENABLE ( DBGLVL_IO );
 
-	( void ) av;
-
-	assert ( ( start_offset + len ) == offset );
+	assert ( ( ( start_offset + len + 3 ) & ~3 ) == offset );
 	DBGC ( linda, "Linda %p QPN %ld TX %d(%d) posted [%lx,%lx)\n",
 	       linda, qp->qpn, send_buf, linda_wq->prod,
 	       start_offset, offset );
