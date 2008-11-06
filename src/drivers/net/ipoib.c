@@ -85,32 +85,6 @@ struct ipoib_device {
 	int broadcast_attached;
 };
 
-/**
- * IPoIB path cache entry
- *
- * This serves a similar role to the ARP cache for Ethernet.  (ARP
- * *is* used on IPoIB; we have two caches to maintain.)
- */
-struct ipoib_cached_path {
-	/** Destination GID */
-	struct ib_gid gid;
-	/** Destination LID */
-	unsigned int dlid;
-	/** Service level */
-	unsigned int sl;
-	/** Rate */
-	unsigned int rate;
-};
-
-/** Number of IPoIB path cache entries */
-#define IPOIB_NUM_CACHED_PATHS 2
-
-/** IPoIB path cache */
-static struct ipoib_cached_path ipoib_path_cache[IPOIB_NUM_CACHED_PATHS];
-
-/** Oldest IPoIB path cache entry index */
-static unsigned int ipoib_path_cache_idx = 0;
-
 /** TID half used to identify get path record replies */
 #define IPOIB_TID_GET_PATH_REC 0x11111111UL
 
@@ -126,8 +100,67 @@ static const struct ib_gid ipv4_broadcast_gid = {
 	    0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff } }
 };
 
-/** Maximum time we will wait for the broadcast join to succeed */
-#define IPOIB_JOIN_MAX_DELAY_MS 1000
+/****************************************************************************
+ *
+ * IPoIB address vector cache
+ *
+ ****************************************************************************
+ */
+
+/** Number of cache address vectors */
+#define IPOIB_AV_CACHE_SIZE 2
+
+/** IPoIB path cache */
+static struct ib_address_vector ipoib_av_cache[IPOIB_AV_CACHE_SIZE];
+
+/** Oldest IPoIB address vector index */
+static unsigned int ipoib_av_cache_idx = 0;
+
+static struct ib_address_vector * ipoib_lookup_mac ( struct ipoib_mac *mac ) {
+	struct ib_address_vector *av;
+	unsigned int i;
+
+	for ( i = 0 ; i < ( sizeof ( ipoib_av_cache ) /
+			    sizeof ( ipoib_av_cache[0] ) ) ; i++ ) {
+		av = &ipoib_av_cache[i];
+		if ( ( ntohl ( mac->qpn ) == av->qpn ) &&
+		     ( memcpy ( mac->gid, av->gid,
+				sizeof ( mac->gid ) ) == 0 ) ) {
+			return av;
+		}
+	}
+	return NULL;
+}
+
+static void ipoib_cache_mac ( struct ipoib_mac *mac ) {
+	struct ib_
+}
+
+
+static struct ib_address_vector * ipoib_lookup_lid ( unsigned int lid ) {
+	struct ib_address_vector *av;
+	unsigned int i;
+
+	for ( i = 0 ; i < ( sizeof ( ipoib_av_cache ) /
+			    sizeof ( ipoib_av_cache[0] ) ) ; i++ ) {
+		av = &ipoib_av_cache[i];
+		if ( lid == av->lid )
+			return av;
+	}
+	return NULL;
+}
+
+static void ipoib_cache_lid ( struct ib_address_vector *new_av ) {
+	struct ib_address_vector *av;
+	unsigned int i;
+	unsigned int index;
+
+	if ( ( av = ipoib_lookup_lid ( new_av->lid ) ) == NULL ) {
+		av = &ipoib_av_cache[ipoib_av_cache_idx++];
+		ipoib_av_cache_idx %= IPOIB_AV_CACHE_SIZE;
+	}
+	memcpy ( av, new_av, sizeof ( *av ) );
+}
 
 /****************************************************************************
  *
