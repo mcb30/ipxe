@@ -7,6 +7,11 @@
  *
  */
 
+struct ib_device;
+struct ib_queue_pair;
+struct ib_address_vector;
+struct io_buffer;
+
 /** Half of an Infiniband Global Identifier */
 struct ib_gid_half {
 	uint8_t bytes[8];
@@ -52,6 +57,9 @@ enum ib_lnh {
 
 /** Default Infiniband LID */
 #define IB_LID_NONE 0xffff
+
+/** Test for multicast LID */
+#define IB_LID_MULTICAST( lid ) ( ( (lid) >= 0xc000 ) && ( (lid) <= 0xfffe ) )
 
 /** An Infiniband Global Route Header */
 struct ib_global_route_header {
@@ -110,5 +118,31 @@ struct ib_datagram_extended_transport_header {
 	/** Source queue pair */
 	uint32_t src_qp;
 } __attribute__ (( packed ));
+
+/** All known IB header formats */
+union ib_headers {
+	struct ib_local_route_header lrh;
+	struct {
+		struct ib_local_route_header lrh;
+		struct ib_global_route_header grh;
+		struct ib_base_transport_header bth;
+		struct ib_datagram_extended_transport_header deth;
+	} __attribute__ (( packed )) lrh__grh__bth__deth;
+	struct {
+		struct ib_local_route_header lrh;
+		struct ib_base_transport_header bth;
+		struct ib_datagram_extended_transport_header deth;
+	} __attribute__ (( packed )) lrh__bth__deth;
+} __attribute__ (( packed ));
+
+/** Maximum size required for IB headers */
+#define IB_MAX_HEADER_SIZE sizeof ( union ib_headers )
+
+extern int ib_push ( struct ib_device *ibdev, struct io_buffer *iobuf,
+		     struct ib_queue_pair *qp, size_t payload_len,
+		     const struct ib_address_vector *av );
+extern int ib_pull ( struct ib_device *ibdev, struct io_buffer *iobuf,
+		     struct ib_queue_pair **qp, size_t *payload_len,
+		     struct ib_address_vector *av );
 
 #endif /* _GPXE_IB_PACKET_H */
