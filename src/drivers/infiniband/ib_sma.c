@@ -356,7 +356,7 @@ static void ib_sma_refill_recv ( struct ib_sma *sma ) {
 	struct io_buffer *iobuf;
 	int rc;
 
-	while ( sma->qp->recv.fill < IB_SMA_NUM_SEND_WQES ) {
+	while ( sma->qp->recv.fill < IB_SMA_NUM_RECV_WQES ) {
 
 		/* Allocate I/O buffer */
 		iobuf = alloc_iob ( IB_SMA_PAYLOAD_LEN );
@@ -421,8 +421,8 @@ static void ib_sma_complete_recv ( struct ib_device *ibdev,
 	}
 
 	/* Sanity check */
-	if ( iob_len ( iobuf ) < sizeof ( *mad ) ) {
-		DBGC ( sma, "SMA %p RX too short (%zd bytes)\n",
+	if ( iob_len ( iobuf ) != sizeof ( *mad ) ) {
+		DBGC ( sma, "SMA %p RX bad size (%zd bytes)\n",
 		       sma, iob_len ( iobuf ) );
 		goto err;
 	}

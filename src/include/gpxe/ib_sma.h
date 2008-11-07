@@ -42,7 +42,7 @@ struct ib_sma {
  *
  * This is a policy decision.
  */
-#define IB_SMA_NUM_SEND_WQES 2
+#define IB_SMA_NUM_SEND_WQES 4
 
 /** SMA number of receive WQEs
  *
