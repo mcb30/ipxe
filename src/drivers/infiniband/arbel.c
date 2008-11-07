@@ -1237,15 +1237,15 @@ static int arbel_complete ( struct ib_device *ibdev,
 			     l_key, ARBEL_INVALID_LKEY );
 		assert ( len <= iob_tailroom ( iobuf ) );
 		iob_put ( iobuf, len );
+		assert ( iob_len ( iobuf ) >= sizeof ( *grh ) );
+		grh = iobuf->data;
+		iob_pull ( iobuf, sizeof ( *grh ) );
 		/* Construct address vector */
 		memset ( &av, 0, sizeof ( av ) );
 		av.qpn = MLX_GET ( &cqe->normal, rqpn );
 		av.lid = MLX_GET ( &cqe->normal, rlid );
 		av.sl = MLX_GET ( &cqe->normal, sl );
-		av.gid_present = 1;
-		assert ( iob_len ( iobuf ) >= sizeof ( *grh ) );
-		grh = iobuf->data;
-		iob_pull ( iobuf, sizeof ( *grh ) );
+		av.gid_present = MLX_GET ( &cqe->normal, g );
 		memcpy ( &av.gid, &grh->sgid, sizeof ( av.gid ) );
 		/* Hand off to completion handler */
 		ib_complete_recv ( ibdev, qp, &av, iobuf, rc );

@@ -1208,18 +1208,16 @@ static int hermon_complete ( struct ib_device *ibdev,
 		len = MLX_GET ( &cqe->normal, byte_cnt );
 		assert ( len <= iob_tailroom ( iobuf ) );
 		iob_put ( iobuf, len );
+		assert ( iob_len ( iobuf ) >= sizeof ( *grh ) );
+		grh = iobuf->data;
+		iob_pull ( iobuf, sizeof ( *grh ) );
 		/* Construct address vector */
 		memset ( &av, 0, sizeof ( av ) );
 		av.qpn = MLX_GET ( &cqe->normal, srq_rqpn );
 		av.lid = MLX_GET ( &cqe->normal, slid_smac47_32 );
 		av.sl = MLX_GET ( &cqe->normal, sl );
 		av.gid_present = MLX_GET ( &cqe->normal, g );
-		if ( av.gid_present ) {
-			assert ( iob_len ( iobuf ) >= sizeof ( *grh ) );
-			grh = iobuf->data;
-			iob_pull ( iobuf, sizeof ( *grh ) );
-			memcpy ( &av.gid, &grh->sgid, sizeof ( av.gid ) );
-		}
+		memcpy ( &av.gid, &grh->sgid, sizeof ( av.gid ) );
 		/* Hand off to completion handler */
 		ib_complete_recv ( ibdev, qp, &av, iobuf, rc );
 	}
