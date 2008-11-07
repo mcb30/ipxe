@@ -951,9 +951,9 @@ static int linda_post_send ( struct ib_device *ibdev,
 	DBG_ENABLE ( DBGLVL_IO );
 
 	assert ( ( ( start_offset + len + 3 ) & ~3 ) == offset );
-	DBGC ( linda, "Linda %p QPN %ld TX %d(%d) posted [%lx,%lx)\n",
-	       linda, qp->qpn, send_buf, linda_wq->prod,
-	       start_offset, offset );
+	DBGC2 ( linda, "Linda %p QPN %ld TX %d(%d) posted [%lx,%lx)\n",
+		linda, qp->qpn, send_buf, linda_wq->prod,
+		start_offset, offset );
 
 	/* Increment producer counter */
 	linda_wq->prod = ( ( linda_wq->prod + 1 ) & ( wq->num_wqes - 1 ) );
@@ -979,8 +979,8 @@ static void linda_complete_send ( struct ib_device *ibdev,
 
 	/* Parse completion */
 	send_buf = linda_wq->send_buf[wqe_idx];
-	DBGC ( linda, "Linda %p QPN %ld TX %d(%d) complete\n",
-	       linda, qp->qpn, send_buf, wqe_idx );
+	DBGC2 ( linda, "Linda %p QPN %ld TX %d(%d) complete\n",
+		linda, qp->qpn, send_buf, wqe_idx );
 
 	/* Complete work queue entry */
 	iobuf = wq->iobufs[wqe_idx];
@@ -1084,8 +1084,8 @@ static int linda_post_recv ( struct ib_device *ibdev,
 		     BufSize, bufsize );
 	linda_writeq_array8b ( linda, &rcvegr,
 			       linda_wq->eager_array, eager_prod );
-	DBGC ( linda, "Linda %p QPN %ld RX egr %d(%d) posted [%lx,%lx)\n",
-	       linda, qp->qpn, eager_prod, wqe_idx, addr, ( addr + len ) );
+	DBGC2 ( linda, "Linda %p QPN %ld RX egr %d(%d) posted [%lx,%lx)\n",
+		linda, qp->qpn, eager_prod, wqe_idx, addr, ( addr + len ) );
 
 	return 0;
 }
@@ -1107,6 +1107,7 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	struct QIB_7220_RcvEgr rcvegr;
 	struct io_buffer headers;
 	struct io_buffer *iobuf;
+	struct ib_queue_pair *intended_qp = qp;
 	struct ib_address_vector av;
 	unsigned int rcvtype;
 	unsigned int pktlen;
@@ -1119,6 +1120,8 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	unsigned int header_len;
 	unsigned int padded_payload_len;
 	unsigned int wqe_idx;
+	size_t payload_len;
+	int qp0;
 	int last;
 	int rc;
 
@@ -1144,16 +1147,16 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	padded_payload_len = ( pktlen - header_len - 4 /* ICRC */ );
 	err = ( iberr | mkerr | tiderr | khdrerr | mtuerr |
 		lenerr | parityerr | vcrcerr | icrcerr );
-	DBGC ( linda, "Linda %p QPN %ld RX egr %d%s hdr %d type %d len "
-	       "%d(%d+%d+4)%s%s%s%s%s%s%s%s%s%s%s\n", linda, qp->qpn,
-	       egrindex, ( useegrbfr ? "" : "(unused)" ),
-	       ( header_offs / LINDA_RECV_HEADER_SIZE ), rcvtype,
-	       pktlen, header_len, padded_payload_len, ( err ? " [Err" : "" ),
-	       ( iberr ? " IB" : "" ), ( mkerr ? " MK" : "" ),
-	       ( tiderr ? " TID" : "" ), ( khdrerr ? " KHdr" : "" ),
-	       ( mtuerr ? " MTU" : "" ), ( lenerr ? " Len" : "" ),
-	       ( parityerr ? " Parity" : "" ), ( vcrcerr ? " VCRC" : "" ),
-	       ( icrcerr ? " ICRC" : "" ), ( err ? "]" : "" ) );
+	DBGC2 ( linda, "Linda %p QPN %ld RX egr %d%s hdr %d type %d len "
+		"%d(%d+%d+4)%s%s%s%s%s%s%s%s%s%s%s\n", linda, qp->qpn,
+		egrindex, ( useegrbfr ? "" : "(unused)" ),
+		( header_offs / LINDA_RECV_HEADER_SIZE ), rcvtype,
+		pktlen, header_len, padded_payload_len, ( err ? " [Err" : "" ),
+		( iberr ? " IB" : "" ), ( mkerr ? " MK" : "" ),
+		( tiderr ? " TID" : "" ), ( khdrerr ? " KHdr" : "" ),
+		( mtuerr ? " MTU" : "" ), ( lenerr ? " Len" : "" ),
+		( parityerr ? " Parity" : "" ), ( vcrcerr ? " VCRC" : "" ),
+		( icrcerr ? " ICRC" : "" ), ( err ? "]" : "" ) );
 	/* IB header is placed immediately before RcvHdrFlags */
 	iob_populate ( &headers, ( ( ( void * ) rcvhdrflags ) - header_len ),
 		       header_len, header_len );
@@ -1161,7 +1164,9 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 		    ( header_len + sizeof ( *rcvhdrflags ) ) );
 
 	/* Parse header to generate address vector */
-	if ( ( rc = ib_pull ( ibdev, &headers, NULL, NULL, &av ) ) != 0 ) {
+	qp0 = ( qp->qpn == 0 );
+	if ( ( rc = ib_pull ( ibdev, &headers, ( qp0 ? &intended_qp : NULL ),
+			      &payload_len, &av ) ) != 0 ) {
 		DBGC ( linda, "Linda %p could not parse headers: %s\n",
 		       linda, strerror ( rc ) );
 		err = 1;
@@ -1174,13 +1179,23 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 		last = ( linda_wq->eager_cons == egrindex );
 		if ( ( iobuf = wq->iobufs[wqe_idx] ) != NULL ) {
 			if ( last ) {
-				iob_put ( iobuf, padded_payload_len );
+				iob_put ( iobuf, payload_len );
 				rc = ( err ? -EIO :
 				       ( useegrbfr ? 0 : -ECANCELED ) );
+				if ( qp != intended_qp ) {
+					DBGC ( linda, "Linda %p redirecting "
+					       "QPN %ld => %ld\n", linda,
+					       qp->qpn, intended_qp->qpn );
+					/* Compensate for incorrect fills */
+					qp->recv.fill--;
+					intended_qp->recv.fill++;
+				}
+				ib_complete_recv ( ibdev, intended_qp, &av,
+						   iobuf, rc );
 			} else {
-				rc = -ECANCELED;
+				ib_complete_recv ( ibdev, qp, &av, iobuf,
+						   -ECANCELED );
 			}
-			ib_complete_recv ( ibdev, qp, &av, iobuf, rc );
 			wq->iobufs[wqe_idx] = NULL;
 		}
 
