@@ -48,6 +48,7 @@ int ib_push ( struct ib_device *ibdev, struct io_buffer *iobuf,
 	struct ib_global_route_header *grh;
 	struct ib_base_transport_header *bth;
 	struct ib_datagram_extended_transport_header *deth;
+	size_t orig_iob_len = iob_len ( iobuf );
 	size_t pad_len;
 	size_t lrh_len;
 	size_t grh_len;
@@ -63,13 +64,14 @@ int ib_push ( struct ib_device *ibdev, struct io_buffer *iobuf,
 	payload_len += 4; /* ICRC */
 
 	/* Reserve space for headers */
+	orig_iob_len = iob_len ( iobuf );
 	deth = iob_push ( iobuf, sizeof ( *deth ) );
 	bth = iob_push ( iobuf, sizeof ( *bth ) );
-	grh_len = ( payload_len + iob_len ( iobuf ) );
+	grh_len = ( payload_len + iob_len ( iobuf ) - orig_iob_len );
 	grh = ( av->gid_present ?
 		iob_push ( iobuf, sizeof ( *grh ) ) : NULL );
 	lrh = iob_push ( iobuf, sizeof ( *lrh ) );
-	lrh_len = ( payload_len + iob_len ( iobuf ) );
+	lrh_len = ( payload_len + iob_len ( iobuf ) - orig_iob_len );
 
 	/* Construct LRH */
 	vl = ( ( av->qpn == IB_QPN_SMP ) ? IB_VL_SMP : IB_VL_DEFAULT );
@@ -121,6 +123,7 @@ int ib_pull ( struct ib_device *ibdev, struct io_buffer *iobuf,
 	struct ib_global_route_header *grh;
 	struct ib_base_transport_header *bth;
 	struct ib_datagram_extended_transport_header *deth;
+	size_t orig_iob_len = iob_len ( iobuf );
 	unsigned int lnh;
 	size_t pad_len;
 	unsigned long qpn;
@@ -196,7 +199,8 @@ int ib_pull ( struct ib_device *ibdev, struct io_buffer *iobuf,
 	if ( payload_len ) {
 		pad_len = ( ( bth->se__m__padcnt__tver >> 4 ) & 0x3 );
 		*payload_len = ( ( ntohs ( lrh->length ) << 2 )
-				 - iob_len ( iobuf ) - pad_len );
+				 - ( orig_iob_len - iob_len ( iobuf ) )
+				 - pad_len - 4 /* ICRC */ );
 	}
 
 	/* Determine destination QP, if applicable */
