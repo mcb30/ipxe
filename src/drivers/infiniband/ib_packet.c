@@ -126,7 +126,11 @@ int ib_pull ( struct ib_device *ibdev, struct io_buffer *iobuf,
 	unsigned long qpn;
 	unsigned int lid;
 
-	/* Clear address vector */
+	/* Clear return values */
+	if ( qp )
+		*qp = NULL;
+	if ( payload_len )
+		*payload_len = 0;
 	memset ( av, 0, sizeof ( *av ) );
 
 	/* Extract LRH */
