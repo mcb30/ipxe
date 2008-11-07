@@ -1107,7 +1107,7 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	struct QIB_7220_RcvEgr rcvegr;
 	struct io_buffer headers;
 	struct io_buffer *iobuf;
-	struct ib_queue_pair *intended_qp = qp;
+	struct ib_queue_pair *intended_qp;
 	struct ib_address_vector av;
 	unsigned int rcvtype;
 	unsigned int pktlen;
@@ -1165,12 +1165,15 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 
 	/* Parse header to generate address vector */
 	qp0 = ( qp->qpn == 0 );
+	intended_qp = NULL;
 	if ( ( rc = ib_pull ( ibdev, &headers, ( qp0 ? &intended_qp : NULL ),
 			      &payload_len, &av ) ) != 0 ) {
 		DBGC ( linda, "Linda %p could not parse headers: %s\n",
 		       linda, strerror ( rc ) );
 		err = 1;
 	}
+	if ( ! intended_qp )
+		intended_qp = qp;
 
 	/* Complete this buffer and any skipped buffers */
 	do {
