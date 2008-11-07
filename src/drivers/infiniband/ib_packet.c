@@ -55,8 +55,8 @@ int ib_push ( struct ib_device *ibdev, struct io_buffer *iobuf,
 	unsigned int vl;
 	unsigned int lnh;
 
-	DBGC2 ( ibdev, "IBDEV %p TX to LID %04x QPN %08lx qkey %08lx\n",
-		ibdev, av->lid, av->qpn, av->qkey );
+	DBGC2 ( ibdev, "IBDEV %p TX %04x:%08lx => %04x:%08lx (key %08lx)\n",
+		ibdev, ibdev->lid, qp->qpn, av->lid, av->qpn, av->qkey );
 
 	/* Calculate packet length */
 	pad_len = ( (-payload_len) & 0x3 );
@@ -104,6 +104,9 @@ int ib_push ( struct ib_device *ibdev, struct io_buffer *iobuf,
 	deth->qkey = htonl ( av->qkey );
 	deth->src_qp = htonl ( qp->qpn );
 
+	DBGCP_HDA ( ibdev, 0, iobuf->data,
+		    ( iob_len ( iobuf ) - orig_iob_len ) );
+
 	return 0;
 }
 
@@ -147,6 +150,7 @@ int ib_pull ( struct ib_device *ibdev, struct io_buffer *iobuf,
 	av->lid = ntohs ( lrh->slid );
 	av->sl = ( lrh->sl__lnh >> 4 );
 	lnh = ( lrh->sl__lnh & 0x3 );
+	lid = ntohs ( lrh->dlid );
 
 	/* Reject unsupported packets */
 	if ( ! ( ( lnh == IB_LNH_BTH ) || ( lnh == IB_LNH_GRH ) ) ) {
@@ -183,6 +187,7 @@ int ib_pull ( struct ib_device *ibdev, struct io_buffer *iobuf,
 		       ibdev, bth->opcode );
 		return -ENOTSUP;
 	}
+	qpn = ntohl ( bth->dest_qp );
 
 	/* Extract DETH */
 	if ( iob_len ( iobuf ) < sizeof ( *deth ) ) {
@@ -205,11 +210,9 @@ int ib_pull ( struct ib_device *ibdev, struct io_buffer *iobuf,
 
 	/* Determine destination QP, if applicable */
 	if ( qp ) {
-		lid = ntohs ( lrh->dlid );
 		if ( IB_LID_MULTICAST ( lid ) && grh ) {
 			*qp = ib_find_qp_mgid ( ibdev, &grh->dgid );
 		} else {
-			qpn = ntohl ( bth->dest_qp );
 			*qp = ib_find_qp_qpn ( ibdev, qpn );
 		}
 		if ( ! *qp ) {
@@ -219,8 +222,13 @@ int ib_pull ( struct ib_device *ibdev, struct io_buffer *iobuf,
 		}
 	}
 
-	DBGC2 ( ibdev, "IBDEV %p RX LID %04x QPN %08lx => QPN %08lx\n",
-		ibdev, av->lid, av->qpn, ( qp ? (*qp)->qpn : -1UL ) );
+	DBGC2 ( ibdev, "IBDEV %p RX %04x:%08lx <= %04x:%08lx (key %08lx)\n",
+		ibdev, lid,
+		( IB_LID_MULTICAST( lid ) ? ( qp ? (*qp)->qpn : -1UL ) : qpn ),
+		av->lid, av->qpn, ntohl ( deth->qkey ) );
+	DBGCP_HDA ( ibdev, 0,
+		    ( iobuf->data - ( orig_iob_len - iob_len ( iobuf ) ) ),
+		    ( orig_iob_len - iob_len ( iobuf ) ) );
 
 	return 0;
 }
