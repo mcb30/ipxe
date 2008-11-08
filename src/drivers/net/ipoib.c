@@ -583,7 +583,7 @@ static int ipoib_transmit ( struct net_device *netdev,
 
 	/* Construct address vector */
 	memset ( &av, 0, sizeof ( av ) );
-	av.qkey = IB_GLOBAL_QKEY;
+	av.qkey = ipoib->data_qkey;
 	av.gid_present = 1;
 	if ( dest->mac.qpn == htonl ( IPOIB_BROADCAST_QPN ) ) {
 		/* Broadcast */
