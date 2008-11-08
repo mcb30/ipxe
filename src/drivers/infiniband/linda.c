@@ -923,8 +923,8 @@ static int linda_post_send ( struct ib_device *ibdev,
 	ib_push ( ibdev, &headers, qp, iob_len ( iobuf ), av );
 
 	/* Calculate packet length */
-	len = ( sizeof ( sendpbc ) + iob_len ( &headers ) +
-		iob_len ( iobuf ) );
+	len = ( ( sizeof ( sendpbc ) + iob_len ( &headers ) +
+		  iob_len ( iobuf ) + 3 ) & ~3 );
 
 	/* Construct send per-buffer control word */
 	memset ( &sendpbc, 0, sizeof ( sendpbc ) );
@@ -950,7 +950,7 @@ static int linda_post_send ( struct ib_device *ibdev,
 	}
 	DBG_ENABLE ( DBGLVL_IO );
 
-	assert ( ( ( start_offset + len + 3 ) & ~3 ) == offset );
+	assert ( ( start_offset + len ) == offset );
 	DBGC2 ( linda, "Linda %p QPN %ld TX %d(%d) posted [%lx,%lx)\n",
 		linda, qp->qpn, send_buf, linda_wq->prod,
 		start_offset, offset );
