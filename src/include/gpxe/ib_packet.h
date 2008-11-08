@@ -84,7 +84,6 @@ struct ib_global_route_header {
 
 #define IB_GRH_IPVER_IPv6 0x06
 #define IB_GRH_NXTHDR_IBA 0x1b
-#define IB_GRH_HOPLMT_MAX 0xff
 
 /** An Infiniband Base Transport Header */
 struct ib_base_transport_header {

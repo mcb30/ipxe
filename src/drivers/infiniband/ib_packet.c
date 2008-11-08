@@ -88,7 +88,7 @@ int ib_push ( struct ib_device *ibdev, struct io_buffer *iobuf,
 			htonl ( IB_GRH_IPVER_IPv6 << 28 );
 		grh->paylen = htons ( grh_len );
 		grh->nxthdr = IB_GRH_NXTHDR_IBA;
-		grh->hoplmt = IB_GRH_HOPLMT_MAX;
+		grh->hoplmt = 0;
 		memcpy ( &grh->sgid, &ibdev->gid, sizeof ( grh->sgid ) );
 		memcpy ( &grh->dgid, &av->gid, sizeof ( grh->dgid ) );
 	}
