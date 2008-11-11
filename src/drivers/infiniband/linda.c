@@ -1076,6 +1076,10 @@ static int linda_post_recv ( struct ib_device *ibdev,
 	/* Calculate eager producer index and WQE index */
 	wqe_idx = ( linda_wq->eager_prod & ( wq->num_wqes - 1 ) );
 	assert ( wq->iobufs[wqe_idx] == NULL );
+	if ( wq->iobufs[wqe_idx] != NULL ) {
+		DBG ( "Collision with prod=%d cons=%d\n",
+		      linda_wq->eager_prod, linda_wq->eager_cons );
+	}
 
 	/* Store I/O buffer */
 	wq->iobufs[wqe_idx] = iobuf;
@@ -1154,9 +1158,10 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	unsigned int header_len;
 	unsigned int padded_payload_len;
 	unsigned int wqe_idx;
+	unsigned int wqe_mask;
+	unsigned int wqe_egridx;
 	size_t payload_len;
 	int qp0;
-	int last;
 	int rc;
 
 	/* RcvHdrFlags are at the end of the header entry */
@@ -1207,6 +1212,7 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	DBGCP_HDA ( linda, hdrqoffset, headers.data,
 		    ( header_len + sizeof ( *rcvhdrflags ) ) );
 
+#if 1
 	/* Abort if eager buffer not consumed; we have no valid egrindex */
 	if ( ! useegrbfr ) {
 		struct QIB_7220_scalar rcvegrindexhead;
@@ -1222,6 +1228,7 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 		      BIT_GET ( &rcvegrindextail, Value ) );
 		//		return;
 	}
+#endif
 
 	/* Parse header to generate address vector */
 	qp0 = ( qp->qpn == 0 );
@@ -1235,37 +1242,76 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	if ( ! intended_qp )
 		intended_qp = qp;
 
-	/* Complete this buffer and any skipped buffers */
-	while ( linda_wq->eager_cons != ( ( egrindex + 1 ) & ( linda_wq->eager_entries - 1 ) ) ) {
-		//	do {
-		/* Complete work queue entry */
+	/* Complete this buffer and any skipped buffers.  Note that
+	 * when the hardware runs out of buffers, it will repeatedly
+	 * report the same buffer (the tail) as a TID error, and that
+	 * it also has a habit of sometimes skipping over several
+	 * buffers at once.
+	 */
+	while ( 1 ) {
+
+		/* If we have caught up to the producer counter, stop.
+		 * This will happen when the hardware first runs out
+		 * of buffers and starts reporting TID errors against
+		 * the eager buffer it wants to use next.
+		 */
+		if ( linda_wq->eager_cons == linda_wq->eager_prod )
+			break;
+
+		/* If we have caught up to where we should be after
+		 * completing this egrindex, stop.  We phrase the test
+		 * this way to avoid completing the entire ring when
+		 * we receive the same egrindex twice in a row.
+		 */
+		if ( ( linda_wq->eager_cons ==
+		       ( ( egrindex + 1 ) & ( linda_wq->eager_entries - 1 ) )))
+			break;
+
+		/* Identify work queue entry and corresponding I/O
+		 * buffer.  The I/O buffer array is much smaller than
+		 * the eager buffer array, so we calculate the
+		 * effective eager buffer index for the WQE before
+		 * using it.
+		 */
+		wqe_mask = ( wq->num_wqes - 1 );
 		wqe_idx = ( linda_wq->eager_cons & ( wq->num_wqes - 1 ) );
-		last = ( linda_wq->eager_cons == egrindex );
-		if ( ( iobuf = wq->iobufs[wqe_idx] ) != NULL ) {
-			if ( last ) {
-				iob_put ( iobuf, payload_len );
-				rc = ( err ? -EIO :
-				       ( useegrbfr ? 0 : -ECANCELED ) );
-				if ( qp != intended_qp ) {
-					DBGC ( linda, "Linda %p redirecting "
-					       "QPN %ld => %ld\n", linda,
-					       qp->qpn, intended_qp->qpn );
-					/* Compensate for incorrect fills */
-					qp->recv.fill--;
-					intended_qp->recv.fill++;
-				}
-				ib_complete_recv ( ibdev, intended_qp, &av,
-						   iobuf, rc );
-			} else {
-				ib_complete_recv ( ibdev, qp, &av, iobuf,
-						   -ECANCELED );
-			}
+		wqe_egridx =
+			( ( ( linda_wq->eager_prod & ~( wq->num_wqes - 1 ) ) +
+			    wqe_idx - ( ( wqe_idx >= ( linda_wq->eager_prod &
+						       ( wq->num_wqes - 1 ) ) )
+					? wq->num_wqes : 0 ) )
+			  & ( linda_wq->eager_entries - 1 ) );
+		if ( linda_wq->eager_cons == wqe_egridx ) {
+			iobuf = wq->iobufs[wqe_idx];
 			wq->iobufs[wqe_idx] = NULL;
 		} else {
-			// hw reporting on a buffer we haven't posted
-			// yet; handle it when we have actually posted
-			// it.
-			break;
+			iobuf = NULL;
+		}
+
+		/* Complete the eager buffer */
+		if ( iobuf == NULL ) {
+			/* Completing on an eager buffer that was
+			 * never posted - nothing to do.
+			 */
+		} else if ( linda_wq->eager_cons != egrindex ) {
+			/* Completing on a skipped-over eager buffer */
+			ib_complete_recv ( ibdev, qp, &av, iobuf, -ECANCELED );
+		} else {
+			/* Completing the eager buffer described in
+			 * this header entry.
+			 */
+			iob_put ( iobuf, payload_len );
+			rc = ( err ? -EIO : ( useegrbfr ? 0 : -ECANCELED ) );
+			/* Redirect to target QP if necessary */
+			if ( qp != intended_qp ) {
+				DBGC ( linda, "Linda %p redirecting QPN %ld "
+				       "=> %ld\n",
+				       linda, qp->qpn, intended_qp->qpn );
+				/* Compensate for fill levels */
+				qp->recv.fill--;
+				intended_qp->recv.fill++;
+			}
+			ib_complete_recv ( ibdev, intended_qp, &av, iobuf, rc);
 		}
 
 		/* Clear eager buffer */
@@ -1279,17 +1325,6 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 
 		DBG ( "+" );
 	}
-	//	} while ( ! last );
-
-#if 0
-	/* Update consumer offset */
-	memset ( &rcvegrindexhead, 0, sizeof ( rcvegrindexhead ) );
-	BIT_FILL_1 ( &rcvegrindexhead,
-		     Value, linda_wq->eager_cons );
-	linda_writeq_array64k ( linda, &rcvegrindexhead,
-				QIB_7220_RcvEgrIndexHead0_offset, ctx );
-#endif
-
 }
 
 /**
