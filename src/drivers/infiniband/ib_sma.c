@@ -490,7 +490,8 @@ int ib_create_sma ( struct ib_sma *sma, struct ib_device *ibdev,
 	process_init ( &sma->poll, ib_sma_step, &ibdev->refcnt );
 
 	/* Create completion queue */
-	sma->cq = ib_create_cq ( ibdev, 0, &ib_sma_completion_ops );
+	sma->cq = ib_create_cq ( ibdev, IB_SMA_NUM_CQES,
+				 &ib_sma_completion_ops );
 	if ( ! sma->cq ) {
 		rc = -ENOMEM;
 		goto err_create_cq;

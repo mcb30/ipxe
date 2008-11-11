@@ -48,7 +48,13 @@ struct ib_sma {
  *
  * This is a policy decision.
  */
-#define IB_SMA_NUM_RECV_WQES 4
+#define IB_SMA_NUM_RECV_WQES 2
+
+/** SMA number of completion queue entries
+ *
+ * This is a policy decision
+ */
+#define IB_SMA_NUM_CQES 8
 
 extern int ib_create_sma ( struct ib_sma *sma, struct ib_device *ibdev,
 			   struct ib_sma_operations *op );
