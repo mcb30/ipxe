@@ -575,6 +575,7 @@ static int linda_create_recv_wq ( struct linda *linda,
 	struct QIB_7220_RcvHdrAddr0 rcvhdraddr;
 	struct QIB_7220_RcvHdrTailAddr0 rcvhdrtailaddr;
 	struct QIB_7220_RcvHdrHead0 rcvhdrhead;
+	struct QIB_7220_scalar rcvegrindexhead;
 	struct QIB_7220_RcvCtrl rcvctrl;
 	unsigned int ctx = linda_qpn_to_ctx ( qp->qpn );
 	int rc;
@@ -609,18 +610,14 @@ static int linda_create_recv_wq ( struct linda *linda,
 	BIT_FILL_1 ( &rcvhdrhead, counter, 1 );
 	linda_writeq_array64k ( linda, &rcvhdrhead,
 				QIB_7220_RcvHdrHead0_offset, ctx );
-	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
-	BIT_SET ( &rcvctrl, PortEnable[ctx], 1 );
-	BIT_SET ( &rcvctrl, IntrAvail[ctx], 1 );
-	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
-
-
-	struct QIB_7220_scalar rcvegrindexhead;
 	memset ( &rcvegrindexhead, 0, sizeof ( rcvegrindexhead ) );
 	BIT_FILL_1 ( &rcvegrindexhead, Value, 1 );
 	linda_writeq_array64k ( linda, &rcvegrindexhead,
 				QIB_7220_RcvEgrIndexHead0_offset, ctx );
-
+	linda_readq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
+	BIT_SET ( &rcvctrl, PortEnable[ctx], 1 );
+	BIT_SET ( &rcvctrl, IntrAvail[ctx], 1 );
+	linda_writeq ( linda, &rcvctrl, QIB_7220_RcvCtrl_offset );
 
 	DBGC ( linda, "Linda %p QPN %ld CTX %d hdrs [%lx,%lx) prod %lx\n",
 	       linda, qp->qpn, ctx, virt_to_bus ( linda_wq->header ),
@@ -923,8 +920,6 @@ static int linda_post_send ( struct ib_device *ibdev,
 	ssize_t frag_len;
 	uint32_t *data;
 
-	DBG ( "-" );
-
 	/* Allocate send buffer and calculate offset */
 	send_buf = linda_alloc_send_buf ( linda );
 	start_offset = offset = linda_send_buffer_offset ( linda, send_buf );
@@ -1054,6 +1049,8 @@ static int linda_post_recv ( struct ib_device *ibdev,
 	struct ib_work_queue *wq = &qp->recv;
 	struct linda_recv_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
 	struct QIB_7220_RcvEgr rcvegr;
+	struct QIB_7220_scalar rcvegrindexhead;
+	unsigned int ctx = linda_qpn_to_ctx ( qp->qpn );
 	physaddr_t addr;
 	size_t len;
 	unsigned int wqe_idx;
@@ -1076,10 +1073,6 @@ static int linda_post_recv ( struct ib_device *ibdev,
 	/* Calculate eager producer index and WQE index */
 	wqe_idx = ( linda_wq->eager_prod & ( wq->num_wqes - 1 ) );
 	assert ( wq->iobufs[wqe_idx] == NULL );
-	if ( wq->iobufs[wqe_idx] != NULL ) {
-		DBG ( "Collision with prod=%d cons=%d\n",
-		      linda_wq->eager_prod, linda_wq->eager_cons );
-	}
 
 	/* Store I/O buffer */
 	wq->iobufs[wqe_idx] = iobuf;
@@ -1112,14 +1105,10 @@ static int linda_post_recv ( struct ib_device *ibdev,
 				 ( linda_wq->eager_entries - 1 ) );
 
 	/* Update head index */
-	unsigned int ctx = linda_qpn_to_ctx ( qp->qpn );
-	unsigned int x;
-
-	struct QIB_7220_scalar rcvegrindexhead;
-	x = ( ( linda_wq->eager_prod + 1 ) & ( linda_wq->eager_entries - 1 ) );
 	memset ( &rcvegrindexhead, 0, sizeof ( rcvegrindexhead ) );
 	BIT_FILL_1 ( &rcvegrindexhead,
-		     Value, x );
+		     Value, ( ( linda_wq->eager_prod + 1 ) &
+			      ( linda_wq->eager_entries - 1 ) ) );
 	linda_writeq_array64k ( linda, &rcvegrindexhead,
 				QIB_7220_RcvEgrIndexHead0_offset, ctx );
 
@@ -1141,12 +1130,10 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	struct linda_recv_work_queue *linda_wq = ib_wq_get_drvdata ( wq );
 	struct QIB_7220_RcvHdrFlags *rcvhdrflags;
 	struct QIB_7220_RcvEgr rcvegr;
-	//	struct QIB_7220_scalar rcvegrindexhead;
 	struct io_buffer headers;
 	struct io_buffer *iobuf;
 	struct ib_queue_pair *intended_qp;
 	struct ib_address_vector av;
-	unsigned int ctx = linda_qpn_to_ctx ( qp->qpn );
 	unsigned int rcvtype;
 	unsigned int pktlen;
 	unsigned int egrindex;
@@ -1158,8 +1145,6 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 	unsigned int header_len;
 	unsigned int padded_payload_len;
 	unsigned int wqe_idx;
-	unsigned int wqe_mask;
-	unsigned int wqe_egridx;
 	size_t payload_len;
 	int qp0;
 	int rc;
@@ -1205,30 +1190,12 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 		       ( err ? "]" : "" ) );
 	} else {
 		DBGC2 ( linda, "Linda %p QPN %ld RX egr %d hdr %d type %d "
-			"len %d(%d+%d+4)", linda, qp->qpn, egrindex,
+			"len %d(%d+%d+4)\n", linda, qp->qpn, egrindex,
 			( header_offs / LINDA_RECV_HEADER_SIZE ), rcvtype,
 			pktlen, header_len, padded_payload_len );
 	}
 	DBGCP_HDA ( linda, hdrqoffset, headers.data,
 		    ( header_len + sizeof ( *rcvhdrflags ) ) );
-
-#if 1
-	/* Abort if eager buffer not consumed; we have no valid egrindex */
-	if ( ! useegrbfr ) {
-		struct QIB_7220_scalar rcvegrindexhead;
-		struct QIB_7220_scalar rcvegrindextail;
-
-		linda_readq_array64k ( linda, &rcvegrindexhead,
-				       QIB_7220_RcvEgrIndexHead0_offset, ctx );
-		linda_readq_array64k ( linda, &rcvegrindextail,
-				       QIB_7220_RcvEgrIndexTail0_offset, ctx );
-
-		DBG ( "Unused eager buffer %d with head=%ld tail=%ld\n",
-		      egrindex, BIT_GET ( &rcvegrindexhead, Value ),
-		      BIT_GET ( &rcvegrindextail, Value ) );
-		//		return;
-	}
-#endif
 
 	/* Parse header to generate address vector */
 	qp0 = ( qp->qpn == 0 );
@@ -1268,35 +1235,15 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 			break;
 
 		/* Identify work queue entry and corresponding I/O
-		 * buffer.  The I/O buffer array is much smaller than
-		 * the eager buffer array, so we calculate the
-		 * effective eager buffer index for the WQE before
-		 * using it.
+		 * buffer.
 		 */
-		wqe_mask = ( wq->num_wqes - 1 );
 		wqe_idx = ( linda_wq->eager_cons & ( wq->num_wqes - 1 ) );
-		wqe_egridx =
-			( ( ( linda_wq->eager_prod & ~( wq->num_wqes - 1 ) ) +
-			    wqe_idx - ( ( wqe_idx >= ( linda_wq->eager_prod &
-						       ( wq->num_wqes - 1 ) ) )
-					? wq->num_wqes : 0 ) )
-			  & ( linda_wq->eager_entries - 1 ) );
-		if ( linda_wq->eager_cons == wqe_egridx ) {
-			iobuf = wq->iobufs[wqe_idx];
-			wq->iobufs[wqe_idx] = NULL;
-		} else {
-			iobuf = NULL;
-		}
+		iobuf = wq->iobufs[wqe_idx];
+		assert ( iobuf != NULL );
+		wq->iobufs[wqe_idx] = NULL;
 
 		/* Complete the eager buffer */
-		if ( iobuf == NULL ) {
-			/* Completing on an eager buffer that was
-			 * never posted - nothing to do.
-			 */
-		} else if ( linda_wq->eager_cons != egrindex ) {
-			/* Completing on a skipped-over eager buffer */
-			ib_complete_recv ( ibdev, qp, &av, iobuf, -ECANCELED );
-		} else {
+		if ( linda_wq->eager_cons == egrindex ) {
 			/* Completing the eager buffer described in
 			 * this header entry.
 			 */
@@ -1307,11 +1254,14 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 				DBGC ( linda, "Linda %p redirecting QPN %ld "
 				       "=> %ld\n",
 				       linda, qp->qpn, intended_qp->qpn );
-				/* Compensate for fill levels */
+				/* Compensate for incorrect fill levels */
 				qp->recv.fill--;
 				intended_qp->recv.fill++;
 			}
 			ib_complete_recv ( ibdev, intended_qp, &av, iobuf, rc);
+		} else {
+			/* Completing on a skipped-over eager buffer */
+			ib_complete_recv ( ibdev, qp, &av, iobuf, -ECANCELED );
 		}
 
 		/* Clear eager buffer */
@@ -1322,8 +1272,6 @@ static void linda_complete_recv ( struct ib_device *ibdev,
 		/* Increment consumer index */
 		linda_wq->eager_cons = ( ( linda_wq->eager_cons + 1 ) &
 					 ( linda_wq->eager_entries - 1 ) );
-
-		DBG ( "+" );
 	}
 }
 
