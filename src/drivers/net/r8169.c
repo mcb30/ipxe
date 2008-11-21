@@ -1785,7 +1785,7 @@ rtl8169_remove ( struct pci_device *pdev )
 }
 
 static struct pci_device_id rtl8169_nics[] = {
-	PCI_ROM(0x10ec, 0x8129, "rtl8169-0x8129", "rtl8169-0x8129"),
+	PCI_ROM(0x10ec, 0x8129, "rtl8169-0x8129", "rtl8169-0x8129"), // checked
 	PCI_ROM(0x10ec, 0x8136, "rtl8169-0x8136", "rtl8169-0x8136"),
 	PCI_ROM(0x10ec, 0x8167, "rtl8169-0x8167", "rtl8169-0x8167"),
 	PCI_ROM(0x10ec, 0x8168, "rtl8169-0x8168", "rtl8169-0x8168"),
