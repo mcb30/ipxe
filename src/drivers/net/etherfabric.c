@@ -15,6 +15,9 @@
  *
  **************************************************************************
  */
+
+FILE_LICENCE ( GPL_UNSPECIFIED );
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <unistd.h>

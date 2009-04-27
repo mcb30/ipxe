@@ -408,6 +408,29 @@ int __debug_disable;
 #define barrier() __asm__ __volatile__ ( "" : : : "memory" )
 #endif /* ASSEMBLY */
 
+/**
+ * Licence declarations
+ *
+ * For reasons that are partly historical, various different files
+ * within the gPXE codebase have differing licences.
+ */
+#define FILE_LICENCE_PUBLIC_DOMAIN \
+	PROVIDE_SYMBOL ( __licence_public_domain )
+#define FILE_LICENCE_BSD3 \
+	PROVIDE_SYMBOL ( __licence_bsd3 )
+#define FILE_LICENCE_GPL2_ONLY \
+	PROVIDE_SYMBOL ( __licence_gpl2_only )
+#define FILE_LICENCE_GPL2_OR_LATER \
+	PROVIDE_SYMBOL ( __licence_gpl2_or_later )
+#define FILE_LICENCE_GPL_UNSPECIFIED \
+	PROVIDE_SYMBOL ( __licence_gpl_unspecified )
+
+/** Declare a particular licence as applying to a file */
+#define FILE_LICENCE( _licence ) FILE_LICENCE_ ## _licence
+
+/* This file itself is under GPLv2-or-later */
+FILE_LICENCE ( GPL2_OR_LATER );
+
 #include <bits/compiler.h>
 
 #endif /* COMPILER_H */
