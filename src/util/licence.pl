@@ -27,6 +27,7 @@ my $known_licences = {
     can_subsume => {
       public_domain => 1,
       bsd3 => 1,
+      bsd2 => 1,
     },
   },
   gpl2_or_later => {
@@ -35,6 +36,7 @@ my $known_licences = {
       gpl_any => 1,
       public_domain => 1,
       bsd3 => 1,
+      bsd2 => 1,
     },
   },
   gpl2_only => {
@@ -44,6 +46,7 @@ my $known_licences = {
       gpl2_or_later => 1,
       public_domain => 1,
       bsd3 => 1,
+      bsd2 => 1,
     },
   },
   public_domain => {
@@ -55,10 +58,18 @@ my $known_licences = {
     can_subsume => {
       public_domain => 1,
       bsd3 => 1,
+      bsd2 => 1,
     },
   },
   bsd3 => {
     desc => "BSD Licence (without advertising clause)",
+    can_subsume => {
+      public_domain => 1,
+      bsd2 => 1,
+    },
+  },
+  bsd2 => {
+    desc => "BSD Licence (without advertising or endorsement clauses)",
     can_subsume => {
       public_domain => 1,
     },
@@ -73,7 +84,7 @@ GetOptions (
   'quiet|q+' => sub { $verbosity--; },
 ) or die "Could not parse command-line options\n";
 
-# Parse licence symbol list from command line
+# Parse licence list from command line
 my $licences = {};
 foreach my $licence ( @ARGV ) {
   die "Unknown licence \"$licence\"\n"
