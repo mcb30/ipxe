@@ -56,6 +56,26 @@ our @ISA = qw ( Test::Machine );
 
 use constant QEMU_TIMEOUT => 5;
 
+sub monitor_command {
+  my $this = shift;
+  my $cmd = shift;
+  my $qemu = $this->{qemu};
+
+  $qemu->send ( "$cmd\n" );
+  $qemu->expect ( QEMU_TIMEOUT, "(qemu) " )
+    or die "qemu command '$cmd' timed out\n";
+
+  my $before = $qemu->before();
+
+  $qemu->clear_accum();
+
+  if ($before =~ /$cmd.*?\n(.*)/s ) {
+    $1;
+  } else {
+    "";
+  }
+}
+
 =pod
 
 =over
@@ -220,11 +240,16 @@ sub network {
 			 $this->host_net_add_tap ( $network ) )
 	or die "Unsupported network type\n";
 
-    #
-    # |DrV|: send appropriate $host_net_add monitor command to connect
-    # to the network.
-    #
     print "Connecting to network using \"".$host_net_add."\"\n";
+
+    my $res = $this->monitor_command ( $host_net_add );
+
+    if ($res) {
+       die "Connecting to network failed: $res\n";
+    }
+
+    $this->monitor_command ( "info network\n" );
+
   }
 }
 
