@@ -54,7 +54,7 @@ use warnings;
 
 our @ISA = qw ( Test::Machine );
 
-use constant VDE_TIMEOUT => 5;
+use constant QEMU_TIMEOUT => 5;
 
 =pod
 
@@ -74,20 +74,25 @@ sub new {
   my $qemu = new Expect;
   $qemu->raw_pty ( 1 );
   $qemu->log_stdout ( 1 );
-  #
-  # |DrV| : spawn qemu using some combination of (probably)
-  # -nographic, -vnc, -S, and -monitor so that the qemu monitor (the
-  # bit that you normally access via Ctrl-Alt-2) is attached to stdio
-  # and so controllable via Expect.
-  #
-  # See Test::Network::Vde for a simple usage of Expect in starting up
-  # an otherwise-interactive process, and checking that it started
-  # correctly (i.e. waiting for the first prompt).
-  #
-  # You don't need to worry about constructing the variable parts of
-  # the command line (e.g. -hda, -net etc.); devices will be added via
-  # the monitor interface.
-  #
+
+  $qemu->spawn ( "/usr/bin/qemu",
+      # Attach monitor to stdio
+      "-monitor", "stdio",
+      # Default boot order: floppy, hdd, network
+      # This will be overridden later
+      "-boot", "acn",
+      # Do not start CPU at startup
+      "-S"
+    ) or die "Could not start qemu: $!\n";
+
+  my $reached_prompt = $qemu->expect ( QEMU_TIMEOUT, '(qemu) ' );
+
+  if ( ! $reached_prompt ) {
+    $qemu->hard_close();
+    die "Failed to start up qemu\n";
+  }
+  $qemu->clear_accum();
+
   $this->{qemu} = $qemu;
 
   return $this;
