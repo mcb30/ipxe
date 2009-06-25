@@ -139,10 +139,11 @@ sub run {
   my $this = shift;
   $this->SUPER::run ( @_ );
 
-  #
-  # |DrV|: send "cont" command to monitor, and verify that it returns
-  # |to the monitor prompt.
-  #
+  my $res = $this->monitor_command ( "cont" );
+
+  if ($res) {
+    die "cont failed: '$res'\n";
+  }
 }
 
 ############################################################################
