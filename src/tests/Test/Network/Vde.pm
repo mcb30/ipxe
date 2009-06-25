@@ -76,7 +76,8 @@ sub new {
 
   # Check that vde_switch started successfully
   $vde_switch->send ( "\n" );
-  my $reached_prompt = $vde_switch->expect ( VDE_TIMEOUT, '-re', '^vde: ' );
+  my $reached_prompt = $vde_switch->expect ( VDE_TIMEOUT, '-re',
+					     '^vde[:\$] ' );
   my $before = $vde_switch->before();
   if ( ( ! $reached_prompt ) || ( $before ne "\n" ) ) {
     $vde_switch->hard_close();
