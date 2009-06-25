@@ -186,6 +186,15 @@ sub nic {
     print "NIC ".$vlan." was modified:\n".
 	Data::Dumper->Dump ( [ $change->{old}, $change->{new} ],
 			     [ "old", "new" ] )."\n";
+
+    my $nic = $change->{new};
+    next unless $nic;
+
+    my $res = $this->monitor_command ( "pci_add pci_addr=auto nic vlan=$vlan,macaddr=$nic->{macaddr},model=$nic->{type}" );
+
+    unless ($res =~ /^OK/) {
+      die "Adding NIC failed: $res\n";
+    }
   }
 }
 
