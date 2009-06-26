@@ -146,6 +146,14 @@ sub run {
     push @cmd, $media->{ $medium }->{path};
   }
 
+  my $nics = $this->{ nics };
+  foreach my $nic ( keys %{ $nics } ) {
+    push @cmd, "-net";
+    push @cmd, "nic," .
+               "macaddr=$nics->{ $nic }->{ macaddr }," .
+               "model=$nics->{ $nic }->{ type }";
+  }
+
   print "Running qemu: '@cmd'\n";
 
   $qemu->spawn ( @cmd ) or die "Could not start qemu: $!\n";
