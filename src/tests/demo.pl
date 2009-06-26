@@ -13,3 +13,4 @@ $machine->cdrom ( "win2k3.iso" );
 $machine->hdd ( "drive_c.img", "drive_d.img" );
 $machine->nic ( { type => "rtl8139", macaddr => "52:54:00:12:34:56" } );
 $machine->network ( $network );
+$machine->run();
