@@ -145,6 +145,7 @@ sub run {
   foreach my $nic ( keys %{ $nics } ) {
     push @cmd, "-net";
     push @cmd, "nic," .
+               "vlan=$nic," .
                "macaddr=$nics->{ $nic }->{ macaddr }," .
                "model=$nics->{ $nic }->{ type }";
   }
@@ -157,7 +158,7 @@ sub run {
       $this->host_net_add_tap ( $networks->{ $network } ) or
       die "Unsupported network type\n";
 
-    push @cmd, $host_net_add;
+    push @cmd, "$host_net_add,vlan=$network";
   }
 
   print "Running qemu: '@cmd'\n";
