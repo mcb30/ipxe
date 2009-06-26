@@ -116,11 +116,6 @@ sub run {
   my $this = shift;
   $this->SUPER::run ( @_ );
 
-  # Start up qemu
-  my $qemu = new Expect;
-  $qemu->raw_pty ( 1 );
-  $qemu->log_stdout ( 1 );
-
   my @cmd = ( "/usr/bin/qemu",
       # Attach monitor to stdio
       "-monitor", "stdio",
@@ -154,7 +149,23 @@ sub run {
                "model=$nics->{ $nic }->{ type }";
   }
 
+  my $networks = $this->{ networks };
+  foreach my $network ( keys %{ $networks } ) {
+    push @cmd, "-net";
+    my $host_net_add =
+      $this->host_net_add_vde ( $networks->{ $network } ) or
+      $this->host_net_add_tap ( $networks->{ $network } ) or
+      die "Unsupported network type\n";
+
+    push @cmd, $host_net_add;
+  }
+
   print "Running qemu: '@cmd'\n";
+
+  # Start up qemu
+  my $qemu = new Expect;
+  $qemu->raw_pty ( 1 );
+  $qemu->log_stdout ( 1 );
 
   $qemu->spawn ( @cmd ) or die "Could not start qemu: $!\n";
 
@@ -250,7 +261,13 @@ sub host_net_add_vde {
   return undef if $@;
 
   # Construct host_net_add line for VDE network
-  return "host_net_add vde sock=".$vde_socket;
+  if ( $this->{qemu} ) {
+    # runtime: monitor command
+    return "host_net_add vde sock=$vde_socket";
+  } else {
+    # command line
+    return "vde,sock=$vde_socket";
+  }
 }
 
 sub host_net_add_tap {
@@ -284,9 +301,11 @@ sub network {
 			 $this->host_net_add_tap ( $network ) )
 	or die "Unsupported network type\n";
 
-    print "Connecting to network using \"".$host_net_add."\"\n";
+    
 
     if ( $this->{qemu} ) {
+      print "Connecting to network using \"".$host_net_add."\"\n";
+
       my $res = $this->monitor_command ( $host_net_add );
 
       if ($res) {
