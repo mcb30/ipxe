@@ -90,31 +90,6 @@ sub new {
   my $class = shift;
   my $this = $class->SUPER::new ( @_ );
 
-  # Start up qemu
-  my $qemu = new Expect;
-  $qemu->raw_pty ( 1 );
-  $qemu->log_stdout ( 1 );
-
-  $qemu->spawn ( "/usr/bin/qemu",
-      # Attach monitor to stdio
-      "-monitor", "stdio",
-      # Default boot order: floppy, hdd, network
-      # This will be overridden later
-      "-boot", "acn",
-      # Do not start CPU at startup
-      "-S"
-    ) or die "Could not start qemu: $!\n";
-
-  my $reached_prompt = $qemu->expect ( QEMU_TIMEOUT, '(qemu) ' );
-
-  if ( ! $reached_prompt ) {
-    $qemu->hard_close();
-    die "Failed to start up qemu\n";
-  }
-  $qemu->clear_accum();
-
-  $this->{qemu} = $qemu;
-
   return $this;
 }
 
@@ -127,7 +102,9 @@ sub DESTROY {
   # abrupt power-off.  I think hard_close() will kill the process, but
   # I'm not sure.
   #
-  $this->{qemu}->hard_close();
+  if ( $this->{qemu} ) {
+    $this->{qemu}->hard_close();
+  }
 }
 
 ############################################################################
@@ -138,6 +115,35 @@ sub DESTROY {
 sub run {
   my $this = shift;
   $this->SUPER::run ( @_ );
+
+  # Start up qemu
+  my $qemu = new Expect;
+  $qemu->raw_pty ( 1 );
+  $qemu->log_stdout ( 1 );
+
+  my @cmd = ( "/usr/bin/qemu",
+      # Attach monitor to stdio
+      "-monitor", "stdio",
+      # Default boot order: floppy, hdd, network
+      # This will be overridden later
+      "-boot", "acn",
+      # Do not start CPU at startup
+      "-S",
+    );
+
+  print "Running qemu: '@cmd'\n";
+
+  $qemu->spawn ( @cmd ) or die "Could not start qemu: $!\n";
+
+  my $reached_prompt = $qemu->expect ( QEMU_TIMEOUT, '(qemu) ' );
+
+  if ( ! $reached_prompt ) {
+    $qemu->hard_close();
+    die "Failed to start up qemu\n";
+  }
+  $qemu->clear_accum();
+
+  $this->{qemu} = $qemu;
 
   my $res = $this->monitor_command ( "cont" );
 
@@ -191,10 +197,12 @@ sub nic {
     my $nic = $change->{new};
     next unless $nic;
 
-    my $res = $this->monitor_command ( "pci_add pci_addr=auto nic vlan=$vlan,macaddr=$nic->{macaddr},model=$nic->{type}" );
+    if ( $this->{qemu} ) {
+      my $res = $this->monitor_command ( "pci_add pci_addr=auto nic vlan=$vlan,macaddr=$nic->{macaddr},model=$nic->{type}" );
 
-    unless ($res =~ /^OK/) {
-      die "Adding NIC failed: $res\n";
+      unless ($res =~ /^OK/) {
+        die "Adding NIC failed: $res\n";
+      }
     }
   }
 }
@@ -252,14 +260,15 @@ sub network {
 
     print "Connecting to network using \"".$host_net_add."\"\n";
 
-    my $res = $this->monitor_command ( $host_net_add );
+    if ( $this->{qemu} ) {
+      my $res = $this->monitor_command ( $host_net_add );
 
-    if ($res) {
-       die "Connecting to network failed: $res\n";
+      if ($res) {
+         die "Connecting to network failed: $res\n";
+      }
+
+      $this->monitor_command ( "info network\n" );
     }
-
-    $this->monitor_command ( "info network\n" );
-
   }
 }
 
