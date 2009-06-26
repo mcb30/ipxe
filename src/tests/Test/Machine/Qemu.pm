@@ -131,6 +131,21 @@ sub run {
       "-S",
     );
 
+  my $media = $this->{ media };
+  foreach my $medium ( keys %{ $media } ) {
+    my $type = $media->{ $medium }->{type};
+    if ( $type eq "fdd" ) {
+      push @cmd, "-fd" . chr(ord("a") + $media->{ $medium }->{index});
+    } elsif ( $type eq "hdd" ) {
+      push @cmd, "-hd" . chr(ord("a") + $media->{ $medium }->{index});
+    } elsif ( $type eq "cdrom" ) {
+      push @cmd, "-cdrom";
+    } else {
+      die "Unknown media type $type\n";
+    }
+    push @cmd, $media->{ $medium }->{path};
+  }
+
   print "Running qemu: '@cmd'\n";
 
   $qemu->spawn ( @cmd ) or die "Could not start qemu: $!\n";
@@ -150,6 +165,9 @@ sub run {
   if ($res) {
     die "cont failed: '$res'\n";
   }
+
+  $this->monitor_command ( "info block" );
+  $this->monitor_command ( "info network" );
 }
 
 ############################################################################
