@@ -278,6 +278,32 @@ sub host_net_add_tap {
   return undef;
 }
 
+sub host_net_remove_vde {
+  my $this = shift;
+  my $network = shift;
+  my $vlan = shift;
+
+  my $vde_socket;
+  eval {
+    $vde_socket = $network->vde_socket();
+  };
+  return undef if $@;
+
+  if ( $this->{qemu} ) {
+    return "host_net_remove $vlan vde.$vlan";
+  } else {
+    return undef;
+  }
+}
+
+sub host_net_remove_tap {
+  my $this = shift;
+  my $network = shift;
+  my $vlan = shift;
+
+  return undef;
+}
+
 sub network {
   my $this = shift;
   my $changes = $this->SUPER::network ( @_ );
@@ -295,7 +321,26 @@ sub network {
     #
 
     my $network = $change->{new};
-    next unless $network;
+
+    unless ( $network ) {
+      $network = $change->{old};
+      my $host_net_remove =
+        $this->host_net_remove_vde ( $network, $vlan ) or
+        $this->host_net_remove_tap ( $network, $vlan ) or
+        die "Unsupported network type\n";
+
+      if ( $this->{qemu} ) {
+        print "Disconnecting network using \"$host_net_remove\"\n";
+
+        my $res = $this->monitor_command ( $host_net_remove );
+
+        if ( $res ) {
+          die "Disconnecting from network failed: $res\n";
+        }
+      }
+
+      next;
+    }
 
     # Try all supported network types in turn
     my $host_net_add = ( $this->host_net_add_vde ( $network ) ||
