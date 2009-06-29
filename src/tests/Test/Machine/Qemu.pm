@@ -227,19 +227,18 @@ sub nic {
 	Data::Dumper->Dump ( [ $change->{old}, $change->{new} ],
 			     [ "old", "new" ] )."\n";
 
-    my $nic = $change->{new};
-    unless ( $nic ) {
-      $nic = $change->{old};
-
+    my $nic = $change->{old};    
+    if ( $nic ) {
       if ( $this->{qemu} ) {
         my $res = $this->monitor_command ( "host_net_remove $vlan $nic->{type}.$vlan" );
         if ( $res ) {
           die "Removing NIC failed: $res\n";
         }
       }
-
-      next;
     }
+
+    $nic = $change->{new};
+    next unless $nic;
 
     if ( $this->{qemu} ) {
       my $res = $this->monitor_command ( "pci_add pci_addr=auto nic vlan=$vlan,macaddr=$nic->{macaddr},model=$nic->{type}" );
@@ -321,15 +320,8 @@ sub network {
 	Data::Dumper->Dump ( [ $change->{old}, $change->{new} ],
 			     [ "old", "new" ] )."\n";
 
-    #
-    # |DrV|: send appropriate $host_net_remove monitor command to
-    # disconnect from the network.
-    #
-
-    my $network = $change->{new};
-
-    unless ( $network ) {
-      $network = $change->{old};
+    my $network = $change->{old};
+    if ( $network ) {
       my $host_net_remove =
         $this->host_net_remove_vde ( $network, $vlan ) or
         $this->host_net_remove_tap ( $network, $vlan ) or
@@ -344,9 +336,10 @@ sub network {
           die "Disconnecting from network failed: $res\n";
         }
       }
-
-      next;
     }
+
+    $network = $change->{new};
+    next unless $network;
 
     # Try all supported network types in turn
     my $host_net_add = ( $this->host_net_add_vde ( $network ) ||
