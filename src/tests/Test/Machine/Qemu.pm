@@ -222,18 +222,24 @@ sub nic {
 
   while ( ( my $vlan, my $change ) = each %$changes ) {
 
-    #
-    # |DrV|: send appropriate pci_del, pci_add etc. monitor commands
-    # |to bring the VM's NIC definitions into sync.
-    #
-
     require Data::Dumper;
     print "NIC ".$vlan." was modified:\n".
 	Data::Dumper->Dump ( [ $change->{old}, $change->{new} ],
 			     [ "old", "new" ] )."\n";
 
     my $nic = $change->{new};
-    next unless $nic;
+    unless ( $nic ) {
+      $nic = $change->{old};
+
+      if ( $this->{qemu} ) {
+        my $res = $this->monitor_command ( "host_net_remove $vlan $nic->{type}.$vlan" );
+        if ( $res ) {
+          die "Removing NIC failed: $res\n";
+        }
+      }
+
+      next;
+    }
 
     if ( $this->{qemu} ) {
       my $res = $this->monitor_command ( "pci_add pci_addr=auto nic vlan=$vlan,macaddr=$nic->{macaddr},model=$nic->{type}" );
