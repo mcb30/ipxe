@@ -195,6 +195,21 @@ sub run {
 # Storage media
 #
 
+sub device_from_medium {
+  my $medium = shift;
+  if ( $medium->{type} eq "cdrom" ) {
+    return "ide1-cd$medium->{index}";
+  } elsif ( $medium->{type} eq "fdd" ) {
+    return "floppy$medium->{index}";
+  } elsif ( $medium->{type} eq "hdd" ) {
+    my $controller = $medium->{index} / 2;
+    my $channel = $medium->{index} % 2;
+    return "ide$controller-hd$channel";
+  } else {
+    die "device_from_medium: unsupported type $medium->{type}\n";
+  }
+}
+
 sub media {
   my $this = shift;
   my $changes = $this->SUPER::media ( @_ );
@@ -208,6 +223,29 @@ sub media {
     print "Medium ".$name." was modified:\n".
 	Data::Dumper->Dump ( [ $change->{old}, $change->{new} ],
 			     [ "old", "new" ] )."\n";
+
+    my $medium = $change->{old};
+    if ( $medium ) {
+      if ( $this->{qemu} && ! $change->{new} ) {
+        my $device = device_from_medium ( $medium );
+        my $res = $this->monitor_command ( "eject $device" );
+
+        if ( $res ) {
+          die "Removing medium failed: $res\n";
+        }
+      }
+    }
+
+    $medium = $change->{new};
+    next unless $medium;
+
+    if ( $this->{qemu} ) {
+      my $device = device_from_medium ( $medium );
+      my $res = $this->monitor_command ( "change $device $medium->{path}" );
+      if ( $res ) {
+        die "Changing medium failed: $res\n";
+      }
+    }
   }
 }
 
