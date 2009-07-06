@@ -97,11 +97,6 @@ sub DESTROY {
   my $this = shift;
   $this->SUPER::DESTROY ( @_ );
 
-  #
-  # |DrV|: make sure that this kills qemu.  It can (and should) be an
-  # abrupt power-off.  I think hard_close() will kill the process, but
-  # I'm not sure.
-  #
   if ( $this->{qemu} ) {
     $this->{qemu}->hard_close();
   }
@@ -215,10 +210,7 @@ sub media {
   my $changes = $this->SUPER::media ( @_ );
 
   while ( ( my $name, my $change ) = each %$changes ) {
-    #
-    # |DrV|: send appropriate drive_add etc. monitor commands to bring
-    # the VM's media definitions into sync.
-    #
+
     require Data::Dumper;
     print "Medium ".$name." was modified:\n".
 	Data::Dumper->Dump ( [ $change->{old}, $change->{new} ],
