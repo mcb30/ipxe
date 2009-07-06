@@ -400,4 +400,41 @@ sub network {
   }
 }
 
+############################################################################
+#
+# Snapshots
+#
+
+sub save_snapshot {
+  my $this = shift;
+  $this->SUPER::save_snapshot ( @_ );
+  my $name = shift;
+
+  unless ( $this->{qemu} ) {
+    die "Cannot save snapshot while not running\n";
+  }
+
+  print "Saving snapshot '$name'...\n";
+  my $res = $this->monitor_command ( "savevm $name" );
+  if ($res) {
+    die "Saving snapshot failed: $res\n";
+  }
+}
+
+sub load_snapshot {
+  my $this = shift;
+  $this->SUPER::load_snapshot ( @_ );
+  my $name = shift;
+
+  unless ( $this->{qemu} ) {
+    die "Cannot load snapshot while not running\n";
+  }
+
+  print "Loading snapshot '$name'...\n";
+  my $res = $this->monitor_command ( "loadvm $name" );
+  if ($res) {
+    die "Saving snapshot failed: $res\n";
+  }
+}
+
 1;

@@ -272,4 +272,30 @@ sub network {
   return $changes;
 }
 
+=pod
+
+=item C<< save_snapshot ( $name ) >>
+
+Save the state of the C<Test::Machine> to a snapshot named <$name>.
+
+=cut
+
+sub save_snapshot {
+  my $this = shift;
+  # Do nothing
+}
+
+=pod
+
+=item C<< load_snapshot ( $name ) >>
+
+Load the state of the C<Test::Machine> from a snapshot named <$name>.
+
+=cut
+
+sub load_snapshot {
+  my $this = shift;
+  # Do nothing
+}
+
 1;
