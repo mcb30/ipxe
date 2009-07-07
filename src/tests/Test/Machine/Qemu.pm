@@ -156,6 +156,10 @@ sub run {
     push @cmd, "$host_net_add,vlan=$network";
   }
 
+  if ( $this->{snapshot} ) {
+    push @cmd, "-loadvm", $this->{snapshot};
+  }
+
   print "Running qemu: '@cmd'\n";
 
   # Start up qemu
@@ -419,7 +423,8 @@ sub load_snapshot {
   my $name = shift;
 
   unless ( $this->{qemu} ) {
-    die "Cannot load snapshot while not running\n";
+    $this->{snapshot} = $name;
+    return;
   }
 
   print "Loading snapshot '$name'...\n";
