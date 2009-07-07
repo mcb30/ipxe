@@ -139,10 +139,17 @@ sub run {
   my $nics = $this->{ nics };
   foreach my $nic ( keys %{ $nics } ) {
     push @cmd, "-net";
-    push @cmd, "nic," .
-               "vlan=$nic," .
-               "macaddr=$nics->{ $nic }->{ macaddr }," .
-               "model=$nics->{ $nic }->{ type }";
+    my $params = "nic,vlan=$nic";
+
+    if ( $nics->{ $nic }->{ macaddr } ) {
+      $params .= ",macaddr=$nics->{ $nic }->{ macaddr }";
+    }
+
+    if ( $nics->{ $nic }->{ type } ) {
+      $params .= ",model=$nics->{ $nic }->{ type }";
+    }
+
+    push @cmd, $params;
   }
 
   my $networks = $this->{ networks };
