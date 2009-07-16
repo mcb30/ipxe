@@ -54,7 +54,7 @@ use warnings;
 
 our @ISA = qw ( Test::Machine );
 
-use constant QEMU_TIMEOUT => 5;
+use constant QEMU_TIMEOUT => 15;
 
 sub monitor_command {
   my $this = shift;
