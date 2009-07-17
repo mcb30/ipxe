@@ -116,6 +116,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define ERRFILE_hermon		     ( ERRFILE_DRIVER | 0x00720000 )
 #define ERRFILE_linda		     ( ERRFILE_DRIVER | 0x00730000 )
 #define ERRFILE_ata		     ( ERRFILE_DRIVER | 0x00740000 )
+#define ERRFILE_srp		     ( ERRFILE_DRIVER | 0x00750000 )
 
 #define ERRFILE_aoe			( ERRFILE_NET | 0x00000000 )
 #define ERRFILE_arp			( ERRFILE_NET | 0x00010000 )
@@ -148,6 +149,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define ERRFILE_ib_pathrec		( ERRFILE_NET | 0x001c0000 )
 #define ERRFILE_ib_mcast		( ERRFILE_NET | 0x001d0000 )
 #define ERRFILE_ib_cm			( ERRFILE_NET | 0x001e0000 )
+#define ERRFILE_ib_srp			( ERRFILE_NET | 0x001f0000 )
 
 #define ERRFILE_image		      ( ERRFILE_IMAGE | 0x00000000 )
 #define ERRFILE_elf		      ( ERRFILE_IMAGE | 0x00010000 )
@@ -180,6 +182,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define ERRFILE_pxemenu		      ( ERRFILE_OTHER | 0x00150000 )
 #define ERRFILE_x509		      ( ERRFILE_OTHER | 0x00160000 )
 #define ERRFILE_login_ui	      ( ERRFILE_OTHER | 0x00170000 )
+#define ERRFILE_ib_srpboot	      ( ERRFILE_OTHER | 0x00180000 )
 
 /** @} */
 
