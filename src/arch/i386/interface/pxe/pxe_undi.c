@@ -674,12 +674,21 @@ PXENV_EXIT_t pxenv_undi_isr ( struct s_PXENV_UNDI_ISR *undi_isr ) {
 		 */
 		netdev_poll ( pxe_netdev );
 
+		/* Always say it was ours for the sake of simplicity */
+		{
+			extern int hack_ours;
+			if ( hack_ours ) {
+		DBGC2 ( &pxenv_undi_isr, " OURS" );
+		undi_isr->FuncFlag = PXENV_UNDI_ISR_OUT_OURS;
+
 		/* Disable interrupts to avoid interrupt storm */
 		netdev_irq ( pxe_netdev, 0 );
 
-		/* Always say it was ours for the sake of simplicity */
-		DBGC2 ( &pxenv_undi_isr, " OURS" );
-		undi_isr->FuncFlag = PXENV_UNDI_ISR_OUT_OURS;
+			} else {
+		DBGC2 ( &pxenv_undi_isr, " NOT OURS" );
+		undi_isr->FuncFlag = PXENV_UNDI_ISR_OUT_NOT_OURS;
+			}
+		}
 		break;
 	case PXENV_UNDI_ISR_IN_PROCESS :
 	case PXENV_UNDI_ISR_IN_GET_NEXT :
