@@ -177,8 +177,6 @@ PXENV_EXIT_t pxenv_udp_open ( struct s_PXENV_UDP_OPEN *pxenv_udp_open ) {
 		return PXENV_EXIT_FAILURE;
 	}
 
-	DBG_DISABLE ( DBGLVL_LOG );
-
 	pxenv_udp_open->Status = PXENV_STATUS_SUCCESS;
 	return PXENV_EXIT_SUCCESS;
 }
@@ -205,9 +203,6 @@ PXENV_EXIT_t pxenv_udp_open ( struct s_PXENV_UDP_OPEN *pxenv_udp_open ) {
  *
  */
 PXENV_EXIT_t pxenv_udp_close ( struct s_PXENV_UDP_CLOSE *pxenv_udp_close ) {
-
-	DBG_ENABLE ( DBGLVL_LOG );
-
 	DBG ( "PXENV_UDP_CLOSE" );
 
 	/* Close UDP connection */

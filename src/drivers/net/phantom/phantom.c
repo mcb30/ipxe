@@ -1293,9 +1293,6 @@ static int phantom_transmit ( struct net_device *netdev,
  *
  * @v netdev	Network device
  */
-
-int hack_ours = 0;
-
 static void phantom_poll ( struct net_device *netdev ) {
 	struct phantom_nic *phantom = netdev_priv ( netdev );
 	struct io_buffer *iobuf;
@@ -1317,16 +1314,6 @@ static void phantom_poll ( struct net_device *netdev ) {
 		phantom->link_poll_timer = PHN_LINK_POLL_FREQUENCY;
 	}
 
-#if 0
-	irq_state = phantom_readl ( phantom, UNM_PCIE_IRQ_STATE );
-	if ( UNM_PCIE_IRQ_STATE_TRIGGERED ( irq_state ) ) {
-		DBG ( "+" );
-	} else {
-		DBG ( "-" );
-	}
-#endif
-	hack_ours = 0;
-
 	/* Check for interrupts */
 	if ( phantom->sds_irq_enabled ) {
 
@@ -1344,8 +1331,6 @@ static void phantom_poll ( struct net_device *netdev ) {
 		phantom_writel ( phantom, UNM_PCIE_IRQ_STATUS_MAGIC,
 				 phantom_irq_status_reg[phantom->port] );
 		phantom_readl ( phantom, UNM_PCIE_IRQ_VECTOR );
-
-		hack_ours = 1;
 	}
 
 	/* Check for TX completions */
