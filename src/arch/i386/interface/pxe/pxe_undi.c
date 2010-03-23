@@ -674,21 +674,29 @@ PXENV_EXIT_t pxenv_undi_isr ( struct s_PXENV_UNDI_ISR *undi_isr ) {
 		 */
 		netdev_poll ( pxe_netdev );
 
-		/* Always say it was ours for the sake of simplicity */
-		{
-			extern int hack_ours;
-			if ( hack_ours ) {
-		DBGC2 ( &pxenv_undi_isr, " OURS" );
-		undi_isr->FuncFlag = PXENV_UNDI_ISR_OUT_OURS;
+		/* A 100% accurate determination of "OURS" vs "NOT
+		 * OURS" is difficult to achieve without invasive and
+		 * unpleasant changes to the driver model.  We settle
+		 * for always returning "OURS" if interrupts are
+		 * currently enabled.
+		 *
+		 * Returning "NOT OURS" when interrupts are disabled
+		 * allows us to avoid a potential interrupt storm when
+		 * we are on a shared interrupt line; if we were to
+		 * always return "OURS" then the other device's ISR
+		 * may never be called.
+		 */
+		if ( netdev_irq_enabled ( pxe_netdev ) ) {
+			DBGC2 ( &pxenv_undi_isr, " OURS" );
+			undi_isr->FuncFlag = PXENV_UNDI_ISR_OUT_OURS;
+		} else {
+			DBGC2 ( &pxenv_undi_isr, " NOT OURS" );
+			undi_isr->FuncFlag = PXENV_UNDI_ISR_OUT_NOT_OURS;
+		}
 
-		/* Disable interrupts to avoid interrupt storm */
+		/* Disable interrupts */
 		netdev_irq ( pxe_netdev, 0 );
 
-			} else {
-		DBGC2 ( &pxenv_undi_isr, " NOT OURS" );
-		undi_isr->FuncFlag = PXENV_UNDI_ISR_OUT_NOT_OURS;
-			}
-		}
 		break;
 	case PXENV_UNDI_ISR_IN_PROCESS :
 	case PXENV_UNDI_ISR_IN_GET_NEXT :
