@@ -27,11 +27,27 @@ FILE_LICENCE ( GPL2_OR_LATER );
 
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <ctype.h>
 #include <errno.h>
+#include <getopt.h>
+#include <ipxe/command.h>
+#include <ipxe/parseopt.h>
 #include <ipxe/image.h>
 
 struct image_type script_image_type __image_type ( PROBE_NORMAL );
+
+/** Offset within current script
+ *
+ * This is a global in order to allow goto_exec() to reset the offset.
+ */
+static size_t script_offset;
+
+/** Current label target
+ *
+ * This is a global in order to allow goto_exec() to set the target.
+ */
+static char *script_label;
 
 /**
  * Execute script
@@ -40,46 +56,71 @@ struct image_type script_image_type __image_type ( PROBE_NORMAL );
  * @ret rc		Return status code
  */
 static int script_exec ( struct image *image ) {
-	size_t offset = 0;
+	size_t saved_offset;
 	off_t eol;
 	size_t len;
-	int rc;
+	int rc = 0;
 
 	/* Temporarily de-register image, so that a "boot" command
 	 * doesn't throw us into an execution loop.
 	 */
 	unregister_image ( image );
 
-	while ( offset < image->len ) {
-	
+	/* Preserve state of any currently-running script */
+	saved_offset = script_offset;
+	script_offset = 0;
+
+	do {
+
 		/* Find length of next line, excluding any terminating '\n' */
-		eol = memchr_user ( image->data, offset, '\n',
-				    ( image->len - offset ) );
+		eol = memchr_user ( image->data, script_offset, '\n',
+				    ( image->len - script_offset ) );
 		if ( eol < 0 )
 			eol = image->len;
-		len = ( eol - offset );
+		len = ( eol - script_offset );
 
 		/* Copy line, terminate with NUL, and execute command */
 		{
 			char cmdbuf[ len + 1 ];
 
-			copy_from_user ( cmdbuf, image->data, offset, len );
+			copy_from_user ( cmdbuf, image->data,
+					 script_offset, len );
 			cmdbuf[len] = '\0';
 			DBG ( "$ %s\n", cmdbuf );
-			if ( ( rc = system ( cmdbuf ) ) != 0 ) {
-				DBG ( "Command \"%s\" failed: %s\n",
-				      cmdbuf, strerror ( rc ) );
-				goto done;
+
+			/* Move to next line */
+			script_offset += ( len + 1 );
+
+			/* Process line */
+			if ( script_label ) {
+				if ( ( cmdbuf[0] == ':' ) &&
+				     ( strcmp ( script_label,
+						&cmdbuf[1] ) == 0 ) ) {
+					/* Found target label */
+					free ( script_label );
+					script_label = NULL;
+				}
+			} else {
+				if ( cmdbuf[0] == ':' )
+					continue;
+				if ( ( rc = system ( cmdbuf ) ) != 0 )
+					goto done;
 			}
 		}
-		
-		/* Move to next line */
-		offset += ( len + 1 );
+
+	} while ( script_offset < image->len );
+
+	/* Check to see if we could not find our label */
+	if ( script_label ) {
+		printf ( "\"%s\": no such label\n", script_label );
+		free ( script_label );
+		script_label = NULL;
+		rc = -ENOENT;
 	}
 
-	rc = 0;
  done:
-	/* Re-register image and return */
+	/* Restore saved state, re-register image, and return */
+	script_offset = saved_offset;
 	register_image ( image );
 	return rc;
 }
@@ -128,4 +169,46 @@ struct image_type script_image_type __image_type ( PROBE_NORMAL ) = {
 	.name = "script",
 	.load = script_load,
 	.exec = script_exec,
+};
+
+/** "goto" options */
+struct goto_options {};
+
+/** "goto" option list */
+static struct option_descriptor goto_opts[] = {};
+
+/** "goto" command descriptor */
+static struct command_descriptor goto_cmd =
+	COMMAND_DESC ( struct goto_options, goto_opts, 1, 1,
+		       "<label>", "" );
+
+/**
+ * "goto" command
+ *
+ * @v argc		Argument count
+ * @v argv		Argument list
+ * @ret rc		Return status code
+ */
+static int goto_exec ( int argc, char **argv ) {
+	struct goto_options opts;
+	int rc;
+
+	/* Parse options */
+	if ( ( rc = parse_options ( argc, argv, &goto_cmd, &opts ) ) != 0 )
+		return rc;
+
+	/* Parse label */
+	free ( script_label );
+	script_label = strdup ( argv[optind] );
+	if ( ! script_label )
+		return -ENOMEM;
+	script_offset = 0;
+
+	return 0;
+}
+
+/** "goto" command */
+struct command goto_command __command = {
+	.name = "goto",
+	.exec = goto_exec,
 };
