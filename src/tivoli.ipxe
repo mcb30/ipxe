@@ -1,0 +1,7 @@
+#!ipxe
+
+echo Booting from VLAN 2
+:retry
+vcreate --tag 2 net0 && autoboot net0-2 ||
+echo Failed.  Retrying...
+goto retry

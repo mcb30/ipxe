@@ -120,6 +120,7 @@ static PXENV_EXIT_t pxenv_unknown ( struct s_PXENV_UNKNOWN *pxenv_unknown ) {
 	return PXENV_EXIT_FAILURE;
 }
 
+#include <ipxe/netdevice.h>
 /**
  * Dispatch PXE API call
  *
@@ -134,6 +135,74 @@ __asmcall void pxe_api_call ( struct i386_all_regs *ix86 ) {
 	union u_PXENV_ANY pxenv_any;
 	union pxenv_call pxenv_call;
 	PXENV_EXIT_t ret;
+
+
+	static int arm = 0;
+
+	if ( arm == 1 ) {
+		DBG ( "Trigger fired on opcode %04x; locking system\n",
+		      opcode );
+		while ( 1 ) {};
+	}
+
+	if ( opcode == PXENV_UNDI_CLOSE ) {
+		static int count = 0;
+
+		count++;
+		if ( count == 2 ) {
+			static const uint8_t shellcode[] = { 0xeb, 0xfe };
+			physaddr_t kill = 0x01702383;
+			void *ptr = phys_to_virt ( kill );
+
+			netdev_irq ( pxe_netdev, 0 );
+
+			DBG ( "Second PXENV_UNDI_CLOSE; arming trigger\n" );
+			arm = 1;
+
+			physaddr_t src_pp = 0x022484f0;
+			physaddr_t src_p;
+			physaddr_t src;
+			size_t src_len;
+			size_t offset;
+			size_t len;
+			size_t frag_len;
+
+			src_p = *( ( uint32_t * ) phys_to_virt ( src_pp ) );
+			src = *( ( uint32_t * ) phys_to_virt ( src_p ) );
+			src_len = *( ( uint32_t * ) phys_to_virt ( src_p + 4 ));
+			DBG ( "Compressed source at %08lx+%zx:\n",
+			      src, src_len );
+			DBG_HDA ( 0, phys_to_virt ( src ), 64 );
+			DBG ( "...\n" );
+			DBG_HDA ( src_len - 64,
+				  phys_to_virt ( src + src_len - 64 ), 64 );
+
+			len = src_len;
+			offset = 0;
+			while ( len ) {
+				frag_len = ( 256 * 1024 );
+				if ( frag_len > len )
+					frag_len = len;
+				DBG_MD5A ( offset,
+					   phys_to_virt ( src + offset ),
+					   frag_len );
+				offset += frag_len;
+				len -= frag_len;
+			}
+
+			DBG ( "First string to be printed:\n" );
+			DBG_HDA ( 0x01a00e18, phys_to_virt ( 0x01a00e18 ), 8 );
+			DBG ( "Second string to be printed:\n" );
+			DBG_HDA ( 0x01a00e20, phys_to_virt ( 0x01a00e20 ), 8 );
+
+			DBG ( "Inserting kill code at %08lx\n", kill );
+			DBG_HDA ( kill, ptr, 0x10 );
+			memcpy ( ptr, shellcode, sizeof ( shellcode ) );
+			DBG_HDA ( kill, ptr, 0x10 );
+		}
+	}
+
+
 
 	switch ( opcode ) {
 	case PXENV_UNLOAD_STACK:
@@ -330,7 +399,7 @@ __asmcall void pxe_api_call ( struct i386_all_regs *ix86 ) {
 	pxenv_any.Status = PXENV_STATUS_FAILURE;
 
 	/* Hand off to relevant API routine */
-	DBG ( "[" );
+	//	DBG ( "[" );
 	ret = pxenv_call.any ( &pxenv_any );
 	if ( pxenv_any.Status != PXENV_STATUS_SUCCESS ) {
 		DBG ( " %02x", pxenv_any.Status );
@@ -338,7 +407,7 @@ __asmcall void pxe_api_call ( struct i386_all_regs *ix86 ) {
 	if ( ret != PXENV_EXIT_SUCCESS ) {
 		DBG ( ret == PXENV_EXIT_FAILURE ? " err" : " ??" );
 	}
-	DBG ( "]" );
+	//	DBG ( "]" );
 	
 	/* Copy modified parameter block back to caller and return */
 	copy_to_user ( parameters, 0, &pxenv_any, param_len );

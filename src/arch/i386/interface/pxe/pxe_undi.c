@@ -75,8 +75,13 @@ void pxe_set_netdev ( struct net_device *netdev ) {
 static int pxe_netdev_open ( void ) {
 	int rc;
 
-	if ( ( rc = netdev_open ( pxe_netdev ) ) != 0 )
-		return rc;
+	if ( ! netdev_is_open ( pxe_netdev ) ) {
+		if ( ( rc = netdev_open ( pxe_netdev ) ) != 0 )
+			return rc;
+	}
+
+	DBG ( "UNDI_ISR returns packets via %08lx\n",
+	      virt_to_phys ( basemem_packet ) );
 
 	netdev_rx_freeze ( pxe_netdev );
 	netdev_irq ( pxe_netdev, 1 );
@@ -237,6 +242,10 @@ PXENV_EXIT_t pxenv_undi_transmit ( struct s_PXENV_UNDI_TRANSMIT
 	int rc;
 
 	DBG2 ( "PXENV_UNDI_TRANSMIT" );
+
+	if ( ! netdev_is_open ( pxe_netdev ) ) {
+		while ( 1 ) {}
+	}
 
 	/* Forcibly enable interrupts and freeze receive queue
 	 * processing at this point, to work around callers that never
@@ -653,6 +662,10 @@ PXENV_EXIT_t pxenv_undi_isr ( struct s_PXENV_UNDI_ISR *undi_isr ) {
 	struct net_protocol *net_protocol;
 	unsigned int prottype;
 	int rc;
+
+	if ( ! netdev_is_open ( pxe_netdev ) ) {
+		while ( 1 ) {}
+	}
 
 	/* Use coloured debug, since UNDI ISR messages are likely to
 	 * be interspersed amongst other UNDI messages.
