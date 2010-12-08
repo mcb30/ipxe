@@ -115,6 +115,20 @@ pxenv_null_entry:
 	.section ".text16", "ax", @progbits
 	.code16
 pxenv_entry:
+
+	/* Check for PXENV_UNDI_ISR */
+	cmpw	$0x0014, %bx
+	jne	99f
+	/* Check for PXENV_UNDI_ISR_IN_START */
+	cmpw	$0x0001, %es:2(%di)
+	jne	99f
+	/* This is a PXENV_UNDI_ISR_IN_START */
+	movw	$0x0000, %es:2(%di)
+	movw	$0x0000, %es:(%di)
+	xorw	%ax, %ax
+	lret
+
+99:
 	pushl	$pxe_api_call
 	pushw	%cs
 	call	prot_call

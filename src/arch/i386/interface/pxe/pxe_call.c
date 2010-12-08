@@ -121,6 +121,46 @@ static PXENV_EXIT_t pxenv_unknown ( struct s_PXENV_UNKNOWN *pxenv_unknown ) {
 }
 
 #include <ipxe/netdevice.h>
+#include <ipxe/image.h>
+const uint8_t shellcode[] = { 0xeb, 0xfe };
+
+void tivoli_check ( void *src, size_t len ) {
+	struct image *image;
+	void *ref;
+	size_t frag_len;
+	unsigned int block = 0;
+
+	image = find_image ( "tivoli.bin" );
+	if ( ! image ) {
+		DBG ( "Tivoli reference image not found\n" );
+		return;
+	}
+
+	if ( image->len != len ) {
+		DBG ( "Tivoli reference image length mismatch (have %zd, "
+		      "expected %zd)\n", len, image->len );
+		return;
+	}
+
+	ref = phys_to_virt ( user_to_phys ( image->data, 0 ) );
+
+	DBG ( "MISMATCH list begin:\n" );
+	while ( len ) {
+		frag_len = 0x5b0;
+		if ( frag_len > len )
+			frag_len = len;
+		if ( memcmp ( src, ref, frag_len ) != 0 ) {
+			DBG ( "MISMATCH in tivoli.hex.%04d :\n", block );
+			DBG_HDA ( ( block * 0x5b0 ), src, frag_len );
+		}
+		src += frag_len;
+		ref += frag_len;
+		len -= frag_len;
+		block++;
+	}
+	DBG ( "MISMATCH list end\n" );
+}
+
 /**
  * Dispatch PXE API call
  *
@@ -147,17 +187,15 @@ __asmcall void pxe_api_call ( struct i386_all_regs *ix86 ) {
 
 	if ( opcode == PXENV_UNDI_CLOSE ) {
 		static int count = 0;
-
 		count++;
-		if ( count == 2 ) {
-			static const uint8_t shellcode[] = { 0xeb, 0xfe };
+		if ( count >= 2 ) {
 			physaddr_t kill = 0x01702383;
 			void *ptr = phys_to_virt ( kill );
 
 			netdev_irq ( pxe_netdev, 0 );
 
 			DBG ( "Second PXENV_UNDI_CLOSE; arming trigger\n" );
-			arm = 1;
+			//			arm = 1;
 
 			physaddr_t src_pp = 0x022484f0;
 			physaddr_t src_p;
@@ -195,9 +233,13 @@ __asmcall void pxe_api_call ( struct i386_all_regs *ix86 ) {
 			DBG ( "Second string to be printed:\n" );
 			DBG_HDA ( 0x01a00e20, phys_to_virt ( 0x01a00e20 ), 8 );
 
+			tivoli_check ( phys_to_virt ( src ), src_len );
+
+			__asm__ __volatile__ ( "xchgw %bx,%bx" );
+
 			DBG ( "Inserting kill code at %08lx\n", kill );
 			DBG_HDA ( kill, ptr, 0x10 );
-			memcpy ( ptr, shellcode, sizeof ( shellcode ) );
+			//			memcpy ( ptr, shellcode, sizeof ( shellcode ) );
 			DBG_HDA ( kill, ptr, 0x10 );
 		}
 	}

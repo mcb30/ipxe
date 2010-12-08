@@ -80,9 +80,6 @@ static int pxe_netdev_open ( void ) {
 			return rc;
 	}
 
-	DBG ( "UNDI_ISR returns packets via %08lx\n",
-	      virt_to_phys ( basemem_packet ) );
-
 	netdev_rx_freeze ( pxe_netdev );
 	netdev_irq ( pxe_netdev, 1 );
 	return 0;
@@ -647,6 +644,7 @@ PXENV_EXIT_t pxenv_undi_get_state ( struct s_PXENV_UNDI_GET_STATE
 	return PXENV_EXIT_FAILURE;
 };
 
+#include <stdlib.h>
 /* PXENV_UNDI_ISR
  *
  * Status: working

@@ -202,7 +202,7 @@ real_to_prot:
 	/* Switch to protected mode */
 	cli
 	data32 lgdt gdtr
-	data32 lidt idtr
+//	data32 lidt idtr
 	movl	%cr0, %eax
 	orb	$CR0_PE, %al
 	movl	%eax, %cr0
@@ -314,7 +314,7 @@ p2r_jump_target:
 	movl	%edx, %esp
 
 	/* Reset IDTR to the real-mode defaults */
-	data32 lidt rm_idtr
+//	data32 lidt rm_idtr
 
 	/* Return to real-mode address */
 	data32 ret
@@ -382,6 +382,10 @@ rm_ds:	.word 0
 prot_call:
 	/* Preserve registers, flags and GDT on external RM stack */
 	pushfl
+
+	// hack
+	cli
+
 	pushal
 	pushw	%gs
 	pushw	%fs
@@ -391,7 +395,7 @@ prot_call:
 	pushw	%cs
 	subw	$16, %sp
 	movw	%sp, %bp
-	sidt	8(%bp)
+//	sidt	8(%bp)
 	sgdt	(%bp)
 
 	/* For sanity's sake, clear the direction flag as soon as possible */
@@ -420,7 +424,7 @@ prot_call:
 	/* Reload GDT and IDT, restore registers and flags and return */
 	movw	%sp, %bp
 	data32 lgdt (%bp)
-	data32 lidt 8(%bp)
+//	data32 lidt 8(%bp)
 	addw	$20, %sp /* also skip %cs and %ss */
 	popw	%ds
 	popw	%es

@@ -1,7 +1,20 @@
 #!ipxe
 
-echo Booting from VLAN 2
-:retry
-vcreate --tag 2 net0 && autoboot net0-2 ||
-echo Failed.  Retrying...
-goto retry
+echo Creating VLAN 2
+vcreate --tag 2 net0
+set NETDEV net0-2
+
+echo Acquiring IP address and boot filename on ${NETDEV}
+:dhcp
+dhcp ${NETDEV} && isset ${filename} || goto dhcp
+
+echo Downloading Tivoli reference image
+set TIVOLIBIN http://dolphin.home/images/tivoli.bin
+:imgfetch
+imgfree
+imgfetch ${TIVOLIBIN} || goto imgfetch
+imgstat
+
+echo Booting Tivoli (${filename})
+:boot
+chain ${filename} || goto boot
