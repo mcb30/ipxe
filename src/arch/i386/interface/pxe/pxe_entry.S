@@ -116,6 +116,7 @@ pxenv_null_entry:
 	.code16
 pxenv_entry:
 
+#if 0
 	/* Check for PXENV_UNDI_ISR */
 	cmpw	$0x0014, %bx
 	jne	99f
@@ -129,6 +130,8 @@ pxenv_entry:
 	lret
 
 99:
+#endif
+
 	pushl	$pxe_api_call
 	pushw	%cs
 	call	prot_call

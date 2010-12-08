@@ -395,7 +395,7 @@ prot_call:
 	pushw	%cs
 	subw	$16, %sp
 	movw	%sp, %bp
-//	sidt	8(%bp)
+	sidt	8(%bp)
 	sgdt	(%bp)
 
 	/* For sanity's sake, clear the direction flag as soon as possible */
@@ -417,14 +417,29 @@ prot_call:
 	/* Switch to real mode and move register dump back to RM stack */
 	movl	$PC_OFFSET_END, %ecx
 	pushl	$1f
+
+	movw	%cs, %ax
+	testb	$0x01, %al
+	jz	7f
+	movl	virt_offset, %eax
+	negl	%eax
+	movw	$0x26eb, 0x0222c068(%eax)
+	popl	%eax
+	pushl	$8f
+7:
+
 	jmp	prot_to_real
 	.section ".text16", "ax", @progbits
 	.code16
+8:
+//	xchgw	%bx, %bx
+
 1:	
 	/* Reload GDT and IDT, restore registers and flags and return */
 	movw	%sp, %bp
 	data32 lgdt (%bp)
-//	data32 lidt 8(%bp)
+
+	data32 lidt 8(%bp)
 	addw	$20, %sp /* also skip %cs and %ss */
 	popw	%ds
 	popw	%es
