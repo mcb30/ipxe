@@ -2747,10 +2747,11 @@ static int hermon_set_port_type ( struct hermon *hermon,
 		 */
 		switch ( port_type ) {
 		case HERMON_PORT_TYPE_ETH:
+		case HERMON_PORT_TYPE_UNKNOWN:
 			port->type = &hermon_port_type_eth;
 			break;
 		case HERMON_PORT_TYPE_IB:
-		case HERMON_PORT_TYPE_UNKNOWN:
+			//		case HERMON_PORT_TYPE_UNKNOWN:
 			port->type = &hermon_port_type_ib;
 			break;
 		default:
