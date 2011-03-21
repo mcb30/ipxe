@@ -100,6 +100,14 @@ struct setting dhcp_server_setting __setting = {
 	.type = &setting_type_ipv4,
 };
 
+/** DHCP vendor class setting */
+struct setting vendor_class_setting __setting = {
+	.name = "vendor-class",
+	.description = "Vendor class identifier",
+	.tag = DHCP_VENDOR_CLASS_ID,
+	.type = &setting_type_string,
+};
+
 /** DHCP user class setting */
 struct setting user_class_setting __setting = {
 	.name = "user-class",
@@ -958,6 +966,28 @@ int dhcp_create_packet ( struct dhcp_packet *dhcppkt,
 	return 0;
 }
 
+/*
+ * @v settings		Settings block, or NULL to search all blocks
+ */
+static int dhcp_copy_setting ( struct settings *settings,
+			       struct setting *setting,
+			       struct dhcp_packet *dhcppkt ) {
+	ssize_t len;
+	int rc;
+
+	if ( ( len = fetch_setting_len ( settings, setting ) ) >= 0 ) {
+		char data[len];
+		fetch_setting ( settings, setting, data, sizeof ( data ) );
+		if ( ( rc = dhcppkt_store ( dhcppkt, setting->tag, data,
+					    sizeof ( data ) ) ) != 0 ) {
+			DBG ( "DHCP could not set %s: %s\n",
+			      setting->name, strerror ( rc ) );
+			return rc;
+		}
+	}
+	return 0;
+}
+
 /**
  * Create DHCP request packet
  *
@@ -975,7 +1005,6 @@ int dhcp_create_packet ( struct dhcp_packet *dhcppkt,
 int dhcp_create_request ( struct dhcp_packet *dhcppkt,
 			  struct net_device *netdev, unsigned int msgtype,
 			  struct in_addr ciaddr, void *data, size_t max_len ) {
-	struct dhcp_netdev_desc dhcp_desc;
 	struct dhcp_client_id client_id;
 	struct dhcp_client_uuid client_uuid;
 	uint8_t *dhcp_features;
@@ -1008,14 +1037,9 @@ int dhcp_create_request ( struct dhcp_packet *dhcppkt,
 	}
 
 	/* Add options to identify the network device */
-	fetch_setting ( &netdev->settings.settings, &busid_setting, &dhcp_desc,
-		sizeof ( dhcp_desc ) );
-	if ( ( rc = dhcppkt_store ( dhcppkt, DHCP_EB_BUS_ID, &dhcp_desc,
-				    sizeof ( dhcp_desc ) ) ) != 0 ) {
-		DBG ( "DHCP could not set bus ID option: %s\n",
-		      strerror ( rc ) );
+	if ( ( rc = dhcp_copy_setting ( &netdev->settings.settings,
+					&busid_setting, dhcppkt ) ) != 0 )
 		return rc;
-	}
 
 	/* Add DHCP client identifier.  Required for Infiniband, and
 	 * doesn't hurt other link layers.
@@ -1045,18 +1069,14 @@ int dhcp_create_request ( struct dhcp_packet *dhcppkt,
 	}
 
 	/* Add user class, if we have one. */
-	if ( ( len = fetch_setting_len ( NULL, &user_class_setting ) ) >= 0 ) {
-		char user_class[len];
-		fetch_setting ( NULL, &user_class_setting, user_class,
-				sizeof ( user_class ) );
-		if ( ( rc = dhcppkt_store ( dhcppkt, DHCP_USER_CLASS_ID,
-					    &user_class,
-					    sizeof ( user_class ) ) ) != 0 ) {
-			DBG ( "DHCP could not set user class: %s\n",
-			      strerror ( rc ) );
-			return rc;
-		}
-	}
+	if ( ( rc = dhcp_copy_setting ( NULL, &user_class_setting,
+					dhcppkt ) ) != 0 )
+		return rc;
+
+	/* Add vendor class, if we have one. */
+	if ( ( rc = dhcp_copy_setting ( NULL, &vendor_class_setting,
+					dhcppkt ) ) != 0 )
+		return rc;
 
 	return 0;
 }
