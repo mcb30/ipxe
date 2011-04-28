@@ -173,23 +173,28 @@ static size_t bofm_locate_section ( userptr_t bofmtab, size_t len,
  *
  * @v bofm		BOFM device
  * @v en		EN parameter entry
+ * @v mport		Multi-port index
  * @ret rc		Return status code
  */
-static int bofm_en ( struct bofm_device *bofm, struct bofm_en *en ) {
+static int bofm_en ( struct bofm_device *bofm, struct bofm_en *en,
+		     unsigned int mport ) {
 	uint8_t mac[6];
 	int rc;
 
+	DBG ( "BOFM: " PCI_FMT " mport %d (was mport %d)\n",
+	      PCI_ARGS ( bofm->pci ), mport, en->mport );
+
 	/* Retrieve current MAC address */
-	if ( ( rc = bofm->op->harvest ( bofm, en->mport, mac ) ) != 0 ) {
+	if ( ( rc = bofm->op->harvest ( bofm, mport, mac ) ) != 0 ) {
 		DBG ( "BOFM: " PCI_FMT " mport %d could not harvest: %s\n",
-		      PCI_ARGS ( bofm->pci ), en->mport, strerror ( rc ) );
+		      PCI_ARGS ( bofm->pci ), mport, strerror ( rc ) );
 		return rc;
 	}
 
 	/* Harvest MAC address if necessary */
 	if ( en->options & BOFM_EN_RQ_HVST_MASK ) {
 		DBG ( "BOFM: " PCI_FMT " mport %d harvested MAC %s\n",
-		      PCI_ARGS ( bofm->pci ), en->mport, eth_ntoa ( mac ) );
+		      PCI_ARGS ( bofm->pci ), mport, eth_ntoa ( mac ) );
 		memcpy ( en->mac_a, mac, sizeof ( en->mac_a ) );
 		en->options |= ( BOFM_EN_EN_A | BOFM_EN_HVST );
 	}
@@ -198,7 +203,7 @@ static int bofm_en ( struct bofm_device *bofm, struct bofm_en *en ) {
 	if ( ( en->options & BOFM_EN_EN_A ) &&
 	     ( memcmp ( en->mac_a, mac, sizeof ( en->mac_a ) ) != 0 ) ) {
 		DBG ( "BOFM: " PCI_FMT " mport %d MAC %s",
-		      PCI_ARGS ( bofm->pci ), en->mport, eth_ntoa ( mac ) );
+		      PCI_ARGS ( bofm->pci ), mport, eth_ntoa ( mac ) );
 		DBG ( " changed to %s\n", eth_ntoa ( en->mac_a ) );
 		en->options |= BOFM_EN_CHG_CHANGED;
 	}
@@ -208,15 +213,15 @@ static int bofm_en ( struct bofm_device *bofm, struct bofm_en *en ) {
 	     ( en->options & BOFM_EN_USAGE_ENTRY ) &&
 	     ( ! ( en->options & BOFM_EN_USAGE_HARVEST ) ) ) {
 		DBG ( "BOFM: " PCI_FMT " mport %d applied MAC %s\n",
-		      PCI_ARGS ( bofm->pci ), en->mport,
+		      PCI_ARGS ( bofm->pci ), mport,
 		      eth_ntoa ( en->mac_a ) );
 		memcpy ( mac, en->mac_a, sizeof ( mac ) );
 	}
 
 	/* Store MAC address */
-	if ( ( rc = bofm->op->update ( bofm, en->mport, mac ) ) != 0 ) {
+	if ( ( rc = bofm->op->update ( bofm, mport, mac ) ) != 0 ) {
 		DBG ( "BOFM: " PCI_FMT " mport %d could not update: %s\n",
-		      PCI_ARGS ( bofm->pci ), en->mport, strerror ( rc ) );
+		      PCI_ARGS ( bofm->pci ), mport, strerror ( rc ) );
 		return rc;
 	}
 
@@ -234,9 +239,12 @@ int bofm ( userptr_t bofmtab, struct pci_device *pci ) {
 	struct bofm_global_header bofmhdr;
 	struct bofm_section_header bofmsec;
 	struct bofm_en en;
+	struct bofm_en entmp;
 	struct bofm_device *bofm;
 	size_t en_region_offset;
 	size_t en_offset;
+	size_t entmp_offset;
+	unsigned int mport;
 	int skip;
 	int rc;
 	int bofmrc;
@@ -306,6 +314,23 @@ int bofm ( userptr_t bofmtab, struct pci_device *pci ) {
 			      en.slot, ( en.port + 1 ) );
 			continue;
 		}
+		/* Calculate mport index.  (The mport field provided
+		 * by BOFM is meaningless, so we have to work it out
+		 * ourselves.)
+		 */
+		mport = 0;
+		for ( entmp_offset = ( en_region_offset + sizeof ( bofmsec ) ) ;
+		      entmp_offset <= en_offset ;
+		      entmp_offset += sizeof ( entmp ) ) {
+			copy_from_user ( &entmp, bofmtab, entmp_offset,
+					 sizeof ( entmp ) );
+			if ( ( ( entmp.options & BOFM_EN_MAP_MASK )
+			       == BOFM_EN_MAP_PFA ) &&
+			     ( entmp.busdevfn == en.busdevfn ) ) {
+				mport++;
+			}
+		}
+		assert ( mport >= 1 );
 		bofm = bofm_find_busdevfn ( en.busdevfn );
 		if ( ! bofm ) {
 			DBG ( "BOFM: " PCI_FMT " ignored\n",
@@ -313,7 +338,7 @@ int bofm ( userptr_t bofmtab, struct pci_device *pci ) {
 			      PCI_FUNC ( en.busdevfn ) );
 			continue;
 		}
-		if ( ( rc = bofm_en ( bofm, &en ) ) == 0 ) {
+		if ( ( rc = bofm_en ( bofm, &en, mport ) ) == 0 ) {
 			en.options |= BOFM_EN_CSM_SUCCESS;
 		} else {
 			en.options |= BOFM_EN_CSM_FAILED;
