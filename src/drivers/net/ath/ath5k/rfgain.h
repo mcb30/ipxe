@@ -513,4 +513,3 @@ static const struct ath5k_gain_opt rfgain_opt_5112 = {
 		{ { 0, 1, 0, 1, 1, 0, 1 }, -16 },
 	}
 };
-

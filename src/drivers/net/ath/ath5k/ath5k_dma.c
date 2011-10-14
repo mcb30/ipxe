@@ -628,4 +628,3 @@ enum ath5k_int ath5k_hw_set_imr(struct ath5k_hw *ah, enum ath5k_int new_mask)
 
 	return old_mask;
 }
-

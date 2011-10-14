@@ -448,4 +448,3 @@ struct ath5k_eeprom_info {
 
 	u32	ee_antenna[AR5K_EEPROM_N_MODES][AR5K_ANT_MAX];
 };
-

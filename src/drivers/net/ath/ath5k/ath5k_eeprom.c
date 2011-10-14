@@ -1757,4 +1757,3 @@ int ath5k_eeprom_is_hb63(struct ath5k_hw *ah)
 	else
 		return 0;
 }
-
