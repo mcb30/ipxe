@@ -20,6 +20,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <errno.h>
 #include <assert.h>
 #include <byteswap.h>
@@ -113,6 +114,9 @@ static EFI_GUID efi_nii31_protocol_guid = {
 	{ 0xBC, 0x81, 0x76, 0x7F, 0x1F, 0x97, 0x7A, 0x89 }
 };
 
+/** Maximum time that we are prepared to wait for link-up, in milliseconds */
+#define EFI_LINK_DELAY_MS 15000
+
 /** List of SNP devices */
 static LIST_HEAD ( efi_snp_devices );
 
@@ -166,6 +170,39 @@ static void efi_snp_poll ( struct efi_snp_device *snpdev ) {
 
 	snpdev->rx_count_interrupts += arrived;
 	snpdev->rx_count_events += arrived;
+}
+
+/**
+ * Wait for link state to be established
+ *
+ * @v snpdev		SNP device
+ *
+ * Some broken software (including the reference implementation on
+ * tianocore.org) assumes that the link state is valid immediately
+ * after calling Initialize().  This neither conforms to the
+ * specification for Initialize(), nor reflects the reality of any
+ * networking hardware more recent than an RS-232 serial port.
+ *
+ * Work around this broken software by delaying until the link state
+ * can be established.  This unfortunately makes Initialize() (and
+ * Reset()) into calls that can potentially block for a noticeable
+ * length of time.  This is hideously ugly (not least because there is
+ * no way for a user to abort this delay).
+ *
+ * A proper solution would be to fix the code on tianocore.org to
+ * allow for the fact that link detection is not instantaneous.
+ */
+static void efi_link_delay ( struct efi_snp_device *snpdev ) {
+	struct net_device *netdev = snpdev->netdev;
+	unsigned int delay_ms = EFI_LINK_DELAY_MS;
+
+	while ( delay_ms-- ) {
+		if ( netdev_link_ok ( netdev ) ) {
+			assert ( snpdev->mode.MediaPresent );
+			return;
+		}
+		mdelay ( 1 );
+	}
 }
 
 /**
@@ -228,6 +265,9 @@ efi_snp_initialize ( EFI_SIMPLE_NETWORK_PROTOCOL *snp,
 	}
 
 	snpdev->mode.State = EfiSimpleNetworkInitialized;
+
+	efi_link_delay ( snpdev );
+
 	return 0;
 }
 
@@ -257,6 +297,9 @@ efi_snp_reset ( EFI_SIMPLE_NETWORK_PROTOCOL *snp, BOOLEAN ext_verify ) {
 	}
 
 	snpdev->mode.State = EfiSimpleNetworkInitialized;
+
+	efi_link_delay ( snpdev );
+
 	return 0;
 }
 
