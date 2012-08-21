@@ -47,6 +47,8 @@ FILE_LICENCE ( GPL2_OR_LATER );
  *
  */
 
+/* [mcb30] Some comments on these functions would be good */
+
 static void bnx2_free_mem ( struct bnx2_nic *bnx2 );
 
 static uint32_t bnx2_reg_read_indirect ( struct bnx2_nic *bnx2,
@@ -947,6 +949,11 @@ static void bnx2_refill_rx ( struct bnx2_nic *bnx2 ) {
 
 		rxr->prod_bseq += RX_BUF_USE_SIZE;
 		rx_idx = ( rxr->prod++ % RX_DESC_CNT );
+
+		/* [mcb30] What's happening here?  It looks as though
+		 * the producer counter isn't allowed to hit certain
+		 * values?
+		 */
 		if ( ( ( rxr->prod - 1 ) & ( MAX_RX_DESC_CNT - 1 ) ) ==
 		     ( MAX_RX_DESC_CNT - 1 ) ) {
 			rxr->prod++;
@@ -954,7 +961,13 @@ static void bnx2_refill_rx ( struct bnx2_nic *bnx2 ) {
 
 		rxbd = &rxr->desc[rx_idx];
 
+		/* [mcb30] - zeroing the buffer shouldn't be
+		 * necessary; the card will write in the received
+		 * data, and we ignore the remainder of the buffer.
+		 */
 		memset ( iobuf->data, 0, RX_BUF_SIZE );
+
+		/* [mcb30] - missing haddr_hi? */
 		rxbd->haddr_lo = virt_to_bus ( iobuf->data );
 		wmb();
 
@@ -980,6 +993,7 @@ static int bnx2_open ( struct net_device *netdev ) {
 	if ( ( rc = bnx2_init_nic ( bnx2 ) ) )
 		return rc;
 
+	/* [mcb30] - is this supposed to be here or not? */
 	//bnx2_check_link ( netdev );
 
 	bnx2_refill_rx ( bnx2 );
@@ -994,6 +1008,7 @@ static int bnx2_open ( struct net_device *netdev ) {
 static void bnx2_close ( struct net_device *netdev ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
 
+	/* [mcb30] - shouldn't something happen here? */
 	( void ) bnx2;
 }
 
@@ -1017,6 +1032,9 @@ static int bnx2_transmit ( struct net_device *netdev,
 		return -ENOBUFS;
 	}
 	tx_idx = ( txr->prod++ % TX_DESC_CNT );
+	/* [mcb30] - same comment as for bnx2_refill_rx - what's
+	 * happening with the producer counter?
+	 */
 	if ( ( ( txr->prod - 1 ) & ( MAX_TX_DESC_CNT - 1 ) ) ==
 	     ( MAX_TX_DESC_CNT - 1 ) ) {
 		txr->prod++;
@@ -1025,6 +1043,7 @@ static int bnx2_transmit ( struct net_device *netdev,
 	tx_tail = ( txr->prod % TX_DESC_CNT );
 
 	txbd = &txr->desc[tx_idx];
+	/* [mcb30] - missing haddr_hi? */
 	txbd->haddr_lo = virt_to_bus ( iobuf->data );
 	txbd->nbytes = iob_len ( iobuf );
 	wmb();
@@ -1066,6 +1085,9 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
 		iobuf = bnx2->rx_iobuf[rx_idx];
 		bnx2->rx_iobuf[rx_idx] = NULL;
 		hdr = ( struct bnx2_l2_fhdr * ) iobuf->data;
+		/* [mcb30] - what is the "+2" for?  (Am assuming the
+		 * "-4" is to strip the CRC?
+		 */
 		iobuf->data += sizeof ( struct bnx2_l2_fhdr ) + 2;
 		length = hdr->pkt_len - 4 + sizeof ( struct bnx2_l2_fhdr ) + 2;
 
@@ -1076,6 +1098,9 @@ static void bnx2_poll_rx ( struct net_device *netdev ) {
 			netdev_rx ( netdev, iobuf );
 		}
 
+		/* [mcb30] Does rxr->cons++ not work (symmetry with
+		 * poll_tx()?)
+		 */
 		rxr->cons = NEXT_RX_BD ( rxr->cons );
 	}
 }
@@ -1102,6 +1127,11 @@ static void bnx2_poll ( struct net_device *netdev ) {
  */
 static void bnx2_irq ( struct net_device *netdev, int enable ) {
 	struct bnx2_nic *bnx2 = netdev->priv;
+
+	/* [mcb30] - If interrupts will not be suppported, delete the
+	 * .irq() method completely, otherwise UNDI API users will
+	 * expect the NIC to generate interrupts.
+	 */
 
 	DBGC ( bnx2, "BNX2 %p does not yet support interrupts\n", bnx2 );
 	( void ) enable;
@@ -1215,6 +1245,7 @@ static void bnx2_remove ( struct pci_device *pci ) {
 
 /** bnx2 PCI device IDs */
 static struct pci_device_id bnx2_nics[] = {
+	/* [mcb30] - Full list of PCI IDs? */
 	PCI_ROM ( 0x14e4, 0x164c, "bnx2-5708C", "BCM5708C", 0 ),
 	PCI_ROM ( 0x14e4, 0x1639, "bnx2-5709C", "BCM5709C", 0 ),
 };
