@@ -383,6 +383,12 @@ static int realtek_phy_reset ( struct realtek_nic *rtl ) {
 		 */
 	}
 
+	// Quick and dirty hack to fix up PHY register values
+	int advertise;
+	advertise = mii_read ( &rtl->mii, MII_ADVERTISE );
+	advertise |= ( ADVERTISE_PAUSE_CAP | ADVERTISE_PAUSE_ASYM );
+	mii_write ( &rtl->mii, MII_ADVERTISE, advertise );
+
 	/* Restart autonegotiation */
 	if ( ( rc = mii_restart ( &rtl->mii ) ) != 0 ) {
 		DBGC ( rtl, "REALTEK %p could not restart MII: %s\n",
