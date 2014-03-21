@@ -97,8 +97,8 @@ static void bios_handle_ed ( struct ansiesc_context *ctx __unused,
 	/* We assume that we always clear the whole screen */
 	assert ( params[0] == ANSIESC_ED_ALL );
 
-	static int width = 80;
-	static int height = 221;
+	static int width = 10;
+	static int height = 223;
 
 	__asm__ __volatile__ ( REAL_CODE ( "pushal\n\t"
 					   "sti\n\t"
