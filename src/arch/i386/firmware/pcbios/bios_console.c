@@ -97,13 +97,20 @@ static void bios_handle_ed ( struct ansiesc_context *ctx __unused,
 	/* We assume that we always clear the whole screen */
 	assert ( params[0] == ANSIESC_ED_ALL );
 
+	static int width = 80;
+	static int height = 25;
+
 	__asm__ __volatile__ ( REAL_CODE ( "pushal\n\t"
 					   "sti\n\t"
 					   "int $0x10\n\t"
 					   "cli\n\t"
 					   "popal\n\t" )
 			       : : "a" ( 0x0600 ), "b" ( bios_attr << 8 ),
-				 "c" ( 0 ), "d" ( ( 24 << 8 ) | 79 ) );
+			       "c" ( 0 ), "d" ( ( ( height - 1 ) << 8 ) |
+						( width - 1 ) ) );
+	printf ( "Successfully cleared %dx%d\n", width, height );
+	width++;
+	height++;
 }
 
 /**
