@@ -1,0 +1,6 @@
+#!ipxe
+
+set esc:hex 1b
+set esc:string ${esc:string}
+set cls ${esc}[2J
+shell
