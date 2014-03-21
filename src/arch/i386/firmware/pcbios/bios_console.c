@@ -98,7 +98,7 @@ static void bios_handle_ed ( struct ansiesc_context *ctx __unused,
 	assert ( params[0] == ANSIESC_ED_ALL );
 
 	static int width = 80;
-	static int height = 222;
+	static int height = 221;
 
 	__asm__ __volatile__ ( REAL_CODE ( "pushal\n\t"
 					   "sti\n\t"
