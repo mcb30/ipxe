@@ -94,32 +94,16 @@ static void bios_handle_cup ( struct ansiesc_context *ctx __unused,
 static void bios_handle_ed ( struct ansiesc_context *ctx __unused,
 			     unsigned int count __unused,
 			     int params[] __unused ) {
-
-	volatile uint16_t *check = phys_to_virt ( 0xa0000 - 2 );
-
 	/* We assume that we always clear the whole screen */
 	assert ( params[0] == ANSIESC_ED_ALL );
 
-	static int width = 10;
-	static int height = 223;
-
-	__asm__ __volatile__ ( REAL_CODE ( "pushal\n\t"
-					   "pushw %%es\n\t"
-					   "pushw $0x9fff\n\t"
-					   "popw %%es\n\t"
-					   "movw %%dx, %%es:0xe\n\t"
-					   "popw %%es\n\t"
-					   "sti\n\t"
+	__asm__ __volatile__ ( REAL_CODE ( "sti\n\t"
 					   "int $0x10\n\t"
-					   "cli\n\t"
-					   "popal\n\t" )
+					   "cli\n\t" )
 			       : : "a" ( 0x0600 ), "b" ( bios_attr << 8 ),
-			       "c" ( 0 ), "d" ( ( ( height - 1 ) << 8 ) |
-						( width - 1 ) ) );
-	printf ( "Successfully cleared %dx%d (check %#04x)\n",
-		 width, height, *check );
-	width++;
-	//	height++;
+				 "c" ( 0 ),
+				 "d" ( ( ( console_height - 1 ) << 8 ) |
+				       ( console_width - 1 ) ) );
 }
 
 /**
