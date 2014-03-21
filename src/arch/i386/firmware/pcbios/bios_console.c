@@ -99,7 +99,7 @@ static void bios_handle_ed ( struct ansiesc_context *ctx __unused,
 
 	__asm__ __volatile__ ( REAL_CODE ( "pushal\n\t"
 					   "sti\n\t"
-					   "int $0x10\n\t"
+					   //   "int $0x10\n\t"
 					   "cli\n\t"
 					   "popal\n\t" )
 			       : : "a" ( 0x0600 ), "b" ( bios_attr << 8 ),
