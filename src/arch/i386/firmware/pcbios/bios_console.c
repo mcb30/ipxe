@@ -97,9 +97,11 @@ static void bios_handle_ed ( struct ansiesc_context *ctx __unused,
 	/* We assume that we always clear the whole screen */
 	assert ( params[0] == ANSIESC_ED_ALL );
 
-	__asm__ __volatile__ ( REAL_CODE ( "sti\n\t"
+	__asm__ __volatile__ ( REAL_CODE ( "pushal\n\t"
+					   "sti\n\t"
 					   "int $0x10\n\t"
-					   "cli\n\t" )
+					   "cli\n\t"
+					   "popal\n\t" )
 			       : : "a" ( 0x0600 ), "b" ( bios_attr << 8 ),
 			           "c" ( 0 ), "d" ( 0xfefe ) );
 }
