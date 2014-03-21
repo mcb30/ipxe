@@ -98,7 +98,7 @@ static void bios_handle_ed ( struct ansiesc_context *ctx __unused,
 	assert ( params[0] == ANSIESC_ED_ALL );
 
 	static int width = 80;
-	static int height = 200;
+	static int height = 222;
 
 	__asm__ __volatile__ ( REAL_CODE ( "pushal\n\t"
 					   "sti\n\t"
@@ -109,8 +109,8 @@ static void bios_handle_ed ( struct ansiesc_context *ctx __unused,
 			       "c" ( 0 ), "d" ( ( ( height - 1 ) << 8 ) |
 						( width - 1 ) ) );
 	printf ( "Successfully cleared %dx%d\n", width, height );
-	//	width++;
-	height++;
+	width++;
+	//	height++;
 }
 
 /**
