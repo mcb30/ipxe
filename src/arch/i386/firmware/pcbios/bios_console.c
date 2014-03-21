@@ -103,7 +103,7 @@ static void bios_handle_ed ( struct ansiesc_context *ctx __unused,
 					   "cli\n\t"
 					   "popal\n\t" )
 			       : : "a" ( 0x0600 ), "b" ( bios_attr << 8 ),
-			           "c" ( 0 ), "d" ( 0x0f0f ) );
+				 "c" ( 0 ), "d" ( ( 24 << 8 ) | 79 ) );
 }
 
 /**
