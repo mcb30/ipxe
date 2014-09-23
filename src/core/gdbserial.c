@@ -19,31 +19,62 @@
 
 FILE_LICENCE ( GPL2_OR_LATER );
 
+#include <stddef.h>
 #include <assert.h>
-#include <ipxe/serial.h>
+#include <ipxe/uart.h>
 #include <ipxe/gdbstub.h>
 #include <ipxe/gdbserial.h>
+#include <config/serial.h>
 
-struct gdb_transport serial_gdb_transport __gdb_transport;
+/* UART base address */
+#ifdef COMCONSOLE
+#define GDBSERIAL_BASE ( ( void * ) COMCONSOLE )
+#else
+#define GDBSERIAL_BASE NULL
+#endif
+
+/* UART baud rate */
+#ifdef COMPRESERVE
+#define GDBSERIAL_BAUD 0
+#else
+#define GDBSERIAL_BAUD COMSPEED
+#endif
+
+/* UART line control register value */
+#ifdef COMPRESERVE
+#define GDBSERIAL_LCR 0
+#else
+#define GDBSERIAL_LCR UART_LCR_WPS ( COMDATA, COMPARITY, COMSTOP )
+#endif
+
+/** GDB serial UART */
+static struct uart gdbserial_uart = {
+	.base = GDBSERIAL_BASE,
+};
 
 static size_t gdbserial_recv ( char *buf, size_t len ) {
+
 	assert ( len > 0 );
-	buf [ 0 ] = serial_getc();
+	while ( ! uart_data_ready ( &gdbserial_uart ) ) {}
+	buf[0] = uart_receive ( &gdbserial_uart );
 	return 1;
 }
 
 static void gdbserial_send ( const char *buf, size_t len ) {
+
 	while ( len-- > 0 ) {
-		serial_putc ( *buf++ );
+		uart_transmit ( &gdbserial_uart, *buf++ );
 	}
+}
+
+static int gdbserial_init ( int argc __unused, char **argv __unused ) {
+
+	return uart_init ( &gdbserial_uart, GDBSERIAL_BAUD, GDBSERIAL_LCR );
 }
 
 struct gdb_transport serial_gdb_transport __gdb_transport = {
 	.name = "serial",
+	.init = gdbserial_init,
 	.recv = gdbserial_recv,
 	.send = gdbserial_send,
 };
-
-struct gdb_transport *gdbserial_configure ( void ) {
-	return &serial_gdb_transport;
-}
