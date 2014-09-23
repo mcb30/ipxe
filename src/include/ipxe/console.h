@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <ipxe/uart.h>
 #include <ipxe/tables.h>
 
 /** @file
@@ -38,6 +39,12 @@ struct console_configuration {
 	unsigned int bottom;
 	/** Background picture, if any */
 	struct pixel_buffer *pixbuf;
+	/** Port number */
+	unsigned int port;
+	/** Speed */
+	unsigned int speed;
+	/** Line control register */
+	unsigned int lcr;
 };
 
 /**
@@ -172,6 +179,12 @@ struct console_driver {
 
 /** Default console height */
 #define CONSOLE_DEFAULT_HEIGHT 25
+
+/** Default console speed */
+#define CONSOLE_DEFAULT_SPEED UART_MAX_BAUD
+
+/** Default console line control register value */
+#define CONSOLE_DEFAULT_LCR UART_LCR_8N1
 
 extern int console_usage;
 extern unsigned int console_width;

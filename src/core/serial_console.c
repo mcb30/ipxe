@@ -59,6 +59,8 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define CONSOLE_LCR UART_LCR_WPS ( COMDATA, COMPARITY, COMSTOP )
 #endif
 
+struct console_driver serial_console __console_driver;
+
 /** Serial console UART */
 static struct uart console_uart = {
 	.base = CONSOLE_BASE,
@@ -107,11 +109,51 @@ static int serial_iskey ( void ) {
 	return uart_data_ready ( &console_uart );
 }
 
+/**
+ * Configure serial console
+ *
+ * @v config		Console configuration, or NULL to leave unchanged
+ * @ret rc		Return status code
+ */
+static int serial_configure ( struct console_configuration *config ) {
+	int rc;
+
+	/* Do nothing unless we have a serial configuration to apply */
+	if ( ( ! config ) || ( ! config->port ) )
+		return 0;
+
+	/* Flush and disable console */
+	if ( ! serial_console.disabled )
+		uart_flush ( &console_uart );
+	serial_console.disabled = CONSOLE_DISABLED;
+
+	/* Select UART */
+	if ( ( rc = uart_select ( &console_uart, config->port ) ) != 0 ) {
+		DBG ( "Could not select UART port %d: %s\n",
+		      config->port, strerror ( rc ) );
+		return rc;
+	}
+
+	/* Initialise UART */
+	if ( ( rc = uart_init ( &console_uart, config->speed,
+				config->lcr ) ) != 0 ) {
+		DBG ( "Could not initialise serial console: %s\n",
+		      strerror ( rc ) );
+		return rc;
+	}
+
+	/* Enable console */
+	serial_console.disabled = 0;
+
+	return 0;
+}
+
 /** Serial console */
 struct console_driver serial_console __console_driver = {
 	.putchar = serial_putchar,
 	.getchar = serial_getchar,
 	.iskey = serial_iskey,
+	.configure = serial_configure,
 	.disabled = CONSOLE_DISABLED,
 	.usage = CONSOLE_SERIAL,
 };
