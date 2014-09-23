@@ -36,13 +36,11 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <string.h>
 #include <ipxe/posix_io.h>
 #include <ipxe/process.h>
-#include <ipxe/serial.h>
 #include <ipxe/init.h>
 #include <ipxe/image.h>
 #include <ipxe/version.h>
 #include <usr/imgmgmt.h>
 #include "config/console.h"
-#include "config/serial.h"
 
 /** The "SYSLINUX" version string */
 static char __bss16_array ( syslinux_version, [32] );
@@ -260,11 +258,6 @@ static __asmcall void int21 ( struct i386_all_regs *ix86 ) {
 		ix86->flags &= ~CF;
 		break;
 
-	case 0x04: /* Write Character to Serial Port */
-		serial_putc ( ix86->regs.dl );
-		ix86->flags &= ~CF;
-		break;
-
 	case 0x09: /* Write DOS String to Console */
 		print_user_string ( ix86->segs.ds, ix86->regs.dx, '$' );
 		ix86->flags &= ~CF;
@@ -451,18 +444,6 @@ static __asmcall void int22 ( struct i386_all_regs *ix86 ) {
 		/* iPXE has its own derivative ID, so there is no defined
 		 * output here; just return AL for now */
 		ix86->regs.al = BZI_LOADER_TYPE_IPXE;
-		ix86->flags &= ~CF;
-		break;
-
-	case 0x000B: /* Get Serial Console Configuration */
-#if defined(CONSOLE_SERIAL) && !defined(COMPRESERVE)
-		ix86->regs.dx = COMCONSOLE;
-		ix86->regs.cx = 115200 / COMSPEED;
-		ix86->regs.bx = 0;
-#else
-		ix86->regs.dx = 0;
-#endif
-
 		ix86->flags &= ~CF;
 		break;
 
