@@ -70,6 +70,12 @@ static struct option_descriptor console_opts[] = {
 		      struct console_options, picture, parse_string ),
 	OPTION_DESC ( "keep", 'k', no_argument,
 		      struct console_options, keep, parse_flag ),
+	OPTION_DESC ( "port", 'o', required_argument,
+		      struct console_options, config.port, parse_integer ),
+	OPTION_DESC ( "speed", 's', required_argument,
+		      struct console_options, config.speed, parse_integer ),
+	OPTION_DESC ( "lcr", 'c', required_argument,
+		      struct console_options, config.lcr, parse_integer ),
 };
 
 /** "console" command descriptor */
@@ -88,8 +94,13 @@ static int console_exec ( int argc, char **argv ) {
 	struct image *image = NULL;
 	int rc;
 
+	/* Initialise options */
+	memset ( &opts, 0, sizeof ( opts ) );
+	opts.config.speed = CONSOLE_DEFAULT_SPEED;
+	opts.config.lcr = CONSOLE_DEFAULT_LCR;
+
 	/* Parse options */
-	if ( ( rc = parse_options ( argc, argv, &console_cmd, &opts ) ) != 0 )
+	if ( ( rc = reparse_options ( argc, argv, &console_cmd, &opts ) ) != 0 )
 		goto err_parse;
 
 	/* Handle background picture, if applicable */

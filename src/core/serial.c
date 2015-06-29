@@ -124,11 +124,48 @@ static int serial_iskey ( void ) {
 	return uart_data_ready ( &serial_console );
 }
 
+/**
+ * Configure serial console
+ *
+ * @v config		Console configuration, or NULL to leave unchanged
+ * @ret rc		Return status code
+ */
+static int serial_configure ( struct console_configuration *config ) {
+	int rc;
+
+	/* Do nothing unless we have a serial configuration to apply */
+	if ( ( ! config ) || ( ! config->port ) )
+		return 0;
+
+	/* Flush console, if applicable */
+	if ( serial_console.base )
+		uart_flush ( &serial_console );
+
+	/* Select UART */
+	if ( ( rc = uart_select ( &serial_console, config->port ) ) != 0 ) {
+		DBG ( "Could not select UART %d: %s\n",
+		      config->port, strerror ( rc ) );
+		return rc;
+	}
+
+	/* Initialise UART */
+	if ( ( rc = uart_init ( &serial_console, config->speed,
+				config->lcr ) ) != 0 ) {
+		DBG ( "Could not initialise UART %d baud %d LCR %#02x: %s\n",
+		      config->port, config->speed, config->lcr,
+		      strerror ( rc ) );
+		return rc;
+	}
+
+	return 0;
+}
+
 /** Serial console */
 struct console_driver serial_console_driver __console_driver = {
 	.putchar = serial_putchar,
 	.getchar = serial_getchar,
 	.iskey = serial_iskey,
+	.configure = serial_configure,
 	.usage = CONSOLE_SERIAL,
 };
 
