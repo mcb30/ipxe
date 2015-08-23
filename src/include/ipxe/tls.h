@@ -269,6 +269,8 @@ struct tls_session {
 	struct digest_algorithm *handshake_digest;
 	/** Digest algorithm context used for handshake verification */
 	uint8_t *handshake_ctx;
+	/** Client certificate requested */
+	int cert_requested;
 	/** Client certificate (if used) */
 	struct x509_certificate *cert;
 

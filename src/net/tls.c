@@ -1006,12 +1006,13 @@ static int tls_send_client_hello ( struct tls_session *tls ) {
  * @ret rc		Return status code
  */
 static int tls_send_certificate ( struct tls_session *tls ) {
+	size_t cert_len = ( tls->cert ? tls->cert->raw.len : 0 );
 	struct {
 		uint32_t type_length;
 		tls24_t length;
 		struct {
 			tls24_t length;
-			uint8_t data[ tls->cert->raw.len ];
+			uint8_t data[cert_len];
 		} __attribute__ (( packed )) certificates[1];
 	} __attribute__ (( packed )) *certificate;
 	int rc;
@@ -1032,9 +1033,10 @@ static int tls_send_certificate ( struct tls_session *tls ) {
 			 sizeof ( certificate->certificates ) );
 	tls_set_uint24 ( &certificate->certificates[0].length,
 			 sizeof ( certificate->certificates[0].data ) );
-	memcpy ( certificate->certificates[0].data,
-		 tls->cert->raw.data,
-		 sizeof ( certificate->certificates[0].data ) );
+	if ( tls->cert ) {
+		memcpy ( certificate->certificates[0].data, tls->cert->raw.data,
+			 sizeof ( certificate->certificates[0].data ) );
+	}
 
 	/* Transmit record */
 	rc = tls_send_handshake ( tls, certificate, sizeof ( *certificate ) );
@@ -1490,9 +1492,18 @@ static int tls_new_certificate_request ( struct tls_session *tls,
 	/* We can only send a single certificate, so there is no point
 	 * in parsing the Certificate Request.
 	 */
+	tls->cert_requested = 1;
 
 	/* Free any existing client certificate */
 	x509_put ( tls->cert );
+	tls->cert = NULL;
+
+	/* If we have no private key, then just send an empty certificate */
+	if ( ! private_key.len ) {
+		DBGC ( tls, "TLS %p certificate requested but no private key "
+		       "available\n", tls );
+		return 0;
+	}
 
 	/* Determine client certificate to be sent */
 	tls->cert = certstore_find_key ( &private_key );
@@ -2429,10 +2440,10 @@ static void tls_validator_done ( struct tls_session *tls, int rc ) {
 	tls->tx_pending |= ( TLS_TX_CLIENT_KEY_EXCHANGE |
 			     TLS_TX_CHANGE_CIPHER |
 			     TLS_TX_FINISHED );
-	if ( tls->cert ) {
-		tls->tx_pending |= ( TLS_TX_CERTIFICATE |
-				     TLS_TX_CERTIFICATE_VERIFY );
-	}
+	if ( tls->cert_requested )
+		tls->tx_pending |= TLS_TX_CERTIFICATE;
+	if ( tls->cert )
+		tls->tx_pending |= TLS_TX_CERTIFICATE_VERIFY;
 	tls_tx_resume ( tls );
 
 	return;
