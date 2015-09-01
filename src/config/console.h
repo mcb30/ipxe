@@ -21,7 +21,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 //#define	CONSOLE_SYSLOG		/* Syslog console */
 //#define	CONSOLE_SYSLOGS		/* Encrypted syslog console */
 //#define	CONSOLE_VMWARE		/* VMware logfile console */
-//#define	CONSOLE_DEBUGCON	/* Debug port console */
+#define	CONSOLE_DEBUGCON	/* Debug port console */
 //#define	CONSOLE_VESAFB		/* VESA framebuffer console */
 //#define	CONSOLE_INT13		/* INT13 disk log console */
 

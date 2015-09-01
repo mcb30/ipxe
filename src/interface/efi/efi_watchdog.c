@@ -41,7 +41,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define WATCHDOG_HOLDOFF_SECS 10
 
 /** Watchdog timeout (in seconds) */
-#define WATCHDOG_TIMEOUT_SECS ( 5 * 60 )
+#define WATCHDOG_TIMEOUT_SECS 0 //( 5 * 60 )
 
 /** Watchdog code (to be logged on watchdog timeout) */
 #define WATCHDOG_CODE 0x6950584544454144ULL
