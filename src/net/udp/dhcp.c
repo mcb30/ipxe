@@ -43,6 +43,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/uuid.h>
 #include <ipxe/timer.h>
 #include <ipxe/settings.h>
+#include <ipxe/init.h>
 #include <ipxe/dhcp.h>
 #include <ipxe/dhcpopts.h>
 #include <ipxe/dhcppkt.h>
@@ -576,7 +577,7 @@ static void dhcp_request_rx ( struct dhcp_session *dhcp,
 			 * without performing a ProxyDHCPREQUEST
 			 */
 			settings = &dhcp->proxy_offer->settings;
-			if ( ( rc = register_settings ( settings, NULL,
+			if ( ( rc = register_settings ( settings, parent,
 					   PROXYDHCP_SETTINGS_NAME ) ) != 0 ) {
 				DBGC ( dhcp, "DHCP %p could not register "
 				       "proxy settings: %s\n",
@@ -661,6 +662,7 @@ static void dhcp_proxy_rx ( struct dhcp_session *dhcp,
 			    struct in_addr server_id,
 			    struct in_addr pseudo_id ) {
 	struct settings *settings = &dhcppkt->settings;
+	struct settings *parent;
 	int rc;
 
 	DBGC ( dhcp, "DHCP %p %s from %s:%d", dhcp,
@@ -686,7 +688,8 @@ static void dhcp_proxy_rx ( struct dhcp_session *dhcp,
 		return;
 
 	/* Register settings */
-	if ( ( rc = register_settings ( settings, NULL,
+	parent = netdev_settings ( dhcp->netdev );
+	if ( ( rc = register_settings ( settings, parent,
 					PROXYDHCP_SETTINGS_NAME ) ) != 0 ) {
 		DBGC ( dhcp, "DHCP %p could not register proxy settings: %s\n",
 		       dhcp, strerror ( rc ) );
@@ -1495,4 +1498,54 @@ int start_pxebs ( struct interface *job, struct net_device *netdev,
 struct net_device_configurator dhcp_configurator __net_device_configurator = {
 	.name = "dhcp",
 	.start = start_dhcp,
+};
+
+/**
+ * Redirect "proxydhcp" settings block
+ *
+ * @v settings		Settings block
+ * @ret settings	Underlying settings block
+ */
+static struct settings * proxydhcp_redirect ( struct settings *settings ) {
+	struct net_device *netdev;
+	struct settings *proxydhcp;
+
+	/* Redirect to most recently opened network device */
+	if ( ( netdev = last_opened_netdev() ) &&
+	     ( proxydhcp = find_child_settings ( netdev_settings ( netdev ),
+						 PROXYDHCP_SETTINGS_NAME ) ) ) {
+		return proxydhcp;
+	} else {
+		return settings;
+	}
+}
+
+/** "proxydhcp" settings operations */
+static struct settings_operations proxydhcp_redirect_settings_operations = {
+	.redirect = proxydhcp_redirect,
+};
+
+/** "proxydhcp" settings */
+static struct settings proxydhcp_redirect_settings = {
+	.refcnt = NULL,
+	.siblings = LIST_HEAD_INIT ( proxydhcp_redirect_settings.siblings ),
+	.children = LIST_HEAD_INIT ( proxydhcp_redirect_settings.children ),
+	.op = &proxydhcp_redirect_settings_operations,
+};
+
+/** Initialise "proxydhcp" settings */
+static void proxydhcp_redirect_settings_init ( void ) {
+	int rc;
+
+	if ( ( rc = register_settings ( &proxydhcp_redirect_settings, NULL,
+					PROXYDHCP_SETTINGS_NAME ) ) != 0 ) {
+		DBG ( "Could not register proxydhcp settings: %s\n",
+		      strerror ( rc ) );
+		return;
+	}
+}
+
+/** "proxydhcp" settings initialiser */
+struct init_fn proxydhcp_redirect_settings_init_fn __init_fn ( INIT_NORMAL ) = {
+	.initialise = proxydhcp_redirect_settings_init,
 };
