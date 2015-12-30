@@ -2000,6 +2000,7 @@ static void ehci_remove ( struct pci_device *pci ) {
 
 /** EHCI PCI device IDs */
 static struct pci_device_id ehci_ids[] = {
+	PCI_ROM ( 0x8086, 0x0f34, "ehci-z36", "Intel Z36/Z37 EHCI", 0 ),
 	PCI_ROM ( 0xffff, 0xffff, "ehci", "EHCI", 0 ),
 };
 
