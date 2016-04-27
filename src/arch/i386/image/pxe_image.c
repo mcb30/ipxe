@@ -67,6 +67,13 @@ static int pxe_exec ( struct image *image ) {
 	/* Copy image to segment */
 	memcpy_user ( buffer, 0, image->data, 0, image->len );
 
+	//
+	uint8_t *rembo = user_to_virt ( buffer, 0 );
+	if ( rembo[0x16] == 0x76 ) {
+		dbg_printf ( "*** patching Rembo to fix initial stack ***\n" );
+		rembo[0x16] = 0xeb;
+	}
+
 	/* Arbitrarily pick the most recently opened network device */
 	if ( ( netdev = last_opened_netdev() ) == NULL ) {
 		DBGC ( image, "IMAGE %p could not locate PXE net device\n",
