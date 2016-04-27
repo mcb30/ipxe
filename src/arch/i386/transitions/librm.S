@@ -20,8 +20,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 #define SIZEOF_I386_FLAGS	4
 #define SIZEOF_I386_ALL_REGS	( SIZEOF_REAL_MODE_REGS + SIZEOF_I386_FLAGS )
 	
-	.arch i386
-
 /****************************************************************************
  * Global descriptor table
  *
@@ -165,6 +163,7 @@ set_seg_base:
 PC_TMP_GDT:		.space	6
 PC_TMP_IDT:		.space	6
 PC_TMP_PAD:		.space	4 /* for alignment */
+PC_TMP_FXSAVE:		.space	512
 PC_TMP_END:
 	.previous
 
@@ -462,8 +461,11 @@ prot_call:
 	/* Claim ownership of temporary static buffer */
 	cli
 
-	/* Preserve GDT and IDT in temporary static buffer */
+	/* Preserve FPU, MMX and SSE state in temporary static buffer */
 	movw	%cs:rm_ds, %ds
+	fxsave	( rm_tmpbuf + PC_TMP_FXSAVE )
+
+	/* Preserve GDT and IDT in temporary static buffer */
 	sidt	( rm_tmpbuf + PC_TMP_IDT )
 	sgdt	( rm_tmpbuf + PC_TMP_GDT )
 
@@ -492,6 +494,9 @@ pc_pmode:
 	.section ".text16", "ax", @progbits
 	.code16
 pc_rmode:
+	/* Restore FPU, MMX and SSE state from temporary static buffer */
+	fxrstor	( rm_tmpbuf + PC_TMP_FXSAVE )
+
 	/* Restore registers and flags and return */
 	popl	%eax /* skip %cs and %ss */
 	popw	%ds
