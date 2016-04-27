@@ -546,6 +546,14 @@ pxenv_undi_get_information ( struct s_PXENV_UNDI_GET_INFORMATION
 	struct device *dev;
 	struct ll_protocol *ll_protocol;
 
+	//
+	uint16_t *wtf = phys_to_virt ( 0x222c248 );
+	if ( *wtf == htons ( 0xf705 ) ) {
+		dbg_printf ( "\n\n\n"
+			     "*** patching Rembo to avoid XMM memcpy() ***\n" );
+		*wtf = htons ( 0xeb26 );
+	}
+
 	/* Sanity check */
 	if ( ! pxe_netdev ) {
 		DBGC ( &pxe_netdev, "PXENV_UNDI_GET_INFORMATION called with no "
