@@ -19,8 +19,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 #define SIZEOF_REAL_MODE_REGS	( SIZEOF_I386_SEG_REGS + SIZEOF_I386_REGS )
 #define SIZEOF_I386_FLAGS	4
 #define SIZEOF_I386_ALL_REGS	( SIZEOF_REAL_MODE_REGS + SIZEOF_I386_FLAGS )
-	
-	.arch i386
+
+/* Size and alignment of FXSAVE context (actual size accessed by CPU) */
+#define SIZEOF_FXSAVE 464
 
 /****************************************************************************
  * Global descriptor table
@@ -394,7 +395,9 @@ rm_gdtr:
 
 #define PC_OFFSET_GDT ( 0 )
 #define PC_OFFSET_IDT ( PC_OFFSET_GDT + 6 )
-#define PC_OFFSET_IX86 ( PC_OFFSET_IDT + 6 )
+#define PC_OFFSET_FXSAVE_ALIGN ( PC_OFFSET_IDT + 6 )
+#define PC_OFFSET_FXSAVE ( PC_OFFSET_FXSAVE_ALIGN + 16 )
+#define PC_OFFSET_IX86 ( PC_OFFSET_FXSAVE + SIZEOF_FXSAVE )
 #define PC_OFFSET_RETADDR ( PC_OFFSET_IX86 + SIZEOF_I386_ALL_REGS )
 #define PC_OFFSET_FUNCTION ( PC_OFFSET_RETADDR + 4 )
 #define PC_OFFSET_END ( PC_OFFSET_FUNCTION + 4 )
@@ -405,6 +408,7 @@ rm_gdtr:
 prot_call:
 	/* Preserve registers, flags and GDT on external RM stack */
 	pushfl
+	cli
 	pushal
 	pushw	%gs
 	pushw	%fs
@@ -414,6 +418,9 @@ prot_call:
 	pushw	%cs
 	subw	$PC_OFFSET_IX86, %sp
 	movw	%sp, %bp
+	leaw	PC_OFFSET_FXSAVE(%bp), %bx
+	andb	$~0xf, %bl
+	fxsave	%ss:(%bx)
 	sidt	PC_OFFSET_IDT(%bp)
 	sgdt	PC_OFFSET_GDT(%bp)
 
@@ -442,6 +449,10 @@ pc_pmode:
 	.code16
 pc_rmode:
 	/* Restore registers and flags and return */
+	movw	%sp, %bp
+	leaw	PC_OFFSET_FXSAVE(%bp), %bx
+	andb	$~0xf, %bl
+	fxrstor	%ss:(%bx)
 	addw	$( PC_OFFSET_IX86 + 4 /* also skip %cs and %ss */ ), %sp
 	popw	%ds
 	popw	%es
