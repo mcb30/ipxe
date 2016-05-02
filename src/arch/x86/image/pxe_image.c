@@ -30,6 +30,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  *
  */
 
+#include <stdio.h>
+#include <strings.h>
 #include <pxe.h>
 #include <pxe_call.h>
 #include <ipxe/uaccess.h>
@@ -46,6 +48,9 @@ FEATURE ( FEATURE_IMAGE, "PXE", DHCP_EB_FEATURE_PXE, 1 );
 /** PXE command line */
 const char *pxe_cmdline;
 
+/** Tivoli 5.1 workaround enabled */
+uint8_t tivoli_workaround;
+
 /**
  * Execute PXE image
  *
@@ -56,6 +61,16 @@ static int pxe_exec ( struct image *image ) {
 	userptr_t buffer = real_to_user ( 0, 0x7c00 );
 	struct net_device *netdev;
 	int rc;
+
+	/* Enable Tivoli 5.1 workaround if applicable */
+	tivoli_workaround = ( strcasecmp ( image->name, "Rembo-ia32" ) == 0 );
+	if ( tivoli_workaround ) {
+		printf ( "\n"
+			 "==============================================\n"
+			 "WARNING: Working around broken Tivoli PXE NBP!\n"
+			 "==============================================\n"
+			 "\n" );
+	}
 
 	/* Verify and prepare segment */
 	if ( ( rc = prep_segment ( buffer, image->len, image->len ) ) != 0 ) {

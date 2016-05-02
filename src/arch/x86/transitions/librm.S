@@ -442,6 +442,28 @@ r2p_pmode:
 	movw	%ax, %ss
 	movl	VIRTUAL(pm_esp), %esp
 
+	/* Hack around broken Tivoli 5.1 Rembo-ia32 NBP */
+	testb	$0xff, tivoli_workaround	/* Check flag */
+	jz	skip_tivoli_workaround
+	movw	%cs, %ax			/* Check for CPL!=0 */
+	testb	$0x03, %al
+	jz	skip_tivoli_workaround
+	pushw	%fs				/* Set up %fs for PHYSICAL_DS */
+	movw	$PHYSICAL_DS, %ax
+	movw	%ax, %fs
+	pushl	%eax				/* Locate IDT */
+	pushw	%ax
+	sidt	(%esp)
+	popw	%ax
+	popl	%eax
+	movl	%fs:60(%eax), %edi		/* Locate IDT[7] handler */
+	movw	%fs:56(%eax), %di
+	cmpl	$0x1e060ffa, %fs:(%edi)		/* Check for expected code */
+	jne	1f
+	movb	$0xcf, %fs:3(%edi)		/* Convert to no-op */
+1:	popw	%fs				/* Restore %fs */
+skip_tivoli_workaround:
+
 	/* Load protected-mode interrupt descriptor table */
 	lidt	VIRTUAL(idtr32)
 
