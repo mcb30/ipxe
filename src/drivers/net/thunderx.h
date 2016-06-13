@@ -936,6 +936,8 @@ struct txnic_bgx {
 	unsigned int count;
 	/** Link training is in use */
 	int training;
+	/** Base MAC address */
+	uint64_t mac;
 
 	/** List of BGX Ethernet interfaces */
 	struct list_head list;

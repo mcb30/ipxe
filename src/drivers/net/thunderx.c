@@ -40,6 +40,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/pciea.h>
 #include <ipxe/umalloc.h>
 #include "thunderx.h"
+#include "thunderxcfg.h"
 
 /** @file
  *
@@ -55,6 +56,10 @@ static LIST_HEAD ( txnic_pfs );
 
 /** Debug colour for physical function and BGX messages */
 #define TXNICCOL(x) ( &txnic_pfs + (x)->node )
+
+/** Board configuration protocol */
+static EFI_THUNDER_CONFIG_PROTOCOL *txcfg;
+EFI_REQUEST_PROTOCOL ( EFI_THUNDER_CONFIG_PROTOCOL, &txcfg );
 
 /******************************************************************************
  *
@@ -1435,6 +1440,38 @@ static int txnic_bgx_detect ( struct txnic_bgx *bgx ) {
 }
 
 /**
+ * Determine base MAC address
+ *
+ * @v bgx		BGX Ethernet interface
+ */
+static void txnic_bgx_mac ( struct txnic_bgx *bgx ) {
+	struct txnic_bgx *other;
+
+	/* Check for presence of ThunderX Board Configuration protocol */
+	if ( ! txcfg ) {
+		DBGC ( TXNICCOL ( bgx ), "TXNIC %d/%d/* has no board "
+		       "configuration protocol\n", bgx->node, bgx->idx );
+		return;
+	}
+
+	/* Get system base MAC address */
+	bgx->mac = txcfg->BoardConfig->MacAddrRangeStart;
+	if ( ! bgx->mac ) {
+		DBGC ( TXNICCOL ( bgx ), "TXNIC %d/%d/* has no base MAC "
+		       "address\n", bgx->node, bgx->idx );
+		return;
+	}
+
+	/* Determine base MAC address for this BGX.  This algorithm
+	 * relies on the UEFI enumeration order (which is technically
+	 * undefined), in order to match the behaviour of the
+	 * ThunderxEthDxe driver.
+	 */
+	list_for_each_entry ( other, &txnic_bgxs, list )
+		bgx->mac += other->count;
+}
+
+/**
  * Initialise BGX Ethernet interface
  *
  * @v bgx		BGX Ethernet interface
@@ -1533,7 +1570,11 @@ static void txnic_bgx_lmac_init ( struct txnic_bgx *bgx,
 	lmac->idx = TXNIC_VNIC_IDX ( bgx->idx, lmac_idx );
 
 	/* Set MAC address */
-	eth_random_addr ( lmac->mac.raw );
+	if ( bgx->mac ) {
+		lmac->mac.be64 = cpu_to_be64 ( bgx->mac + lmac_idx );
+	} else {
+		eth_random_addr ( lmac->mac.raw );
+	}
 
 	/* Initialise PHY */
 	txnic_bgx_spu_init ( lmac );
@@ -1599,6 +1640,9 @@ static int txnic_bgx_probe ( struct pci_device *pci ) {
 	DBGC ( TXNICCOL ( bgx ), "TXNIC %d/%d/* BGX %s at %#lx %dx %s%s\n",
 	       bgx->node, bgx->idx, pci->dev.name, membase, bgx->count,
 	       bgx->type->name, ( bgx->training ? "(training)" : "" ) );
+
+	/* Determine base MAC address */
+	txnic_bgx_mac ( bgx );
 
 	/* Initialise interface */
 	txnic_bgx_init ( bgx, type );
