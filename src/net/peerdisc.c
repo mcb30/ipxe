@@ -380,6 +380,9 @@ static int peerdisc_discovered ( struct peerdisc_segment *segment,
 	struct peerdisc_client *peerdisc;
 	struct peerdisc_client *tmp;
 
+	// fake a total absence of discovered peers
+	return 0;
+
 	/* Ignore duplicate peers */
 	list_for_each_entry ( peer, &segment->peers, list ) {
 		if ( strcmp ( peer->location, location ) == 0 ) {
