@@ -606,6 +606,53 @@ intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count,
  ******************************************************************************
  */
 
+/** PF Interrupt Zero Dynamic Control Register */
+#define INTELXL_PFINT_DYN_CTL0 0x038480
+#define INTELXL_PFINT_DYN_CTL0_INTENA	0x00000001UL	/**< Enable */
+#define INTELXL_PFINT_DYN_CTL0_CLEARPBA	0x00000002UL	/**< Acknowledge */
+#define INTELXL_PFINT_DYN_CTL0_INTENA_MASK 0x80000000UL	/**< Ignore enable */
+
+/** PF Interrupt Zero Linked List Register */
+#define INTELXL_PFINT_LNKLST0 0x038500
+#define INTELXL_PFINT_LNKLST0_FIRSTQ_INDX(x) \
+	( (x) << 0 )					/**< Queue index */
+#define INTELXL_PFINT_LNKLST0_FIRSTQ_INDX_NONE \
+	INTELXL_PFINT_LNKLST0_FIRSTQ_INDX ( 0x7ff )	/**< End of list */
+#define INTELXL_PFINT_LNKLST0_FIRSTQ_TYPE(x) \
+	( (x) << 11 )					/**< Queue type */
+#define INTELXL_PFINT_LNKLST0_FIRSTQ_TYPE_RX \
+	INTELXL_PFINT_LNKLST0_FIRSTQ_TYPE ( 0x0 )	/**< Receive queue */
+#define INTELXL_PFINT_LNKLST0_FIRSTQ_TYPE_TX \
+	INTELXL_PFINT_LNKLST0_FIRSTQ_TYPE ( 0x1 )	/**< Transmit queue */
+
+/** PF Interrupt Zero Cause Enablement Register */
+#define INTELXL_PFINT_ICR0_ENA 0x038800
+#define INTELXL_PFINT_ICR0_ENA_ADMINQ	0x40000000UL	/**< Admin event */
+
+/** Receive Queue Interrupt Cause Control Register */
+#define INTELXL_QINT_RQCTL(x) ( 0x03a000 + ( 0x4 * (x) ) )
+#define INTELXL_QINT_RQCTL_NEXTQ_INDX(x) ( (x) << 16 )	/**< Queue index */
+#define INTELXL_QINT_RQCTL_NEXTQ_INDX_NONE \
+	INTELXL_QINT_RQCTL_NEXTQ_INDX ( 0x7ff )		/**< End of list */
+#define INTELXL_QINT_RQCTL_NEXTQ_TYPE(x) ( (x) << 27 )	/**< Queue type */
+#define INTELXL_QINT_RQCTL_NEXTQ_TYPE_RX \
+	INTELXL_QINT_RQCTL_NEXTQ_TYPE ( 0x0 )		/**< Receive queue */
+#define INTELXL_QINT_RQCTL_NEXTQ_TYPE_TX \
+	INTELXL_QINT_RQCTL_NEXTQ_TYPE ( 0x1 )		/**< Transmit queue */
+#define INTELXL_QINT_RQCTL_CAUSE_ENA	0x40000000UL	/**< Enable */
+
+/** Transmit Queue Interrupt Cause Control Register */
+#define INTELXL_QINT_TQCTL(x) ( 0x03c000 + ( 0x4 * (x) ) )
+#define INTELXL_QINT_TQCTL_NEXTQ_INDX(x) ( (x) << 16 )	/**< Queue index */
+#define INTELXL_QINT_TQCTL_NEXTQ_INDX_NONE \
+	INTELXL_QINT_TQCTL_NEXTQ_INDX ( 0x7ff )		/**< End of list */
+#define INTELXL_QINT_TQCTL_NEXTQ_TYPE(x) ( (x) << 27 )	/**< Queue type */
+#define INTELXL_QINT_TQCTL_NEXTQ_TYPE_RX \
+	INTELXL_QINT_TQCTL_NEXTQ_TYPE ( 0x0 )		/**< Receive queue */
+#define INTELXL_QINT_TQCTL_NEXTQ_TYPE_TX \
+	INTELXL_QINT_TQCTL_NEXTQ_TYPE ( 0x1 )		/**< Transmit queue */
+#define INTELXL_QINT_TQCTL_CAUSE_ENA	0x40000000UL	/**< Enable */
+
 /** PF Control Register */
 #define INTELXL_PFGEN_CTRL 0x092400
 #define INTELXL_PFGEN_CTRL_PFSWR	0x00000001UL	/**< Software Reset */

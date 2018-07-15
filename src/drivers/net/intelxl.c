@@ -1208,6 +1208,13 @@ static void intelxl_poll_rx ( struct net_device *netdev ) {
 static void intelxl_poll ( struct net_device *netdev ) {
 	struct intelxl_nic *intelxl = netdev->priv;
 
+	/* Acknowledge interrupts, if applicable */
+	if ( netdev_irq_enabled ( netdev ) ) {
+		writel ( ( INTELXL_PFINT_DYN_CTL0_CLEARPBA |
+			   INTELXL_PFINT_DYN_CTL0_INTENA_MASK ),
+			 intelxl->regs + INTELXL_PFINT_DYN_CTL0 );
+	}
+
 	/* Poll for completed packets */
 	intelxl_poll_tx ( netdev );
 
@@ -1221,12 +1228,30 @@ static void intelxl_poll ( struct net_device *netdev ) {
 	intelxl_refill_rx ( intelxl );
 }
 
+/**
+ * Enable or disable interrupts
+ *
+ * @v netdev		Network device
+ * @v enable		Interrupts should be enabled
+ */
+static void intelxl_irq ( struct net_device *netdev, int enable ) {
+	struct intelxl_nic *intelxl = netdev->priv;
+
+	if ( enable ) {
+		writel ( INTELXL_PFINT_DYN_CTL0_INTENA,
+			 intelxl->regs + INTELXL_PFINT_DYN_CTL0 );
+	} else {
+		writel ( 0, intelxl->regs + INTELXL_PFINT_DYN_CTL0 );
+	}
+}
+
 /** Network device operations */
 static struct net_device_operations intelxl_operations = {
 	.open		= intelxl_open,
 	.close		= intelxl_close,
 	.transmit	= intelxl_transmit,
 	.poll		= intelxl_poll,
+	.irq		= intelxl_irq,
 };
 
 /******************************************************************************
@@ -1309,6 +1334,20 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	/* Query bandwidth configuration (for transmit scheduler info) */
 	if ( ( rc = intelxl_admin_bandwidth ( intelxl ) ) != 0 )
 		goto err_admin_bandwidth;
+
+	/* Configure interrupt causes */
+	writel ( ( INTELXL_QINT_TQCTL_NEXTQ_INDX_NONE |
+		   INTELXL_QINT_TQCTL_CAUSE_ENA ),
+		 intelxl->regs + INTELXL_QINT_TQCTL(0) );
+	writel ( ( INTELXL_QINT_RQCTL_NEXTQ_INDX ( 0 ) |
+		   INTELXL_QINT_RQCTL_NEXTQ_TYPE_TX |
+		   INTELXL_QINT_RQCTL_CAUSE_ENA ),
+		 intelxl->regs + INTELXL_QINT_RQCTL(0) );
+	writel ( ( INTELXL_PFINT_LNKLST0_FIRSTQ_INDX ( 0 ) |
+		   INTELXL_PFINT_LNKLST0_FIRSTQ_TYPE_RX ),
+		 intelxl->regs + INTELXL_PFINT_LNKLST0 );
+	writel ( INTELXL_PFINT_ICR0_ENA_ADMINQ,
+		 intelxl->regs + INTELXL_PFINT_ICR0_ENA );
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
