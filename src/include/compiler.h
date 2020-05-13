@@ -76,9 +76,9 @@
 #ifdef ASSEMBLY
 #define PROVIDE_SYMBOL( symbol )				\
 	.section ".provided", "a", NOBITS ;			\
-	.hidden symbol ;					\
-	.globl	symbol ;					\
-	symbol: ;						\
+	.hidden _C2 ( __USER_LABEL_PREFIX__, symbol );		\
+	.globl	_C2 ( __USER_LABEL_PREFIX__, symbol );		\
+	_C2 ( __USER_LABEL_PREFIX__, symbol ): ;		\
 	.previous
 #else
 #define PROVIDE_SYMBOL( symbol )				\
@@ -96,10 +96,12 @@
  */
 #ifdef ASSEMBLY
 #define REQUEST_SYMBOL( symbol )				\
-	.equ __request_ ## symbol, symbol
+	.equ __request_ ## symbol,				\
+		_C2 ( __USER_LABEL_PREFIX__, symbol )
 #else
 #define REQUEST_SYMBOL( symbol )				\
-	__asm__ ( ".equ __request_" #symbol ", " #symbol )
+	__asm__ ( ".equ __request_" #symbol ", "		\
+		  _S2 ( __USER_LABEL_PREFIX__ ) #symbol )
 #endif
 
 /**
@@ -116,11 +118,13 @@
  */
 #ifdef ASSEMBLY
 #define REQUIRE_SYMBOL( symbol )				\
-	.reloc __requiring_symbol__, RELOC_TYPE_NONE, symbol
+	.reloc __requiring_symbol__, RELOC_TYPE_NONE,		\
+		_C2 ( __USER_LABEL_PREFIX__,  symbol )
 #else
 #define REQUIRE_SYMBOL( symbol )				\
 	__asm__ ( ".reloc __requiring_symbol__, "		\
-		  _S2 ( RELOC_TYPE_NONE ) ", " #symbol )
+		  _S2 ( RELOC_TYPE_NONE ) ", "			\
+		  _S2 ( __USER_LABEL_PREFIX__ ) #symbol )
 #endif
 
 /**
@@ -138,7 +142,8 @@
 	.equ __requiring_symbol__, symbol
 #else
 #define REQUIRING_SYMBOL( symbol )				\
-	__asm__ ( ".equ __requiring_symbol__, " #symbol )
+	__asm__ ( ".equ __requiring_symbol__, "			\
+		  _S2 ( __USER_LABEL_PREFIX__ ) #symbol )
 #endif
 
 /**
