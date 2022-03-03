@@ -133,6 +133,8 @@ static int intelxl_fetch_mac ( struct intelxl_nic *intelxl,
  */
 int intelxl_msix_enable ( struct intelxl_nic *intelxl,
 			  struct pci_device *pci ) {
+	physaddr_t dummy;
+	unsigned int i;
 	int rc;
 
 	/* Map dummy target location */
@@ -143,6 +145,7 @@ int intelxl_msix_enable ( struct intelxl_nic *intelxl,
 		       intelxl, strerror ( rc ) );
 		goto err_map;
 	}
+	dummy = dma ( &intelxl->msix.map, &intelxl->msix.msg );
 
 	/* Enable MSI-X capability */
 	if ( ( rc = pci_msix_enable ( pci, &intelxl->msix.cap ) ) != 0 ) {
@@ -151,12 +154,11 @@ int intelxl_msix_enable ( struct intelxl_nic *intelxl,
 		goto err_enable;
 	}
 
-	/* Configure interrupt zero to write to dummy location */
-	pci_msix_map ( &intelxl->msix.cap, 0,
-		       dma ( &intelxl->msix.map, &intelxl->msix.msg ), 0 );
-
-	/* Enable dummy interrupt zero */
-	pci_msix_unmask ( &intelxl->msix.cap, 0 );
+	/* Configure interrupts to write to dummy location */
+	for ( i = 0 ; i < INTELXL_NUM_MSIX ; i++ ) {
+		pci_msix_map ( &intelxl->msix.cap, i, dummy, 0 );
+		pci_msix_unmask ( &intelxl->msix.cap, i );
+	}
 
 	return 0;
 
@@ -175,9 +177,11 @@ int intelxl_msix_enable ( struct intelxl_nic *intelxl,
  */
 void intelxl_msix_disable ( struct intelxl_nic *intelxl,
 			    struct pci_device *pci ) {
+	unsigned int i;
 
-	/* Disable dummy interrupt zero */
-	pci_msix_mask ( &intelxl->msix.cap, 0 );
+	/* Disable dummy interrupts */
+	for ( i = 0 ; i < INTELXL_NUM_MSIX ; i++ )
+		pci_msix_mask ( &intelxl->msix.cap, i );
 
 	/* Disable MSI-X capability */
 	pci_msix_disable ( pci, &intelxl->msix.cap );

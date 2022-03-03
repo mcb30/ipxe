@@ -1059,7 +1059,15 @@ struct intelxl_msix {
 	struct dma_mapping map;
 };
 
-/** An Intel 40Gigabit network card */
+/** Number of MSI-X interrupts mapped
+ *
+ * The 100 Gigabit physical function driver requires at least two
+ * interrupts (one for miscellaneous interrupts and one for
+ * transmit/receive interrupts).
+ */
+#define INTELXL_NUM_MSIX 2
+
+/** An Intel 40 Gigabit network card */
 struct intelxl_nic {
 	/** Registers */
 	void *regs;

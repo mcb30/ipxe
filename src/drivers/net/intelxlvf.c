@@ -457,6 +457,7 @@ static int intelxlvf_admin_irq_map ( struct net_device *netdev ) {
 	buf = intelxl_admin_command_buffer ( intelxl );
 	buf->irq.count = cpu_to_le16 ( 1 );
 	buf->irq.vsi = cpu_to_le16 ( intelxl->vsi );
+	buf->irq.vec = cpu_to_le16 ( 1 );
 	buf->irq.rxmap = cpu_to_le16 ( 0x0001 );
 	buf->irq.txmap = cpu_to_le16 ( 0x0001 );
 
