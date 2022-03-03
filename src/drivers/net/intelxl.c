@@ -864,6 +864,9 @@ int intelxl_open_admin ( struct intelxl_nic *intelxl ) {
 	/* (Re)open admin queues */
 	intelxl_reopen_admin ( intelxl );
 
+	//
+	return 0;
+
 	/* Get firmware version */
 	if ( ( rc = intelxl_admin_version ( intelxl ) ) != 0 )
 		goto err_version;
