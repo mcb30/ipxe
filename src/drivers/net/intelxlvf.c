@@ -489,8 +489,8 @@ static int intelxlvf_admin_queues ( struct net_device *netdev, int enable ) {
 	cmd->len = cpu_to_le16 ( sizeof ( buf->queues ) );
 	buf = intelxl_admin_command_buffer ( intelxl );
 	buf->queues.vsi = cpu_to_le16 ( intelxl->vsi );
-	buf->queues.rx = cpu_to_le32 ( 1 );
-	buf->queues.tx = cpu_to_le32 ( 1 );
+	buf->queues.rx = cpu_to_le32 ( 0x0001 );
+	buf->queues.tx = cpu_to_le32 ( 0x0001 );
 
 	/* Issue command */
 	if ( ( rc = intelxlvf_admin_command ( netdev ) ) != 0 )
