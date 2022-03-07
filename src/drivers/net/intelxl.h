@@ -1049,16 +1049,6 @@ union intelxl_receive_address {
 	uint8_t raw[ETH_ALEN];
 };
 
-/** MSI-X interrupt */
-struct intelxl_msix {
-	/** PCI capability */
-	struct pci_msix cap;
-	/** MSI-X dummy interrupt target */
-	uint32_t msg;
-	/** DMA mapping for dummy interrupt target */
-	struct dma_mapping map;
-};
-
 /** Number of MSI-X interrupts mapped
  *
  * The 100 Gigabit physical function driver requires at least two
@@ -1066,6 +1056,16 @@ struct intelxl_msix {
  * transmit/receive interrupts).
  */
 #define INTELXL_NUM_MSIX 2
+
+/** MSI-X interrupt */
+struct intelxl_msix {
+	/** PCI capability */
+	struct pci_msix cap;
+	/** MSI-X dummy interrupt target */
+	uint32_t msg[INTELXL_NUM_MSIX];
+	/** DMA mapping for dummy interrupt target */
+	struct dma_mapping map;
+};
 
 /** An Intel 40 Gigabit network card */
 struct intelxl_nic {
@@ -1088,8 +1088,8 @@ struct intelxl_nic {
 	unsigned int vsi;
 	/** Queue set handle */
 	unsigned int qset;
-	/** Interrupt control register */
-	unsigned int intr;
+	/** Interrupt control registers */
+	unsigned int intr[INTELXL_NUM_MSIX];
 	/** PCI Express capability offset */
 	unsigned int exp;
 	/** MSI-X interrupt */

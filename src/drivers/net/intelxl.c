@@ -139,13 +139,12 @@ int intelxl_msix_enable ( struct intelxl_nic *intelxl,
 
 	/* Map dummy target location */
 	if ( ( rc = dma_map ( intelxl->dma, &intelxl->msix.map,
-			      virt_to_phys ( &intelxl->msix.msg ),
+			      virt_to_phys ( intelxl->msix.msg ),
 			      sizeof ( intelxl->msix.msg ), DMA_RX ) ) != 0 ) {
 		DBGC ( intelxl, "INTELXL %p could not map MSI-X target: %s\n",
 		       intelxl, strerror ( rc ) );
 		goto err_map;
 	}
-	dummy = dma ( &intelxl->msix.map, &intelxl->msix.msg );
 
 	/* Enable MSI-X capability */
 	if ( ( rc = pci_msix_enable ( pci, &intelxl->msix.cap ) ) != 0 ) {
@@ -156,8 +155,10 @@ int intelxl_msix_enable ( struct intelxl_nic *intelxl,
 
 	/* Configure interrupts to write to dummy location */
 	for ( i = 0 ; i < INTELXL_NUM_MSIX ; i++ ) {
+		dummy = dma ( &intelxl->msix.map, &intelxl->msix.msg[i] );
 		pci_msix_map ( &intelxl->msix.cap, i, dummy, 0 );
 		pci_msix_unmask ( &intelxl->msix.cap, i );
+		pci_msix_dump ( &intelxl->msix.cap, i );
 	}
 
 	return 0;
@@ -1608,6 +1609,7 @@ static void intelxl_poll_rx ( struct net_device *netdev ) {
  */
 void intelxl_poll ( struct net_device *netdev ) {
 	struct intelxl_nic *intelxl = netdev->priv;
+	unsigned int i;
 
 	/* Poll for completed packets */
 	intelxl_poll_tx ( netdev );
@@ -1636,7 +1638,10 @@ void intelxl_poll ( struct net_device *netdev ) {
 	 * INT_DYN_CTL register, but this is even less efficient than
 	 * just unconditionally rearming the interrupt.
 	 */
-	writel ( INTELXL_INT_DYN_CTL_INTENA, intelxl->regs + intelxl->intr );
+	for ( i = 0 ; i < INTELXL_NUM_MSIX ; i++ ) {
+		writel ( INTELXL_INT_DYN_CTL_INTENA,
+			 intelxl->regs + intelxl->intr[i] );
+	}
 }
 
 /** Network device operations */
@@ -1679,7 +1684,10 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	pci_set_drvdata ( pci, netdev );
 	netdev->dev = &pci->dev;
 	memset ( intelxl, 0, sizeof ( *intelxl ) );
-	intelxl->intr = INTELXL_PFINT_DYN_CTL0;
+	intelxl->intr[0] = INTELXL_PFINT_DYN_CTL0;
+	/// TODO
+	///
+	/// intelxl->intr[1] = INTELXL_PFINT_DYN_CTLN ( 0 );
 	intelxl_init_admin ( &intelxl->command, INTELXL_ADMIN_CMD,
 			     &intelxl_admin_offsets );
 	intelxl_init_admin ( &intelxl->event, INTELXL_ADMIN_EVT,

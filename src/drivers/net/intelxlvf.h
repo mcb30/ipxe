@@ -20,6 +20,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 /** Receive Queue Tail Register */
 #define INTELXLVF_QRX_TAIL 0x02000
 
+/** VF Interrupt N Dynamic Control Register */
+#define INTELXLVF_VFINT_DYN_CTLN( x ) ( 0x3800 + ( 0x4 * (x) ) )
+
 /** VF Interrupt Zero Dynamic Control Register */
 #define INTELXLVF_VFINT_DYN_CTL0 0x5c00
 

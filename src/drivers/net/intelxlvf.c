@@ -642,7 +642,8 @@ static int intelxlvf_probe ( struct pci_device *pci ) {
 	pci_set_drvdata ( pci, netdev );
 	netdev->dev = &pci->dev;
 	memset ( intelxl, 0, sizeof ( *intelxl ) );
-	intelxl->intr = INTELXLVF_VFINT_DYN_CTL0;
+	intelxl->intr[0] = INTELXLVF_VFINT_DYN_CTL0;
+	intelxl->intr[1] = INTELXLVF_VFINT_DYN_CTLN ( 0 );
 	intelxl_init_admin ( &intelxl->command, INTELXLVF_ADMIN,
 			     &intelxlvf_admin_command_offsets );
 	intelxl_init_admin ( &intelxl->event, INTELXLVF_ADMIN,
