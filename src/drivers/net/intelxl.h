@@ -17,7 +17,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 struct intelxl_nic;
 
 /** BAR size */
-#define INTELXL_BAR_SIZE 0x200000
+#define INTELXL_BAR_SIZE 0x400000
 
 /** Alignment
  *
