@@ -377,27 +377,61 @@ struct intelxl_admin_autoneg_params {
 #define INTELXL_ADMIN_LINK 0x0607
 
 /** Admin queue Get Link Status command parameters */
-struct intelxl_admin_link_params {
-	/** Link status notification */
-	uint8_t notify;
-	/** Reserved */
-	uint8_t reserved_a;
-	/** PHY type */
-	uint8_t phy;
-	/** Link speed */
-	uint8_t speed;
-	/** Link status */
-	uint8_t status;
-	/** Reserved */
-	uint8_t reserved_b[3];
-	/** Maximum frame size */
-	uint16_t mfs;
-	/** Reserved */
-	uint8_t reserved_c[6];
+union intelxl_admin_link_params {
+	/** Version 1 */
+	struct {
+		/** Link status notification */
+		uint8_t notify;
+		/** Reserved */
+		uint8_t reserved_a;
+		/** PHY type */
+		uint8_t phy;
+		/** Link speed */
+		uint8_t speed;
+		/** Link status */
+		uint8_t status;
+		/** Reserved */
+		uint8_t reserved_b[3];
+		/** Maximum frame size */
+		uint16_t mfs;
+		/** Reserved */
+		uint8_t reserved_c[6];
+	} __attribute__ (( packed )) v1;
+	/** Version 2 */
+	struct {
+		/** Logical port number */
+		uint8_t port;
+		/** Reserved */
+		uint8_t reserved_a;
+		/** Link status notification */
+		uint8_t notify;
+		/** Reserved */
+		uint8_t reserved_b[13];
+	} __attribute__ (( packed )) v2;
 } __attribute__ (( packed ));
 
 /** Notify driver of link status changes */
 #define INTELXL_ADMIN_LINK_NOTIFY 0x03
+
+/** Admin queue Get Link Status data buffer */
+struct intelxl_admin_link_buffer {
+	/** Topology conflicts */
+	uint8_t conflict;
+	/** Configuration errors */
+	uint8_t error;
+	/** Link status */
+	uint8_t status;
+	/** Reserved */
+	uint8_t reserved_a[3];
+	/** Maximum frame size */
+	uint16_t mfs;
+	/** Reserved */
+	uint8_t reserved_b[2];
+	/** Link speed */
+	uint16_t speed;
+	/** Reserved */
+	uint8_t reserved_c[20];
+} __attribute__ (( packed ));
 
 /** Link is up */
 #define INTELXL_ADMIN_LINK_UP 0x01
@@ -606,7 +640,7 @@ union intelxl_admin_params {
 	/** Restart Autonegotiation command parameters */
 	struct intelxl_admin_autoneg_params autoneg;
 	/** Get Link Status command parameters */
-	struct intelxl_admin_link_params link;
+	union intelxl_admin_link_params link;
 } __attribute__ (( packed ));
 
 /** Admin queue data buffer */
@@ -619,6 +653,8 @@ union intelxl_admin_buffer {
 	union intelxl_admin_switch_buffer sw;
 	/** Get VSI Parameters data buffer */
 	struct intelxl_admin_vsi_buffer vsi;
+	/** Get Link Status data buffer */
+	struct intelxl_admin_link_buffer link;
 	/** VF Version data buffer */
 	struct intelxl_admin_vf_version_buffer ver;
 	/** VF Get Resources data buffer */
@@ -1152,6 +1188,28 @@ struct intelxl_api_version {
 	void ( * sw ) ( struct intelxl_nic *intelxl,
 			struct intelxl_admin_switch_params *sw,
 			union intelxl_admin_buffer *buf );
+	/**
+	 * Get link status
+	 *
+	 * @v intelxl		Intel device
+	 * @v link		Response parameters
+	 * @v buf		Response data buffer
+	 * @ret status		Link status
+	 */
+	unsigned int ( * link ) ( struct intelxl_nic *intelxl,
+				  union intelxl_admin_link_params *link,
+				  union intelxl_admin_buffer *buf );
+	/**
+	 * Get maximum frame size
+	 *
+	 * @v intelxl		Intel device
+	 * @v link		Response parameters
+	 * @v buf		Response data buffer
+	 * @ret mfs		Maximum frame size
+	 */
+	unsigned int ( * mfs ) ( struct intelxl_nic *intelxl,
+				  union intelxl_admin_link_params *link,
+				  union intelxl_admin_buffer *buf );
 };
 
 /** An Intel 40 Gigabit network card */

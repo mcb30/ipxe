@@ -826,21 +826,61 @@ static int intelxl_admin_autoneg ( struct intelxl_nic *intelxl ) {
 }
 
 /**
+ * Get link status (API version 1)
+ *
+ * @v intelxl		Intel device
+ * @v link		Response parameters
+ * @v buf		Response data buffer
+ * @ret status		Link status
+ */
+static unsigned int
+intelxl_admin_link_status_v1 ( struct intelxl_nic *intelxl,
+			       union intelxl_admin_link_params *link,
+			       union intelxl_admin_buffer *buf __unused ) {
+
+	DBGC ( intelxl, "INTELXL %p PHY %#02x speed %#02x status %#02x\n",
+	       intelxl, link->v1.phy, link->v1.speed, link->v1.status );
+
+	return link->v1.status;
+}
+
+/**
+ * Get link status (API version 2)
+ *
+ * @v intelxl		Intel device
+ * @v link		Response parameters
+ * @v buf		Response data buffer
+ * @ret status		Link status
+ */
+static unsigned int
+intelxl_admin_link_status_v2 ( struct intelxl_nic *intelxl,
+			       union intelxl_admin_link_params *link __unused,
+			       union intelxl_admin_buffer *buf ) {
+
+	DBGC ( intelxl, "INTELXL %p speed %#02x status %#02x\n",
+	       intelxl, le16_to_cpu ( buf->link.speed ), buf->link.status );
+
+	return buf->link.status;
+}
+
+/**
  * Get link status
  *
  * @v netdev		Network device
  * @v link		Response parameters
+ * @v buf		Response data buffer
  */
-static void
-intelxl_admin_link_status ( struct net_device *netdev,
-			    struct intelxl_admin_link_params *link ) {
+static void intelxl_admin_link_status ( struct net_device *netdev,
+					union intelxl_admin_link_params *link,
+					union intelxl_admin_buffer *buf ) {
 	struct intelxl_nic *intelxl = netdev->priv;
+	unsigned int status;
 
-	DBGC ( intelxl, "INTELXL %p PHY %#02x speed %#02x status %#02x\n",
-	       intelxl, link->phy, link->speed, link->status );
+	/* Parse link status */
+	status = intelxl->api->link ( intelxl, link, buf );
 
 	/* Update network device */
-	if ( link->status & INTELXL_ADMIN_LINK_UP ) {
+	if ( status & INTELXL_ADMIN_LINK_UP ) {
 		netdev_link_up ( netdev );
 	} else {
 		netdev_link_down ( netdev );
@@ -848,20 +888,61 @@ intelxl_admin_link_status ( struct net_device *netdev,
 }
 
 /**
+ * Get maximum frame size (API version 1)
+ *
+ * @v intelxl		Intel device
+ * @v link		Response parameters
+ * @v buf		Response data buffer
+ * @ret mfs		Maximum frame size
+ */
+static unsigned int
+intelxl_admin_link_mfs_v1 ( struct intelxl_nic *intelxl,
+			    union intelxl_admin_link_params *link,
+			    union intelxl_admin_buffer *buf __unused ) {
+
+	DBGC ( intelxl, "INTELXL %p PHY %#02x max frame size %d\n",
+	       intelxl, link->v1.phy, le16_to_cpu ( link->v1.mfs ) );
+
+	return ( le16_to_cpu ( link->v1.mfs ) );
+}
+
+/**
+ * Get maximum frame size (API version 2)
+ *
+ * @v intelxl		Intel device
+ * @v link		Response parameters
+ * @v buf		Response data buffer
+ * @ret mfs		Maximum frame size
+ */
+static unsigned int
+intelxl_admin_link_mfs_v2 ( struct intelxl_nic *intelxl,
+			    union intelxl_admin_link_params *link __unused,
+			    union intelxl_admin_buffer *buf ) {
+
+	DBGC ( intelxl, "INTELXL %p max frame size %d\n",
+	       intelxl, le16_to_cpu ( buf->link.mfs ) );
+
+	return ( le16_to_cpu ( buf->link.mfs ) );
+}
+
+/**
  * Get maximum frame size
  *
  * @v netdev		Network device
  * @v link		Response parameters
+ * @v buf		Response data buffer
  */
 static void intelxl_admin_link_mfs ( struct net_device *netdev,
-				     struct intelxl_admin_link_params *link ) {
+				     union intelxl_admin_link_params *link,
+				     union intelxl_admin_buffer *buf ) {
 	struct intelxl_nic *intelxl = netdev->priv;
+	size_t mfs;
 
-	DBGC ( intelxl, "INTELXL %p PHY %#02x max frame size %d\n",
-	       intelxl, link->phy, le16_to_cpu ( link->mfs ) );
+	/* Parse maximum frame size */
+	mfs = intelxl->api->mfs ( intelxl, link, buf );
 
 	/* Record maximum packet length */
-	netdev->max_pkt_len = ( le16_to_cpu ( link->mfs ) - 4 /* CRC */ );
+	netdev->max_pkt_len = ( mfs - 4 /* CRC */ );
 }
 
 /**
@@ -874,24 +955,30 @@ static void intelxl_admin_link_mfs ( struct net_device *netdev,
 static int
 intelxl_admin_link ( struct net_device *netdev,
 		     void ( * op ) ( struct net_device *netdev,
-				     struct intelxl_admin_link_params *link ) ){
+				     union intelxl_admin_link_params *link,
+				     union intelxl_admin_buffer *buf ) ) {
 	struct intelxl_nic *intelxl = netdev->priv;
 	struct intelxl_admin_descriptor *cmd;
-	struct intelxl_admin_link_params *link;
+	union intelxl_admin_link_params *link;
+	union intelxl_admin_buffer *buf;
 	int rc;
 
 	/* Populate descriptor */
 	cmd = intelxl_admin_command_descriptor ( intelxl );
 	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_LINK );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
+	cmd->len = cpu_to_le16 ( sizeof ( buf->link ) );
 	link = &cmd->params.link;
-	link->notify = INTELXL_ADMIN_LINK_NOTIFY;
+	link->v1.notify = INTELXL_ADMIN_LINK_NOTIFY;
+	link->v2.notify = INTELXL_ADMIN_LINK_NOTIFY;
+	buf = intelxl_admin_command_buffer ( intelxl );
 
 	/* Issue command */
 	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
 		return rc;
 
 	/* Parse response */
-	op ( netdev, link );
+	op ( netdev, link, buf );
 
 	return 0;
 }
@@ -1778,6 +1865,8 @@ static struct intelxl_api_version intelxl_api_v1 = {
 	.name = "XL710",
 	.sw_buf_len = sizeof ( struct intelxl_admin_switch_config_v1 ),
 	.sw = intelxl_admin_switch_v1,
+	.link = intelxl_admin_link_status_v1,
+	.mfs = intelxl_admin_link_mfs_v1,
 };
 
 /** Updated E810 API version */
@@ -1785,6 +1874,8 @@ static struct intelxl_api_version intelxl_api_v2 = {
 	.name = "E810",
 	.sw_buf_len = sizeof ( struct intelxl_admin_switch_config_v2 ),
 	.sw = intelxl_admin_switch_v2,
+	.link = intelxl_admin_link_status_v2,
+	.mfs = intelxl_admin_link_mfs_v2,
 };
 
 /**
