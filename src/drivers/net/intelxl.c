@@ -607,6 +607,68 @@ static int intelxl_admin_clear_pxe ( struct intelxl_nic *intelxl ) {
 }
 
 /**
+ * Get switch configuration (API version 1)
+ *
+ * @v intelxl		Intel device
+ * @v sw		Response parameters
+ * @v buf		Response data buffer
+ */
+static void
+intelxl_admin_switch_v1 ( struct intelxl_nic *intelxl,
+			  struct intelxl_admin_switch_params *sw __unused,
+			  union intelxl_admin_buffer *buf ) {
+
+	/* Dump raw configuration */
+	DBGC2 ( intelxl, "INTELXL %p SEID %#04x:\n",
+		intelxl, le16_to_cpu ( buf->sw.v1.cfg[0].seid ) );
+	DBGC2_HDA ( intelxl, 0, &buf->sw.v1.cfg[0],
+		    sizeof ( buf->sw.v1.cfg[0] ) );
+
+	/* Ignore non-VSI elements */
+	if ( buf->sw.v1.cfg[0].type != INTELXL_ADMIN_SWITCH_V1_TYPE_VSI )
+		return;
+
+	/* Parse VSI */
+	intelxl->vsi = le16_to_cpu ( buf->sw.v1.cfg[0].seid );
+	DBGC ( intelxl, "INTELXL %p VSI %#04x uplink %#04x downlink %#04x "
+	       "conn %#02x\n", intelxl, intelxl->vsi,
+	       le16_to_cpu ( buf->sw.v1.cfg[0].uplink ),
+	       le16_to_cpu ( buf->sw.v1.cfg[0].downlink ),
+	       buf->sw.v1.cfg[0].connection );
+}
+
+/**
+ * Get switch configuration (API version 2)
+ *
+ * @v intelxl		Intel device
+ * @v sw		Response parameters
+ * @v buf		Response data buffer
+ */
+static void
+intelxl_admin_switch_v2 ( struct intelxl_nic *intelxl,
+			  struct intelxl_admin_switch_params *sw __unused,
+			  union intelxl_admin_buffer *buf ) {
+
+	/* Dump raw configuration */
+	DBGC2 ( intelxl, "INTELXL %p SEID %#04x:\n",
+		intelxl, le16_to_cpu ( buf->sw.v2.cfg[0].seid ) );
+	DBGC2_HDA ( intelxl, 0, &buf->sw.v2.cfg[0],
+		    sizeof ( buf->sw.v2.cfg[0] ) );
+
+	/* Ignore non-VSI elements */
+	if ( ( buf->sw.v2.cfg[0].seid & INTELXL_ADMIN_SWITCH_V2_TYPE_MASK ) !=
+	     INTELXL_ADMIN_SWITCH_V2_TYPE_VSI ) {
+		return;
+	}
+
+	/* Parse VSI */
+	intelxl->vsi = le16_to_cpu ( buf->sw.v2.cfg[0].seid );
+	DBGC ( intelxl, "INTELXL %p VSI %#04x uplink %#04x func %#04x\n",
+	       intelxl, intelxl->vsi, le16_to_cpu ( buf->sw.v2.cfg[0].uplink ),
+	       le16_to_cpu ( buf->sw.v2.cfg[0].func ) );
+}
+
+/**
  * Get switch configuration
  *
  * @v intelxl		Intel device
@@ -616,7 +678,7 @@ static int intelxl_admin_switch ( struct intelxl_nic *intelxl ) {
 	struct intelxl_admin_descriptor *cmd;
 	struct intelxl_admin_switch_params *sw;
 	union intelxl_admin_buffer *buf;
-	uint16_t next = 0;
+	uint32_t next = 0;
 	int rc;
 
 	/* Get each configuration in turn */
@@ -625,7 +687,7 @@ static int intelxl_admin_switch ( struct intelxl_nic *intelxl ) {
 		cmd = intelxl_admin_command_descriptor ( intelxl );
 		cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_SWITCH );
 		cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
-		cmd->len = cpu_to_le16 ( sizeof ( buf->sw ) );
+		cmd->len = cpu_to_le16 ( intelxl->api->sw_buf_len );
 		sw = &cmd->params.sw;
 		sw->next = next;
 		buf = intelxl_admin_command_buffer ( intelxl );
@@ -634,20 +696,8 @@ static int intelxl_admin_switch ( struct intelxl_nic *intelxl ) {
 		if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
 			return rc;
 
-		/* Dump raw configuration */
-		DBGC2 ( intelxl, "INTELXL %p SEID %#04x:\n",
-			intelxl, le16_to_cpu ( buf->sw.cfg.seid ) );
-		DBGC2_HDA ( intelxl, 0, &buf->sw.cfg, sizeof ( buf->sw.cfg ) );
-
 		/* Parse response */
-		if ( buf->sw.cfg.type == INTELXL_ADMIN_SWITCH_TYPE_VSI ) {
-			intelxl->vsi = le16_to_cpu ( buf->sw.cfg.seid );
-			DBGC ( intelxl, "INTELXL %p VSI %#04x uplink %#04x "
-			       "downlink %#04x conn %#02x\n", intelxl,
-			       intelxl->vsi, le16_to_cpu ( buf->sw.cfg.uplink ),
-			       le16_to_cpu ( buf->sw.cfg.downlink ),
-			       buf->sw.cfg.connection );
-		}
+		intelxl->api->sw ( intelxl, sw, buf );
 
 	} while ( ( next = sw->next ) );
 
@@ -1726,11 +1776,15 @@ static struct net_device_operations intelxl_operations = {
 /** Original XL710 API version */
 static struct intelxl_api_version intelxl_api_v1 = {
 	.name = "XL710",
+	.sw_buf_len = sizeof ( struct intelxl_admin_switch_config_v1 ),
+	.sw = intelxl_admin_switch_v1,
 };
 
 /** Updated E810 API version */
 static struct intelxl_api_version intelxl_api_v2 = {
 	.name = "E810",
+	.sw_buf_len = sizeof ( struct intelxl_admin_switch_config_v2 ),
+	.sw = intelxl_admin_switch_v2,
 };
 
 /**

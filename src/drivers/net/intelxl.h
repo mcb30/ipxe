@@ -216,7 +216,7 @@ struct intelxl_admin_clear_pxe_params {
 #define INTELXL_ADMIN_SWITCH 0x0200
 
 /** Switching element configuration */
-struct intelxl_admin_switch_config {
+struct intelxl_admin_switch_config_v1 {
 	/** Switching element type */
 	uint8_t type;
 	/** Revision */
@@ -238,29 +238,53 @@ struct intelxl_admin_switch_config {
 } __attribute__ (( packed ));
 
 /** Virtual Station Inferface element type */
-#define INTELXL_ADMIN_SWITCH_TYPE_VSI 19
+#define INTELXL_ADMIN_SWITCH_V1_TYPE_VSI 19
+
+/** Switching element configuration */
+struct intelxl_admin_switch_config_v2 {
+	/** Switching element ID and flags */
+	uint16_t seid;
+	/** Uplink switching element ID */
+	uint16_t uplink;
+	/** PF/VF number */
+	uint16_t func;
+} __attribute__ (( packed ));
+
+/** Switching element ID type mask */
+#define INTELXL_ADMIN_SWITCH_V2_TYPE_MASK 0xc000
+
+/** Virtual Station Interface element type */
+#define INTELXL_ADMIN_SWITCH_V2_TYPE_VSI 0x8000
 
 /** Admin queue Get Switch Configuration command parameters */
 struct intelxl_admin_switch_params {
 	/** Starting switching element identifier */
-	uint16_t next;
+	uint32_t next;
 	/** Reserved */
-	uint8_t reserved[6];
+	uint8_t reserved[4];
 	/** Data buffer address */
 	uint64_t address;
 } __attribute__ (( packed ));
 
 /** Admin queue Get Switch Configuration data buffer */
-struct intelxl_admin_switch_buffer {
-	/** Number of switching elements reported */
-	uint16_t count;
-	/** Total number of switching elements */
-	uint16_t total;
-	/** Reserved */
-	uint8_t reserved_a[12];
-	/** Switch configuration */
-	struct intelxl_admin_switch_config cfg;
-} __attribute__ (( packed ));
+union intelxl_admin_switch_buffer {
+	/** Version 1 */
+	struct {
+		/** Number of switching elements reported */
+		uint16_t count;
+		/** Total number of switching elements */
+		uint16_t total;
+		/** Reserved */
+		uint8_t reserved_a[12];
+		/** Switch configuration */
+		struct intelxl_admin_switch_config_v1 cfg[1];
+	} __attribute__ (( packed )) v1;
+	/** Version 2 */
+	struct {
+		/** Switch configuration */
+		struct intelxl_admin_switch_config_v2 cfg[1];
+	} __attribute__ (( packed )) v2;
+};
 
 /** Admin queue Get VSI Parameters command */
 #define INTELXL_ADMIN_VSI 0x0212
@@ -592,7 +616,7 @@ union intelxl_admin_buffer {
 	/** Manage MAC Address Read data buffer */
 	struct intelxl_admin_mac_read_buffer mac_read;
 	/** Get Switch Configuration data buffer */
-	struct intelxl_admin_switch_buffer sw;
+	union intelxl_admin_switch_buffer sw;
 	/** Get VSI Parameters data buffer */
 	struct intelxl_admin_vsi_buffer vsi;
 	/** VF Version data buffer */
@@ -1116,6 +1140,18 @@ struct intelxl_msix {
 struct intelxl_api_version {
 	/** Name */
 	const char *name;
+	/** Get Switch Configuration buffer length */
+	size_t sw_buf_len;
+	/**
+	 * Get switch configuration
+	 *
+	 * @v intelxl		Intel device
+	 * @v sw		Response parameters
+	 * @v buf		Response data buffer
+	 */
+	void ( * sw ) ( struct intelxl_nic *intelxl,
+			struct intelxl_admin_switch_params *sw,
+			union intelxl_admin_buffer *buf );
 };
 
 /** An Intel 40 Gigabit network card */
