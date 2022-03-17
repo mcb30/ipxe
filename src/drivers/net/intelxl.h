@@ -89,9 +89,21 @@ struct intelxl_admin_buffer_params {
 /** Admin queue version number */
 struct intelxl_admin_version {
 	/** Major version number */
-	uint16_t major;
+	union {
+		/** Original 16-bit major version number */
+		uint16_t major16;
+		/** Branch-based major version number */
+		struct {
+			/** Branch identifier */
+			uint8_t branch;
+			/** New 8-bit major version number */
+			uint8_t major8;
+		} __attribute__ (( packed ));
+	};
 	/** Minor version number */
-	uint16_t minor;
+	uint8_t minor;
+	/** Patch level */
+	uint8_t patch;
 } __attribute__ (( packed ));
 
 /** Admin queue Get Version command parameters */
@@ -1100,6 +1112,12 @@ struct intelxl_msix {
 /** MSI-X interrupt vector */
 #define INTELXL_MSIX_VECTOR 0
 
+/** API version */
+struct intelxl_api_version {
+	/** Name */
+	const char *name;
+};
+
 /** An Intel 40 Gigabit network card */
 struct intelxl_nic {
 	/** Registers */
@@ -1132,6 +1150,8 @@ struct intelxl_nic {
 	struct intelxl_admin command;
 	/** Admin event queue */
 	struct intelxl_admin event;
+	/** API version */
+	struct intelxl_api_version *api;
 
 	/** Current VF opcode */
 	unsigned int vopcode;

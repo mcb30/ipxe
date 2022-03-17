@@ -44,6 +44,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  *
  */
 
+static struct intelxl_api_version intelxl_api_v1;
+static struct intelxl_api_version intelxl_api_v2;
+
 /******************************************************************************
  *
  * MSI-X interrupts
@@ -406,6 +409,7 @@ static int intelxl_admin_version ( struct intelxl_nic *intelxl ) {
 	struct intelxl_admin_descriptor *cmd;
 	struct intelxl_admin_version_params *version;
 	unsigned int api;
+	unsigned int fw;
 	int rc;
 
 	/* Populate descriptor */
@@ -416,19 +420,29 @@ static int intelxl_admin_version ( struct intelxl_nic *intelxl ) {
 	/* Issue command */
 	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
 		return rc;
-	api = le16_to_cpu ( version->api.major );
-	DBGC ( intelxl, "INTELXL %p firmware v%d.%d API v%d.%d\n",
-	       intelxl, le16_to_cpu ( version->firmware.major ),
-	       le16_to_cpu ( version->firmware.minor ),
-	       api, le16_to_cpu ( version->api.minor ) );
 
-	/* Check for API compatibility */
-	if ( api > INTELXL_ADMIN_API_MAJOR ) {
+	/* Parse API version */
+	if ( version->api.major16 == cpu_to_le16 ( INTELXL_ADMIN_API_MAJOR ) ){
+		/* Original XL710 API (nominally version 1) */
+		intelxl->api = &intelxl_api_v1;
+		api = le16_to_cpu ( version->api.major16 );
+		fw = le16_to_cpu ( version->firmware.major16 );
+	} else if ( version->api.major8 == INTELXL_ADMIN_API_MAJOR ) {
+		/* Updated E810 API (also nominally version 1) */
+		intelxl->api = &intelxl_api_v2;
+		api = version->api.major8;
+		fw = version->firmware.major8;
+	} else {
+		/* Unknown API */
 		DBGC ( intelxl, "INTELXL %p unsupported API v%d\n",
-		       intelxl, api );
+		       intelxl, version->api.major8 );
 		return -ENOTSUP;
 	}
 
+	DBGC ( intelxl, "INTELXL %p firmware v%d.%d.%d using %s API "
+	       "v%d.%d.%d\n", intelxl, fw, version->firmware.minor,
+	       version->firmware.patch, intelxl->api->name, api,
+	       version->api.minor, version->api.patch );
 	return 0;
 }
 
@@ -1708,6 +1722,16 @@ static struct net_device_operations intelxl_operations = {
  *
  ******************************************************************************
  */
+
+/** Original XL710 API version */
+static struct intelxl_api_version intelxl_api_v1 = {
+	.name = "XL710",
+};
+
+/** Updated E810 API version */
+static struct intelxl_api_version intelxl_api_v2 = {
+	.name = "E810",
+};
 
 /**
  * Probe PCI device
