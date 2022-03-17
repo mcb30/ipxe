@@ -803,6 +803,9 @@ static int intelxl_admin_promisc ( struct intelxl_nic *intelxl ) {
 	uint16_t flags;
 	int rc;
 
+	//
+	return 0;
+
 	/* Populate descriptor */
 	cmd = intelxl_admin_command_descriptor ( intelxl );
 	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_PROMISC );
@@ -2145,6 +2148,11 @@ static struct pci_device_id intelxl_nics[] = {
 	PCI_ROM ( 0x8086, 0x37d1, "x722-1gt", "X722 1GBASE-T", 0 ),
 	PCI_ROM ( 0x8086, 0x37d2, "x722-10gt", "X722 10GBASE-T", 0 ),
 	PCI_ROM ( 0x8086, 0x37d3, "x722-sfp-i", "X722 10GbE SFP+", 0 ),
+
+	// HACK for ice
+	PCI_ROM ( 0x8086, 0x159b, "ice", "Ice ice baby", 0 ),
+
+
 };
 
 /** PCI driver */

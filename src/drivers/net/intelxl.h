@@ -1168,7 +1168,7 @@ intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count, size_t len,
 #define INTELXL_QINT_TQCTL_CAUSE_ENA	0x40000000UL	/**< Enable */
 
 /** Function Requester ID Information Register */
-#define INTELXL_PFFUNC_RID 0x09c000
+#define INTELXL_PFFUNC_RID 0x09e880  // 0x09c000
 #define INTELXL_PFFUNC_RID_FUNC_NUM(x) \
 	( ( (x) >> 0 ) & 0x7 )				/**< Function number */
 
@@ -1180,9 +1180,9 @@ intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count, size_t len,
 	( ( (x) >> 16 ) & 0x7ff )			/**< Last queue */
 
 /** PF LAN Port Number Register */
-#define INTELXL_PFGEN_PORTNUM 0x1c0480
+#define INTELXL_PFGEN_PORTNUM 0x1d2400  // 0x1c0480
 #define INTELXL_PFGEN_PORTNUM_PORT_NUM(x) \
-	( ( (x) >> 0 ) & 0x3 )				/**< Port number */
+	( ( (x) >> 0 ) & 0x7 )				/**< Port number */
 
 /** MSI-X interrupt */
 struct intelxl_msix {
