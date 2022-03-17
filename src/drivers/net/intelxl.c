@@ -1687,21 +1687,6 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	/* Reset the function via PCIe FLR */
 	pci_reset ( pci, intelxl->exp );
 
-	/* Get function number, port number and base queue number */
-	pffunc_rid = readl ( intelxl->regs + INTELXL_PFFUNC_RID );
-	intelxl->pf = INTELXL_PFFUNC_RID_FUNC_NUM ( pffunc_rid );
-	pfgen_portnum = readl ( intelxl->regs + INTELXL_PFGEN_PORTNUM );
-	intelxl->port = INTELXL_PFGEN_PORTNUM_PORT_NUM ( pfgen_portnum );
-	pflan_qalloc = readl ( intelxl->regs + INTELXL_PFLAN_QALLOC );
-	intelxl->base = INTELXL_PFLAN_QALLOC_FIRSTQ ( pflan_qalloc );
-	DBGC ( intelxl, "INTELXL %p PF %d using port %d queues [%#04x-%#04x]\n",
-	       intelxl, intelxl->pf, intelxl->port, intelxl->base,
-	       INTELXL_PFLAN_QALLOC_LASTQ ( pflan_qalloc ) );
-
-	/* Fetch MAC address and maximum frame size */
-	if ( ( rc = intelxl_fetch_mac ( intelxl, netdev ) ) != 0 )
-		goto err_fetch_mac;
-
 	/* Enable MSI-X dummy interrupt */
 	if ( ( rc = intelxl_msix_enable ( intelxl, pci,
 					  INTELXL_MSIX_VECTOR ) ) != 0 )
@@ -1735,6 +1720,21 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	if ( ( rc = intelxl_admin_promisc ( intelxl ) ) != 0 )
 		goto err_admin_promisc;
 
+	/* Fetch MAC address and maximum frame size */
+	if ( ( rc = intelxl_fetch_mac ( intelxl, netdev ) ) != 0 )
+		goto err_fetch_mac;
+
+	/* Get function number, port number and base queue number */
+	pffunc_rid = readl ( intelxl->regs + INTELXL_PFFUNC_RID );
+	intelxl->pf = INTELXL_PFFUNC_RID_FUNC_NUM ( pffunc_rid );
+	pfgen_portnum = readl ( intelxl->regs + INTELXL_PFGEN_PORTNUM );
+	intelxl->port = INTELXL_PFGEN_PORTNUM_PORT_NUM ( pfgen_portnum );
+	pflan_qalloc = readl ( intelxl->regs + INTELXL_PFLAN_QALLOC );
+	intelxl->base = INTELXL_PFLAN_QALLOC_FIRSTQ ( pflan_qalloc );
+	DBGC ( intelxl, "INTELXL %p PF %d using port %d queues [%#04x-%#04x]\n",
+	       intelxl, intelxl->pf, intelxl->port, intelxl->base,
+	       INTELXL_PFLAN_QALLOC_LASTQ ( pflan_qalloc ) );
+
 	/* Configure queue register addresses */
 	intelxl->tx.reg = INTELXL_QTX ( intelxl->queue );
 	intelxl->tx.tail = ( intelxl->tx.reg + INTELXL_QXX_TAIL );
@@ -1766,6 +1766,7 @@ static int intelxl_probe ( struct pci_device *pci ) {
 
 	unregister_netdev ( netdev );
  err_register_netdev:
+ err_fetch_mac:
  err_admin_promisc:
  err_admin_vsi:
  err_admin_switch:
@@ -1776,7 +1777,6 @@ static int intelxl_probe ( struct pci_device *pci ) {
  err_open_admin:
 	intelxl_msix_disable ( intelxl, pci, INTELXL_MSIX_VECTOR );
  err_msix:
- err_fetch_mac:
 	pci_reset ( pci, intelxl->exp );
  err_exp:
 	iounmap ( intelxl->regs );
