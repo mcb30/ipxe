@@ -502,6 +502,46 @@ static int intelxl_admin_shutdown ( struct intelxl_nic *intelxl ) {
 }
 
 /**
+ * Get MAC address (API version 1)
+ *
+ * @v intelxl		Intel device
+ * @v read		Response parameters
+ * @v buf		Response data buffer
+ * @ret mac		MAC address, or NULL on error
+ */
+static uint8_t *
+intelxl_admin_mac_read_v1 ( struct intelxl_nic *intelxl __unused,
+			    struct intelxl_admin_mac_read_params *read __unused,
+			    union intelxl_admin_buffer *buf ) {
+
+	return buf->mac_read.v1.pf;
+}
+
+/**
+ * Get MAC address (API version 2)
+ *
+ * @v intelxl		Intel device
+ * @v read		Response parameters
+ * @v buf		Response data buffer
+ * @ret mac		MAC address, or NULL on error
+ */
+static uint8_t *
+intelxl_admin_mac_read_v2 ( struct intelxl_nic *intelxl __unused,
+			    struct intelxl_admin_mac_read_params *read,
+			    union intelxl_admin_buffer *buf ) {
+	struct intelxl_admin_mac_read_address *mac;
+	unsigned int i;
+
+	for ( i = 0 ; i < read->count ; i++ ) {
+		mac = &buf->mac_read.v2.mac[i];
+		if ( mac->type == INTELXL_ADMIN_MAC_READ_TYPE_LAN )
+			return mac->mac;
+	}
+
+	return NULL;
+}
+
+/**
  * Get MAC address
  *
  * @v netdev		Network device
@@ -522,7 +562,6 @@ static int intelxl_admin_mac_read ( struct net_device *netdev ) {
 	cmd->len = cpu_to_le16 ( sizeof ( buf->driver ) );
 	read = &cmd->params.mac_read;
 	buf = intelxl_admin_command_buffer ( intelxl );
-	mac = buf->mac_read.pf;
 
 	/* Issue command */
 	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
@@ -531,6 +570,14 @@ static int intelxl_admin_mac_read ( struct net_device *netdev ) {
 	/* Check that MAC address is present in response */
 	if ( ! ( read->valid & INTELXL_ADMIN_MAC_READ_VALID_LAN ) ) {
 		DBGC ( intelxl, "INTELXL %p has no MAC address\n", intelxl );
+		return -ENOENT;
+	}
+
+	/* Parse MAC address */
+	mac = intelxl->api->mac_read ( intelxl, read, buf );
+	if ( ! mac ) {
+		DBGC ( intelxl, "INTELXL %p has missing MAC address\n",
+		       intelxl );
 		return -ENOENT;
 	}
 
@@ -1864,6 +1911,7 @@ static struct net_device_operations intelxl_operations = {
 static struct intelxl_api_version intelxl_api_v1 = {
 	.name = "XL710",
 	.sw_buf_len = sizeof ( struct intelxl_admin_switch_config_v1 ),
+	.mac_read = intelxl_admin_mac_read_v1,
 	.sw = intelxl_admin_switch_v1,
 	.link = intelxl_admin_link_status_v1,
 	.mfs = intelxl_admin_link_mfs_v1,
@@ -1873,6 +1921,7 @@ static struct intelxl_api_version intelxl_api_v1 = {
 static struct intelxl_api_version intelxl_api_v2 = {
 	.name = "E810",
 	.sw_buf_len = sizeof ( struct intelxl_admin_switch_config_v2 ),
+	.mac_read = intelxl_admin_mac_read_v2,
 	.sw = intelxl_admin_switch_v2,
 	.link = intelxl_admin_link_status_v2,
 	.mfs = intelxl_admin_link_mfs_v2,

@@ -165,22 +165,47 @@ struct intelxl_admin_mac_read_params {
 	/** Valid addresses */
 	uint8_t valid;
 	/** Reserved */
-	uint8_t reserved[15];
+	uint8_t reserved_a[3];
+	/** Number of addresses in response */
+	uint8_t count;
+	/** Reserved */
+	uint8_t reserved_b[11];
 } __attribute__ (( packed ));
 
 /** LAN MAC address is valid */
 #define INTELXL_ADMIN_MAC_READ_VALID_LAN 0x10
 
+/** MAC Address description */
+struct intelxl_admin_mac_read_address {
+	/** Port number */
+	uint8_t port;
+	/** Address type */
+	uint8_t type;
+	/** MAC address */
+	uint8_t mac[ETH_ALEN];
+} __attribute__ (( packed ));
+
+/** LAN MAC address type */
+#define INTELXL_ADMIN_MAC_READ_TYPE_LAN 0
+
 /** Admin queue Manage MAC Address Read data buffer */
-struct intelxl_admin_mac_read_buffer {
-	/** Physical function MAC address */
-	uint8_t pf[ETH_ALEN];
-	/** Reserved */
-	uint8_t reserved[ETH_ALEN];
-	/** Port MAC address */
-	uint8_t port[ETH_ALEN];
-	/** Physical function wake-on-LAN MAC address */
-	uint8_t wol[ETH_ALEN];
+union intelxl_admin_mac_read_buffer {
+	/** Version 1 */
+	struct {
+		/** Physical function MAC address */
+		uint8_t pf[ETH_ALEN];
+		/** Reserved */
+		uint8_t reserved[ETH_ALEN];
+		/** Port MAC address */
+		uint8_t port[ETH_ALEN];
+		/** Physical function wake-on-LAN MAC address */
+		uint8_t wol[ETH_ALEN];
+	} __attribute__ (( packed )) v1;
+	/** Version 2 */
+	struct {
+		/** MAC addresses */
+		struct intelxl_admin_mac_read_address mac[4];
+	} __attribute__ (( packed )) v2;
 } __attribute__ (( packed ));
 
 /** Admin queue Manage MAC Address Write command */
@@ -648,7 +673,7 @@ union intelxl_admin_buffer {
 	/** Driver Version data buffer */
 	struct intelxl_admin_driver_buffer driver;
 	/** Manage MAC Address Read data buffer */
-	struct intelxl_admin_mac_read_buffer mac_read;
+	union intelxl_admin_mac_read_buffer mac_read;
 	/** Get Switch Configuration data buffer */
 	union intelxl_admin_switch_buffer sw;
 	/** Get VSI Parameters data buffer */
@@ -1178,6 +1203,17 @@ struct intelxl_api_version {
 	const char *name;
 	/** Get Switch Configuration buffer length */
 	size_t sw_buf_len;
+	/**
+	 * Get MAC address
+	 *
+	 * @v intelxl		Intel device
+	 * @v read		Response parameters
+	 * @v buf		Response data buffer
+	 * @ret mac		MAC address, or NULL on error
+	 */
+	uint8_t * ( * mac_read ) ( struct intelxl_nic *intelxl,
+				   struct intelxl_admin_mac_read_params *read,
+				   union intelxl_admin_buffer *buf );
 	/**
 	 * Get switch configuration
 	 *
