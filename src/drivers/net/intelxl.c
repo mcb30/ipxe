@@ -1109,6 +1109,51 @@ intelxl_admin_link ( struct net_device *netdev,
 }
 
 /**
+ * Query default scheduling tree topology
+ *
+ * @v intelxl		Intel device
+ * @ret rc		Return status code
+ */
+static int intelxl_admin_query_schedule ( struct intelxl_nic *intelxl ) {
+	struct intelxl_admin_descriptor *cmd;
+	struct intelxl_admin_query_schedule_params *sched;
+	union intelxl_admin_buffer *buf;
+	struct intelxl_admin_query_schedule_branch *branch;
+	struct intelxl_admin_query_schedule_element *element;
+	unsigned int i;
+	unsigned int j;
+	int rc;
+
+	/* Populate descriptor */
+	cmd = intelxl_admin_command_descriptor ( intelxl );
+	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_QUERY_SCHEDULE );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
+	cmd->len = cpu_to_le16 ( sizeof ( buf->sched ) );
+	sched = &cmd->params.sched;
+	buf = intelxl_admin_command_buffer ( intelxl );
+
+	/* Issue command */
+	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
+		return rc;
+
+	/* Parse topology */
+	branch = buf->sched.branch;
+	for ( i = 0 ; i < sched->branches ; i++ ) {
+		for ( j = 0 ; j < le16_to_cpu ( branch->count ) ; j++ ) {
+			element = &branch->element[j];
+			DBG ( "*** %d.%d TEID %08x parent %08x type %d\n",
+			      i, j, le32_to_cpu ( element->teid ),
+			      le32_to_cpu ( element->parent ),
+			      element->type );
+			DBG_HDA ( 0, element, sizeof ( *element ) );
+		}
+		branch = ( ( void * ) &branch->element[j] );
+	}
+
+	return 0;
+}
+
+/**
  * Handle virtual function event (when VF driver is not present)
  *
  * @v netdev		Network device
@@ -2103,6 +2148,10 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	if ( ( rc = intelxl_admin_promisc ( intelxl ) ) != 0 )
 		goto err_admin_promisc;
 
+	/* Query scheduler topology */
+	if ( ( rc = intelxl_admin_query_schedule ( intelxl ) ) != 0 )
+		goto err_admin_query_schedule;
+
 	/* Get MAC address */
 	if ( ( rc = intelxl_admin_mac_read ( netdev ) ) != 0 )
 		goto err_admin_mac_read;
@@ -2158,6 +2207,7 @@ static int intelxl_probe ( struct pci_device *pci ) {
  err_register_netdev:
  err_admin_link_mfs:
  err_admin_mac_read:
+ err_admin_query_schedule:
  err_admin_promisc:
  err_admin_vsi:
  err_admin_switch:
