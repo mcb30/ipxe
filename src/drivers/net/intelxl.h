@@ -366,10 +366,10 @@ struct intelxl_admin_promisc_params {
 #define INTELXL_ADMIN_PROMISC_FL_VLAN 0x0010
 
 /** Admin queue Query Default Scheduling Tree Topology command */
-#define INTELXL_ADMIN_QUERY_SCHEDULE 0x0400
+#define INTELXL_ADMIN_SCHEDULE 0x0400
 
 /** Admin queue Query Default Scheduling Tree Topology command parameters */
-struct intelxl_admin_query_schedule_params {
+struct intelxl_admin_schedule_params {
 	/** Reserved */
 	uint8_t reserved_a;
 	/** Total branches */
@@ -378,13 +378,13 @@ struct intelxl_admin_query_schedule_params {
 	uint8_t reserved_b[6];
 } __attribute__ (( packed ));
 
-/** Admin queue Query Default Scheduling Tree Topology element */
-struct intelxl_admin_query_schedule_element {
+/** Admin queue Query Default Scheduling Tree Topology node */
+struct intelxl_admin_schedule_node {
 	/** Parent TEID */
 	uint32_t parent;
 	/** Node TEID */
 	uint32_t teid;
-	/** Element type */
+	/** Node type */
 	uint8_t type;
 	/** Valid sections */
 	uint8_t sections;
@@ -407,21 +407,21 @@ struct intelxl_admin_query_schedule_element {
 } __attribute__ (( packed ));
 
 /** Admin queue Query Default Scheduling Tree Topology branch */
-struct intelxl_admin_query_schedule_branch {
+struct intelxl_admin_schedule_branch {
 	/** Reserved */
 	uint8_t reserved_a[4];
-	/** Number of elements */
+	/** Number of nodes */
 	uint16_t count;
 	/** Reserved */
 	uint8_t reserved_b[2];
-	/** Elements */
-	struct intelxl_admin_query_schedule_element element[0];
+	/** Nodes */
+	struct intelxl_admin_schedule_node node[0];
 } __attribute__ (( packed ));
 
 /** Admin queue Query Default Scheduling Tree Topology data buffer */
-union intelxl_admin_query_schedule_buffer {
+union intelxl_admin_schedule_buffer {
 	/** Branches */
-	struct intelxl_admin_query_schedule_branch branch[0];
+	struct intelxl_admin_schedule_branch branch[0];
 	/** Raw data */
 	uint8_t raw[4096];
 } __attribute__ (( packed ));
@@ -722,7 +722,7 @@ union intelxl_admin_params {
 	/** Set VSI Promiscuous Modes command parameters */
 	struct intelxl_admin_promisc_params promisc;
 	/** Query Default Scheduling Tree Topology command parameters */
-	struct intelxl_admin_query_schedule_params sched;
+	struct intelxl_admin_schedule_params sched;
 	/** Set MAC Configuration command parameters */
 	struct intelxl_admin_mac_config_params mac_config;
 	/** Restart Autonegotiation command parameters */
@@ -742,7 +742,7 @@ union intelxl_admin_buffer {
 	/** Get VSI Parameters data buffer */
 	struct intelxl_admin_vsi_buffer vsi;
 	/** Query Default Scheduling Tree Topology data buffer */
-	union intelxl_admin_query_schedule_buffer sched;
+	union intelxl_admin_schedule_buffer sched;
 	/** Get Link Status data buffer */
 	struct intelxl_admin_link_buffer link;
 	/** VF Version data buffer */
@@ -1336,6 +1336,8 @@ struct intelxl_nic {
 	unsigned int vsi;
 	/** Queue set handle */
 	unsigned int qset;
+	/** Transmit element ID */
+	uint32_t teid;
 	/** Interrupt control register */
 	unsigned int intr;
 	/** PCI Express capability offset */

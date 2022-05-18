@@ -1109,24 +1109,47 @@ intelxl_admin_link ( struct net_device *netdev,
 }
 
 /**
+ * Check if scheduler node is a parent (i.e. non-leaf) node
+ *
+ * @v branch		Scheduler topology branch
+ * @v node		Scheduler topology node
+ * @ret child		Any child node, or NULL if not found
+ */
+static struct intelxl_admin_schedule_node *
+intelxl_admin_schedule_is_parent ( struct intelxl_admin_schedule_branch *branch,
+				   struct intelxl_admin_schedule_node *node ) {
+	unsigned int count = le16_to_cpu ( branch->count );
+	struct intelxl_admin_schedule_node *child;
+	unsigned int i;
+
+	/* Find a child element, if any */
+	for ( i = 0 ; i < count ; i++ ) {
+		child = &branch->node[i];
+		if ( child->parent == node->teid )
+			return child;
+	}
+
+	return NULL;
+}
+
+/**
  * Query default scheduling tree topology
  *
  * @v intelxl		Intel device
  * @ret rc		Return status code
  */
-static int intelxl_admin_query_schedule ( struct intelxl_nic *intelxl ) {
+static int intelxl_admin_schedule ( struct intelxl_nic *intelxl ) {
 	struct intelxl_admin_descriptor *cmd;
-	struct intelxl_admin_query_schedule_params *sched;
+	struct intelxl_admin_schedule_params *sched;
 	union intelxl_admin_buffer *buf;
-	struct intelxl_admin_query_schedule_branch *branch;
-	struct intelxl_admin_query_schedule_element *element;
-	unsigned int i;
-	unsigned int j;
+	struct intelxl_admin_schedule_branch *branch;
+	struct intelxl_admin_schedule_node *node;
+	int i;
 	int rc;
 
 	/* Populate descriptor */
 	cmd = intelxl_admin_command_descriptor ( intelxl );
-	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_QUERY_SCHEDULE );
+	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_SCHEDULE );
 	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
 	cmd->len = cpu_to_le16 ( sizeof ( buf->sched ) );
 	sched = &cmd->params.sched;
@@ -1136,18 +1159,27 @@ static int intelxl_admin_query_schedule ( struct intelxl_nic *intelxl ) {
 	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
 		return rc;
 
-	/* Parse topology */
+	/* Sanity checks */
+	if ( ! sched->branches ) {
+		DBGC ( intelxl, "INTELXL %p topology has no branches\n",
+		       intelxl );
+		return -EINVAL;
+	}
 	branch = buf->sched.branch;
-	for ( i = 0 ; i < sched->branches ; i++ ) {
-		for ( j = 0 ; j < le16_to_cpu ( branch->count ) ; j++ ) {
-			element = &branch->element[j];
-			DBG ( "*** %d.%d TEID %08x parent %08x type %d\n",
-			      i, j, le32_to_cpu ( element->teid ),
-			      le32_to_cpu ( element->parent ),
-			      element->type );
-			DBG_HDA ( 0, element, sizeof ( *element ) );
+
+	/* Identify leaf node */
+	for ( i = ( le16_to_cpu ( branch->count ) - 1 ) ; i >= 0 ; i-- ) {
+		node = &branch->node[i];
+		if ( ! intelxl_admin_schedule_is_parent ( branch, node ) ) {
+			intelxl->teid = le32_to_cpu ( node->teid );
+			DBGC2 ( intelxl, "INTELXL %p TEID %#08x type %d\n",
+				intelxl, intelxl->teid, node->type );
+			break;
 		}
-		branch = ( ( void * ) &branch->element[j] );
+	}
+	if ( ! intelxl->teid ) {
+		DBGC ( intelxl, "INTELXL %p found no leaf TEID\n", intelxl );
+		return -EINVAL;
 	}
 
 	return 0;
@@ -2149,8 +2181,8 @@ static int intelxl_probe ( struct pci_device *pci ) {
 		goto err_admin_promisc;
 
 	/* Query scheduler topology */
-	if ( ( rc = intelxl_admin_query_schedule ( intelxl ) ) != 0 )
-		goto err_admin_query_schedule;
+	if ( ( rc = intelxl_admin_schedule ( intelxl ) ) != 0 )
+		goto err_admin_schedule;
 
 	/* Get MAC address */
 	if ( ( rc = intelxl_admin_mac_read ( netdev ) ) != 0 )
@@ -2207,7 +2239,7 @@ static int intelxl_probe ( struct pci_device *pci ) {
  err_register_netdev:
  err_admin_link_mfs:
  err_admin_mac_read:
- err_admin_query_schedule:
+ err_admin_schedule:
  err_admin_promisc:
  err_admin_vsi:
  err_admin_switch:
