@@ -1173,7 +1173,7 @@ static int intelxl_admin_schedule ( struct intelxl_nic *intelxl ) {
 		if ( ! intelxl_admin_schedule_is_parent ( branch, node ) ) {
 			intelxl->teid = le32_to_cpu ( node->teid );
 			DBGC2 ( intelxl, "INTELXL %p TEID %#08x type %d\n",
-				intelxl, intelxl->teid, node->type );
+				intelxl, intelxl->teid, node->config.type );
 			break;
 		}
 	}

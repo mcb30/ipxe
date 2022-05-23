@@ -378,12 +378,8 @@ struct intelxl_admin_schedule_params {
 	uint8_t reserved_b[6];
 } __attribute__ (( packed ));
 
-/** Admin queue Query Default Scheduling Tree Topology node */
-struct intelxl_admin_schedule_node {
-	/** Parent TEID */
-	uint32_t parent;
-	/** Node TEID */
-	uint32_t teid;
+/** Transmit scheduler configuration */
+struct intelxl_schedule_config {
 	/** Node type */
 	uint8_t type;
 	/** Valid sections */
@@ -404,6 +400,16 @@ struct intelxl_admin_schedule_node {
 	uint16_t shared;
 	/** Reserved */
 	uint16_t reserved;
+} __attribute__ (( packed ));
+
+/** Admin queue Query Default Scheduling Tree Topology node */
+struct intelxl_admin_schedule_node {
+	/** Parent TEID */
+	uint32_t parent;
+	/** Node TEID */
+	uint32_t teid;
+	/** Scheduler configuration */
+	struct intelxl_schedule_config config;
 } __attribute__ (( packed ));
 
 /** Admin queue Query Default Scheduling Tree Topology branch */
@@ -699,6 +705,37 @@ struct intelxl_admin_vf_promisc_buffer {
 	uint16_t flags;
 } __attribute__ (( packed ));
 
+/** Admin queue Add TX LAN Queues command */
+#define INTELXL_ADMIN_ADD_TXQ 0x0c30
+
+/** Admin queue Add TX LAN Queues command parameters */
+struct intelxl_admin_add_txq_params {
+	/** Number of queue groups */
+	uint8_t count;
+	/** Reserved */
+	uint8_t reserved[7];
+} __attribute__ (( packed ));
+
+/** Admin queue Add TX LAN Queues data buffer */
+struct intelxl_admin_add_txq_buffer {
+	/** Parent TEID */
+	uint32_t parent;
+	/** Number of queues */
+	uint8_t count;
+	/** Reserved */
+	uint8_t reserved_a[3];
+	/** TX queue ID */
+	uint16_t id;
+	/** Reserved */
+	uint8_t reserved_b[2];
+	/** Queue TEID */
+	uint32_t teid;
+	/** Queue context */
+	uint8_t context[24];
+	/** Scheduler configuration */
+	struct intelxl_schedule_config config;
+} __attribute__ (( packed ));
+
 /** Admin queue command parameters */
 union intelxl_admin_params {
 	/** Additional data buffer command parameters */
@@ -729,6 +766,8 @@ union intelxl_admin_params {
 	struct intelxl_admin_autoneg_params autoneg;
 	/** Get Link Status command parameters */
 	union intelxl_admin_link_params link;
+	/** Add TX LAN queue command parameters */
+	struct intelxl_admin_add_txq_params add_txq;
 } __attribute__ (( packed ));
 
 /** Admin queue data buffer */
@@ -759,6 +798,8 @@ union intelxl_admin_buffer {
 	struct intelxl_admin_vf_promisc_buffer promisc;
 	/** VF IRQ Map data buffer */
 	struct intelxl_admin_vf_irq_map_buffer irq;
+	/** Add TX LAN queue data buffer */
+	struct intelxl_admin_add_txq_buffer add_txq;
 	/** Alignment padding */
 	uint8_t pad[INTELXL_ALIGN];
 } __attribute__ (( packed ));
