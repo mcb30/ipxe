@@ -1186,6 +1186,57 @@ static int intelxl_admin_schedule ( struct intelxl_nic *intelxl ) {
 }
 
 /**
+ * Add transmit queue
+ *
+ * @v intelxl		Intel device
+ * @v ring		Descriptor ring
+ * @ret rc		Return status code
+ */
+static int intelxl_admin_add_txq ( struct intelxl_nic *intelxl,
+				   struct intelxl_ring *ring ) {
+	struct intelxl_admin_descriptor *cmd;
+	struct intelxl_admin_add_txq_params *add_txq;
+	union intelxl_admin_buffer *buf;
+	physaddr_t address;
+	unsigned int port;
+	unsigned int pf;
+	int rc;
+
+	//
+	port = 1;
+	pf = 1;
+
+	/* Populate descriptor */
+	cmd = intelxl_admin_command_descriptor ( intelxl );
+	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_ADD_TXQ );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_RD | INTELXL_ADMIN_FL_BUF );
+	cmd->len = cpu_to_le16 ( sizeof ( buf->add_txq ) );
+	add_txq = &cmd->params.add_txq;
+	add_txq->count = 1;
+	buf = intelxl_admin_command_buffer ( intelxl );
+	buf->add_txq.parent = cpu_to_le32 ( intelxl->teid );
+	buf->add_txq.count = 1;
+	address = dma ( &ring->map, ring->desc.raw );
+	buf->add_txq.base_port =
+		cpu_to_le64 ( ICE_TXQ_BASE_PORT ( address, port ) );
+	buf->add_txq.pf_type = cpu_to_le16 ( ICE_TXQ_PF_TYPE ( pf ) );
+	buf->add_txq.vsi = cpu_to_le16 ( intelxl->vsi );
+	buf->add_txq.len = cpu_to_le16 ( ICE_TXQ_LEN ( INTELXL_TX_NUM_DESC ) );
+	buf->add_txq.flags = cpu_to_le16 ( ICE_TXQ_FL_TSO | ICE_TXQ_FL_LEGACY );
+	buf->add_txq.config.sections = 0x01; // hack
+
+	/* Issue command */
+	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
+		return rc;
+
+	//
+	DBGC ( intelxl, "INTELXL %p added TEID %#04x\n", intelxl,
+	       le32_to_cpu ( buf->add_txq.teid ) );
+
+	return 0;
+}
+
+/**
  * Handle virtual function event (when VF driver is not present)
  *
  * @v netdev		Network device
@@ -1810,18 +1861,24 @@ static int intelxl_open ( struct net_device *netdev ) {
 		goto err_mac_config;
 
 	/* Associate transmit queue to PF */
+	if ( 0 ) {
 	writel ( ( INTELXL_QXX_CTL_PFVF_Q_PF |
 		   INTELXL_QXX_CTL_PFVF_PF_INDX ( intelxl->pf ) ),
 		 ( intelxl->regs + intelxl->tx.reg + INTELXL_QXX_CTL ) );
+	}
 
 	/* Clear transmit pre queue disable */
+	if ( 0 ) {
 	queue = ( intelxl->base + intelxl->queue );
 	writel ( ( INTELXL_GLLAN_TXPRE_QDIS_CLEAR_QDIS |
 		   INTELXL_GLLAN_TXPRE_QDIS_QINDX ( queue ) ),
 		 ( intelxl->regs + INTELXL_GLLAN_TXPRE_QDIS ( queue ) ) );
+	}
 
 	/* Reset transmit queue head */
+	if ( 0 ) {
 	writel ( 0, ( intelxl->regs + INTELXL_QTX_HEAD ( intelxl->queue ) ) );
+	}
 
 	/* Create receive descriptor ring */
 	if ( ( rc = intelxl_create_ring ( intelxl, &intelxl->rx ) ) != 0 )
@@ -1830,6 +1887,10 @@ static int intelxl_open ( struct net_device *netdev ) {
 	/* Create transmit descriptor ring */
 	if ( 0 && ( rc = intelxl_create_ring ( intelxl, &intelxl->tx ) ) != 0 )
 		goto err_create_tx;
+
+	//
+	intelxl_alloc_ring ( intelxl, &intelxl->tx );
+	intelxl_admin_add_txq ( intelxl, &intelxl->tx );
 
 	/* Fill receive ring */
 	intelxl_refill_rx ( intelxl );

@@ -730,11 +730,37 @@ struct intelxl_admin_add_txq_buffer {
 	uint8_t reserved_b[2];
 	/** Queue TEID */
 	uint32_t teid;
+
 	/** Queue context */
-	uint8_t context[24];
+	//	uint8_t context[24];
+
+	/** Base address */
+	uint64_t base_port;
+	/** PF number and queue type */
+	uint16_t pf_type;
+	/** Source VSI */
+	uint16_t vsi;
+	//
+	uint8_t reserved_x[5];
+	/** Queue length */
+	uint16_t len;
+	/** Flags */
+	uint16_t flags;
+	//
+	uint8_t reserved_y[3];
+
 	/** Scheduler configuration */
 	struct intelxl_schedule_config config;
 } __attribute__ (( packed ));
+
+
+#define ICE_TXQ_BASE_PORT( addr, port ) \
+	( ( (addr) >> 7 ) | ( ( ( uint64_t ) (port) ) << 57 ) )
+#define ICE_TXQ_PF_TYPE( pf ) \
+	( ( (pf) << 1 ) | ( 0x2 << 14 ) )
+#define ICE_TXQ_LEN( count ) ( (count) >> 1 )
+#define ICE_TXQ_FL_TSO 0x0001
+#define ICE_TXQ_FL_LEGACY 0x2000
 
 /** Admin queue command parameters */
 union intelxl_admin_params {
