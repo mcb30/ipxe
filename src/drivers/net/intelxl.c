@@ -57,11 +57,36 @@ static struct intelxl_api_version intelxl_api_v2;
 #define ICE_QRX_TAIL(x) ( 0x290000 + ( 0x4 * (x) ) )
 
 /**
+ * Dump transmit queue context (for debugging)
+ *
+ * @v intelxl		Intel device
+ */
+static __attribute__ (( unused )) void
+ice_context_dump_tx ( struct intelxl_nic *intelxl ) {
+	unsigned int i;
+	unsigned int j;
+	uint32_t stat;
+	uint32_t ctx[6];
+
+	writel ( 1 << 19, intelxl->regs + 0x2d2dc8 );
+	for ( i = 0 ; i < 100 ; i++ ) {
+		stat = readl ( intelxl->regs + 0x2d2dcc );
+		if ( ! ( stat & 0x1 ) ) {
+			for ( j = 0 ; j < 6 ; j++ ) {
+				ctx[j] = readl ( intelxl->regs + 0x002D2D40 + ( 4 * j ) );
+			}
+			DBGC ( intelxl, "INTELXL %p TX context:\n", intelxl );
+			DBGC_HDA ( intelxl, 0, ctx, sizeof ( ctx ) );
+			return;
+		}
+	}
+	DBGC ( intelxl, "INTELXL %p timed out reading TX context\n", intelxl );
+}
+
+/**
  * Dump receive queue context (for debugging)
  *
  * @v intelxl		Intel device
- * @v op		Context operation
- * @v len		Size of context
  */
 static __attribute__ (( unused )) void
 ice_context_dump_rx ( struct intelxl_nic *intelxl ) {
@@ -1203,8 +1228,11 @@ static int intelxl_admin_add_txq ( struct intelxl_nic *intelxl,
 	int rc;
 
 	//
-	port = 1;
-	pf = 1;
+	ice_context_dump_tx ( intelxl );
+
+	//
+	port = 0;
+	pf = 0;
 
 	/* Populate descriptor */
 	cmd = intelxl_admin_command_descriptor ( intelxl );
@@ -1223,7 +1251,11 @@ static int intelxl_admin_add_txq ( struct intelxl_nic *intelxl,
 	buf->add_txq.vsi = cpu_to_le16 ( intelxl->vsi );
 	buf->add_txq.len = cpu_to_le16 ( ICE_TXQ_LEN ( INTELXL_TX_NUM_DESC ) );
 	buf->add_txq.flags = cpu_to_le16 ( ICE_TXQ_FL_TSO | ICE_TXQ_FL_LEGACY );
-	buf->add_txq.config.sections = 0x01; // hack
+
+	//
+	buf->add_txq.config.sections = 0x07; // hack
+	buf->add_txq.config.commit_weight = cpu_to_le16 ( 4 );
+	buf->add_txq.config.excess_weight = cpu_to_le16 ( 4 );
 
 	/* Issue command */
 	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
@@ -1232,6 +1264,8 @@ static int intelxl_admin_add_txq ( struct intelxl_nic *intelxl,
 	//
 	DBGC ( intelxl, "INTELXL %p added TEID %#04x\n", intelxl,
 	       le32_to_cpu ( buf->add_txq.teid ) );
+
+	ice_context_dump_tx ( intelxl );
 
 	return 0;
 }
@@ -1984,9 +2018,15 @@ int intelxl_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 	/* Notify card that there are packets ready to transmit */
 	writel ( tx_tail, ( intelxl->regs + intelxl->tx.tail ) );
 
+
 	DBGC2 ( intelxl, "INTELXL %p TX %d is [%08lx,%08lx)\n",
 		intelxl, tx_idx, virt_to_phys ( iobuf->data ),
 		( virt_to_phys ( iobuf->data ) + len ) );
+
+	//
+	mdelay ( 100 );
+	ice_context_dump_tx ( intelxl );
+
 	return 0;
 }
 
@@ -2267,7 +2307,8 @@ static int intelxl_probe ( struct pci_device *pci ) {
 
 	/* Configure queue register addresses */
 	intelxl->tx.reg = INTELXL_QTX ( intelxl->queue );
-	intelxl->tx.tail = ( intelxl->tx.reg + INTELXL_QXX_TAIL );
+	//intelxl->tx.tail = ( intelxl->tx.reg + INTELXL_QXX_TAIL );
+	intelxl->tx.tail = 0x2c0000;
 	//intelxl->rx.reg = INTELXL_QRX ( intelxl->queue );
 	//intelxl->rx.tail = ( intelxl->rx.reg + INTELXL_QXX_TAIL );
 	intelxl->rx.reg = ICE_QRX_CTRL ( intelxl->queue );
