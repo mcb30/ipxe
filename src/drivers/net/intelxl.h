@@ -760,7 +760,7 @@ struct intelxl_admin_add_txq_buffer {
 	( ( (pf) << 1 ) | ( 0x2 << 14 ) )
 #define ICE_TXQ_LEN( count ) ( (count) >> 1 )
 #define ICE_TXQ_FL_TSO 0x0001
-#define ICE_TXQ_FL_LEGACY 0x2000
+#define ICE_TXQ_FL_LEGACY 0x1000
 
 /** Admin queue command parameters */
 union intelxl_admin_params {

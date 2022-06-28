@@ -1192,6 +1192,13 @@ static int intelxl_admin_schedule ( struct intelxl_nic *intelxl ) {
 	}
 	branch = buf->sched.branch;
 
+	for ( i = ( le16_to_cpu ( branch->count ) - 1 ) ; i >= 0 ; i-- ) {
+		node = &branch->node[i];
+		DBGC ( intelxl, "*** %d type %d teid %#08x parent %#08x\n",
+		       i, node->config.type, node->teid, node->parent );
+		DBGC_HDA ( intelxl, 0, node, sizeof ( *node ) );
+	}
+
 	/* Identify leaf node */
 	for ( i = ( le16_to_cpu ( branch->count ) - 1 ) ; i >= 0 ; i-- ) {
 		node = &branch->node[i];
@@ -2130,6 +2137,9 @@ void intelxl_poll ( struct net_device *netdev ) {
 
 	/* Refill RX ring */
 	intelxl_refill_rx ( intelxl );
+
+	//
+	return;
 
 	/* Rearm interrupt, since otherwise receive descriptors will
 	 * be written back only after a complete cacheline (four
