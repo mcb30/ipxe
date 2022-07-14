@@ -149,6 +149,78 @@ static int ice_context_rx ( struct intelxl_nic *intelxl, physaddr_t address ) {
 
 /******************************************************************************
  *
+ * PF and port identity
+ *
+ ******************************************************************************
+ */
+
+/**
+ * Set static queue configuration
+ *
+ * @v intelxl		Intel device
+ */
+static void intelxl_queues_v1 ( struct intelxl_nic *intelxl ) {
+	uint32_t pffunc_rid;
+	uint32_t pfgen_portnum;
+	uint32_t pflan_qalloc;
+
+	/* Get function number, port number and base queue number */
+	pffunc_rid = readl ( intelxl->regs + INTELXL_PFFUNC_RID );
+	intelxl->pf = INTELXL_PFFUNC_RID_FUNC_NUM ( pffunc_rid );
+	pfgen_portnum = readl ( intelxl->regs + INTELXL_PFGEN_PORTNUM );
+	intelxl->port = INTELXL_PFGEN_PORTNUM_PORT_NUM ( pfgen_portnum );
+	pflan_qalloc = readl ( intelxl->regs + INTELXL_PFLAN_QALLOC );
+	intelxl->base = INTELXL_PFLAN_QALLOC_FIRSTQ ( pflan_qalloc );
+	DBGC ( intelxl, "INTELXL %p PF %d using port %d queues [%#04x-%#04x]\n",
+	       intelxl, intelxl->pf, intelxl->port, intelxl->base,
+	       INTELXL_PFLAN_QALLOC_LASTQ ( pflan_qalloc ) );
+
+	/* Configure queue register addresses */
+	intelxl->tx.reg = INTELXL_QTX ( intelxl->queue );
+	intelxl->tx.tail = ( intelxl->tx.reg + INTELXL_QXX_TAIL );
+	intelxl->rx.reg = INTELXL_QRX ( intelxl->queue );
+	intelxl->rx.tail = ( intelxl->rx.reg + INTELXL_QXX_TAIL );
+
+	/* Configure interrupt causes */
+	writel ( ( INTELXL_QINT_TQCTL_NEXTQ_INDX_NONE |
+		   INTELXL_QINT_TQCTL_CAUSE_ENA ),
+		 intelxl->regs + INTELXL_QINT_TQCTL ( intelxl->queue ) );
+	writel ( ( INTELXL_QINT_RQCTL_NEXTQ_INDX ( intelxl->queue ) |
+		   INTELXL_QINT_RQCTL_NEXTQ_TYPE_TX |
+		   INTELXL_QINT_RQCTL_CAUSE_ENA ),
+		 intelxl->regs + INTELXL_QINT_RQCTL ( intelxl->queue ) );
+	writel ( ( INTELXL_PFINT_LNKLST0_FIRSTQ_INDX ( intelxl->queue ) |
+		   INTELXL_PFINT_LNKLST0_FIRSTQ_TYPE_RX ),
+		 intelxl->regs + INTELXL_PFINT_LNKLST0 );
+	writel ( INTELXL_PFINT_ICR0_ENA_ADMINQ,
+		 intelxl->regs + INTELXL_PFINT_ICR0_ENA );
+}
+
+/**
+ * Set static queue configuration
+ *
+ * @v intelxl		Intel device
+ */
+static void intelxl_queues_v2 ( struct intelxl_nic *intelxl ) {
+	uint32_t pffunc_rid;
+	uint32_t pfgen_portnum;
+
+	/* Get function number and port number */
+	pffunc_rid = readl ( intelxl->regs + INTELXL_PFFUNC_RID_V2 );
+	intelxl->pf = INTELXL_PFFUNC_RID_V2_FUNC_NUM ( pffunc_rid );
+	pfgen_portnum = readl ( intelxl->regs + INTELXL_PFGEN_PORTNUM_V2 );
+	intelxl->port = INTELXL_PFGEN_PORTNUM_V2_PORT_NUM ( pfgen_portnum );
+	DBGC ( intelxl, "INTELXL %p PF %d using port %d\n",
+	       intelxl, intelxl->pf, intelxl->port );
+
+	/* Configure queue register addresses */
+	intelxl->tx.tail = INTELXL_QTX_COMM_DBELL;
+	intelxl->rx.reg = ICE_QRX_CTRL ( intelxl->queue );
+	intelxl->rx.tail = ICE_QRX_TAIL ( intelxl->queue );
+}
+
+/******************************************************************************
+ *
  * MSI-X interrupts
  *
  ******************************************************************************
@@ -2178,6 +2250,7 @@ static struct net_device_operations intelxl_operations = {
 static struct intelxl_api_version intelxl_api_v1 = {
 	.name = "XL710",
 	.sw_buf_len = sizeof ( struct intelxl_admin_switch_config_v1 ),
+	.queues = intelxl_queues_v1,
 	.mac_read = intelxl_admin_mac_read_v1,
 	.sw = intelxl_admin_switch_v1,
 	.link = intelxl_admin_link_status_v1,
@@ -2188,6 +2261,7 @@ static struct intelxl_api_version intelxl_api_v1 = {
 static struct intelxl_api_version intelxl_api_v2 = {
 	.name = "E810",
 	.sw_buf_len = sizeof ( struct intelxl_admin_switch_config_v2 ),
+	.queues = intelxl_queues_v2,
 	.mac_read = intelxl_admin_mac_read_v2,
 	.sw = intelxl_admin_switch_v2,
 	.link = intelxl_admin_link_status_v2,
@@ -2203,9 +2277,6 @@ static struct intelxl_api_version intelxl_api_v2 = {
 static int intelxl_probe ( struct pci_device *pci ) {
 	struct net_device *netdev;
 	struct intelxl_nic *intelxl;
-	uint32_t pffunc_rid;
-	uint32_t pfgen_portnum;
-	uint32_t pflan_qalloc;
 	int rc;
 
 	/* Allocate and initialise net device */
@@ -2304,39 +2375,8 @@ static int intelxl_probe ( struct pci_device *pci ) {
 					 intelxl_admin_link_mfs ) ) != 0 )
 		goto err_admin_link_mfs;
 
-	/* Get function number, port number and base queue number */
-	pffunc_rid = readl ( intelxl->regs + INTELXL_PFFUNC_RID );
-	intelxl->pf = INTELXL_PFFUNC_RID_FUNC_NUM ( pffunc_rid );
-	pfgen_portnum = readl ( intelxl->regs + INTELXL_PFGEN_PORTNUM );
-	intelxl->port = INTELXL_PFGEN_PORTNUM_PORT_NUM ( pfgen_portnum );
-	pflan_qalloc = readl ( intelxl->regs + INTELXL_PFLAN_QALLOC );
-	intelxl->base = INTELXL_PFLAN_QALLOC_FIRSTQ ( pflan_qalloc );
-	DBGC ( intelxl, "INTELXL %p PF %d using port %d queues [%#04x-%#04x]\n",
-	       intelxl, intelxl->pf, intelxl->port, intelxl->base,
-	       INTELXL_PFLAN_QALLOC_LASTQ ( pflan_qalloc ) );
-
-	/* Configure queue register addresses */
-	intelxl->tx.reg = INTELXL_QTX ( intelxl->queue );
-	//intelxl->tx.tail = ( intelxl->tx.reg + INTELXL_QXX_TAIL );
-	intelxl->tx.tail = 0x2c0000;
-	//intelxl->rx.reg = INTELXL_QRX ( intelxl->queue );
-	//intelxl->rx.tail = ( intelxl->rx.reg + INTELXL_QXX_TAIL );
-	intelxl->rx.reg = ICE_QRX_CTRL ( intelxl->queue );
-	intelxl->rx.tail  = ICE_QRX_TAIL ( intelxl->queue );
-
-	/* Configure interrupt causes */
-	writel ( ( INTELXL_QINT_TQCTL_NEXTQ_INDX_NONE |
-		   INTELXL_QINT_TQCTL_CAUSE_ENA ),
-		 intelxl->regs + INTELXL_QINT_TQCTL ( intelxl->queue ) );
-	writel ( ( INTELXL_QINT_RQCTL_NEXTQ_INDX ( intelxl->queue ) |
-		   INTELXL_QINT_RQCTL_NEXTQ_TYPE_TX |
-		   INTELXL_QINT_RQCTL_CAUSE_ENA ),
-		 intelxl->regs + INTELXL_QINT_RQCTL ( intelxl->queue ) );
-	writel ( ( INTELXL_PFINT_LNKLST0_FIRSTQ_INDX ( intelxl->queue ) |
-		   INTELXL_PFINT_LNKLST0_FIRSTQ_TYPE_RX ),
-		 intelxl->regs + INTELXL_PFINT_LNKLST0 );
-	writel ( INTELXL_PFINT_ICR0_ENA_ADMINQ,
-		 intelxl->regs + INTELXL_PFINT_ICR0_ENA );
+	/* Set static queue configuration */
+	intelxl->api->queues ( intelxl );
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
@@ -2401,6 +2441,8 @@ static void intelxl_remove ( struct pci_device *pci ) {
 
 /** PCI device IDs */
 static struct pci_device_id intelxl_nics[] = {
+
+	/* XL710 */
 	PCI_ROM ( 0x8086, 0x1572, "x710-sfp", "X710 10GbE SFP+", 0 ),
 	PCI_ROM ( 0x8086, 0x1574, "xl710-qemu", "Virtual XL710", 0 ),
 	PCI_ROM ( 0x8086, 0x1580, "xl710-kx-b", "XL710 40GbE backplane", 0 ),
@@ -2421,10 +2463,32 @@ static struct pci_device_id intelxl_nics[] = {
 	PCI_ROM ( 0x8086, 0x37d2, "x722-10gt", "X722 10GBASE-T", 0 ),
 	PCI_ROM ( 0x8086, 0x37d3, "x722-sfp-i", "X722 10GbE SFP+", 0 ),
 
-	// HACK for ice
-	PCI_ROM ( 0x8086, 0x159b, "ice", "Ice ice baby", 0 ),
-
-
+	/* E810 */
+	PCI_ROM ( 0x8086, 0x124c, "e823l-bp", "E823-L backplane", 0 ),
+	PCI_ROM ( 0x8086, 0x124d, "e823l-sfp", "E823-L SFP", 0 ),
+	PCI_ROM ( 0x8086, 0x124e, "e823l-10gt", "E823-L 10GBASE-T", 0 ),
+	PCI_ROM ( 0x8086, 0x124f, "e823l-1g", "E823-L 1GbE", 0 ),
+	PCI_ROM ( 0x8086, 0x151d, "e823l-qsfp", "E823-L QSFP", 0 ),
+	PCI_ROM ( 0x8086, 0x1591, "e810c-bp", "E810-C backplane", 0 ),
+	PCI_ROM ( 0x8086, 0x1592, "e810c-qsfp", "E810-C QSFP", 0 ),
+	PCI_ROM ( 0x8086, 0x1593, "e810c-sfp", "E810-C SFP", 0 ),
+	PCI_ROM ( 0x8086, 0x1599, "e810-xxv-bp", "E810-XXV backplane", 0 ),
+	PCI_ROM ( 0x8086, 0x159a, "e810-xxv-qsfp", "E810-XXV QSFP", 0 ),
+	PCI_ROM ( 0x8086, 0x159b, "e810-xxv-sfp", "E810-XXV SFP", 0 ),
+	PCI_ROM ( 0x8086, 0x188a, "e823c-bp", "E823-C backplane", 0 ),
+	PCI_ROM ( 0x8086, 0x188b, "e823c-qsfp", "E823-C QSFP", 0 ),
+	PCI_ROM ( 0x8086, 0x188c, "e823c-sfp", "E823-C SFP", 0 ),
+	PCI_ROM ( 0x8086, 0x188d, "e823c-10gt", "E823-C 10GBASE-T", 0 ),
+	PCI_ROM ( 0x8086, 0x188e, "e823c-1g", "E823-C 1GbE", 0 ),
+	PCI_ROM ( 0x8086, 0x1890, "e822c-bp", "E822-C backplane", 0 ),
+	PCI_ROM ( 0x8086, 0x1891, "e822c-qsfp", "E822-C QSFP", 0 ),
+	PCI_ROM ( 0x8086, 0x1892, "e822c-sfp", "E822-C SFP", 0 ),
+	PCI_ROM ( 0x8086, 0x1893, "e822c-10gt", "E822-C 10GBASE-T", 0 ),
+	PCI_ROM ( 0x8086, 0x1894, "e822c-1g", "E822-C 1GbE", 0 ),
+	PCI_ROM ( 0x8086, 0x1897, "e822l-bp", "E822-L backplane", 0 ),
+	PCI_ROM ( 0x8086, 0x1898, "e822l-sfp", "E822-L SFP", 0 ),
+	PCI_ROM ( 0x8086, 0x1899, "e822l-10gt", "E822-L 10GBASE-T", 0 ),
+	PCI_ROM ( 0x8086, 0x189a, "e822l-1g", "E822-L 1GbE", 0 ),
 };
 
 /** PCI driver */

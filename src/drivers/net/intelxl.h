@@ -730,30 +730,25 @@ struct intelxl_admin_add_txq_buffer {
 	uint8_t reserved_b[2];
 	/** Queue TEID */
 	uint32_t teid;
-
-	/** Queue context */
-	//	uint8_t context[24];
-
 	/** Base address */
 	uint64_t base_port;
 	/** PF number and queue type */
 	uint16_t pf_type;
 	/** Source VSI */
 	uint16_t vsi;
-	//
-	uint8_t reserved_x[5];
+	/** Reserved */
+	uint8_t reserved_c[5];
 	/** Queue length */
 	uint16_t len;
 	/** Flags */
 	uint16_t flags;
-	//
-	uint8_t reserved_y[3];
-
+	/** Reserved */
+	uint8_t reserved_d[3];
 	/** Scheduler configuration */
 	struct intelxl_schedule_config config;
 } __attribute__ (( packed ));
 
-
+//
 #define ICE_TXQ_BASE_PORT( addr, port ) \
 	( ( (addr) >> 7 ) | ( ( ( uint64_t ) (port) ) << 57 ) )
 #define ICE_TXQ_PF_TYPE( pf ) \
@@ -1077,6 +1072,9 @@ struct intelxl_context_rx {
 /** Queue Tail Pointer Register (offset) */
 #define INTELXL_QXX_TAIL 0x8000
 
+/** Transmit Comm Scheduler Queue Doorbell */
+#define INTELXL_QTX_COMM_DBELL 0x2c0000
+
 /** Transmit data descriptor */
 struct intelxl_tx_data_descriptor {
 	/** Buffer address */
@@ -1302,8 +1300,13 @@ intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count, size_t len,
 #define INTELXL_QINT_TQCTL_CAUSE_ENA	0x40000000UL	/**< Enable */
 
 /** Function Requester ID Information Register */
-#define INTELXL_PFFUNC_RID 0x09e880  // 0x09c000
+#define INTELXL_PFFUNC_RID 0x09c000
 #define INTELXL_PFFUNC_RID_FUNC_NUM(x) \
+	( ( (x) >> 0 ) & 0x7 )				/**< Function number */
+
+/** Function Requester ID Information Register (v2) */
+#define INTELXL_PFFUNC_RID_V2 0x09e880
+#define INTELXL_PFFUNC_RID_V2_FUNC_NUM(x) \
 	( ( (x) >> 0 ) & 0x7 )				/**< Function number */
 
 /** PF Queue Allocation Register */
@@ -1314,8 +1317,13 @@ intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count, size_t len,
 	( ( (x) >> 16 ) & 0x7ff )			/**< Last queue */
 
 /** PF LAN Port Number Register */
-#define INTELXL_PFGEN_PORTNUM 0x1d2400  // 0x1c0480
+#define INTELXL_PFGEN_PORTNUM 0x1c0480
 #define INTELXL_PFGEN_PORTNUM_PORT_NUM(x) \
+	( ( (x) >> 0 ) & 0x3 )				/**< Port number */
+
+/** PF LAN Port Number Register (v2) */
+#define INTELXL_PFGEN_PORTNUM_V2 0x1d2400
+#define INTELXL_PFGEN_PORTNUM_V2_PORT_NUM(x) \
 	( ( (x) >> 0 ) & 0x7 )				/**< Port number */
 
 /** MSI-X interrupt */
@@ -1337,6 +1345,12 @@ struct intelxl_api_version {
 	const char *name;
 	/** Get Switch Configuration buffer length */
 	size_t sw_buf_len;
+	/**
+	 * Set static queue configuration
+	 *
+	 * @v intelxl		Intel device
+	 */
+	void ( * queues ) ( struct intelxl_nic *intelxl );
 	/**
 	 * Get MAC address
 	 *
