@@ -402,6 +402,18 @@ struct intelxl_schedule_config {
 	uint16_t reserved;
 } __attribute__ (( packed ));
 
+/** Transmit scheduler configuration generic section is valid */
+#define INTELXL_SCHEDULE_GENERIC 0x01
+
+/** Transmit scheduler configuration committed bandwidth section is valid */
+#define INTELXL_SCHEDULE_COMMIT 0x02
+
+/** Transmit scheduler configuration excess bandwidth section is valid */
+#define INTELXL_SCHEDULE_EXCESS 0x04
+
+/** Transmit scheduler configuration default weight */
+#define INTELXL_SCHEDULE_WEIGHT 4
+
 /** Admin queue Query Default Scheduling Tree Topology node */
 struct intelxl_admin_schedule_node {
 	/** Parent TEID */
@@ -748,14 +760,21 @@ struct intelxl_admin_add_txq_buffer {
 	struct intelxl_schedule_config config;
 } __attribute__ (( packed ));
 
-//
-#define ICE_TXQ_BASE_PORT( addr, port ) \
+/** Transmit queue base address and port number */
+#define INTELXL_TXQ_BASE_PORT( addr, port ) \
 	( ( (addr) >> 7 ) | ( ( ( uint64_t ) (port) ) << 57 ) )
-#define ICE_TXQ_PF_TYPE( pf ) \
-	( ( (pf) << 1 ) | ( 0x2 << 14 ) )
-#define ICE_TXQ_LEN( count ) ( (count) >> 1 )
-#define ICE_TXQ_FL_TSO 0x0001
-#define ICE_TXQ_FL_LEGACY 0x1000
+
+/** Transmit queue PF number */
+#define INTELXL_TXQ_PF_TYPE( pf ) ( ( (pf) << 1 ) | ( 0x2 << 14 ) )
+
+/** Transmit queue length */
+#define INTELXL_TXQ_LEN( count ) ( (count) >> 1 )
+
+/** Transmit queue uses TSO */
+#define INTELXL_TXQ_FL_TSO 0x0001
+
+/** Transmit queue uses legacy mode*/
+#define INTELXL_TXQ_FL_LEGACY 0x1000
 
 /** Admin queue command parameters */
 union intelxl_admin_params {
@@ -1191,6 +1210,8 @@ struct intelxl_ring {
 	unsigned int prod;
 	/** Consumer index */
 	unsigned int cons;
+	/** Hardware element ID */
+	uint32_t id;
 
 	/** Register block */
 	unsigned int reg;
@@ -1198,6 +1219,7 @@ struct intelxl_ring {
 	unsigned int tail;
 	/** Length (in bytes) */
 	size_t len;
+
 	/** Program queue context
 	 *
 	 * @v intelxl		Intel device

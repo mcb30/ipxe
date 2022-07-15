@@ -149,7 +149,7 @@ static int ice_context_rx ( struct intelxl_nic *intelxl, physaddr_t address ) {
 
 /******************************************************************************
  *
- * PF and port identity
+ * Static queue configuration
  *
  ******************************************************************************
  */
@@ -1306,13 +1306,6 @@ static int intelxl_admin_add_txq ( struct intelxl_nic *intelxl,
 	unsigned int pf;
 	int rc;
 
-	//
-	ice_context_dump_tx ( intelxl );
-
-	//
-	port = 0;
-	pf = 0;
-
 	/* Populate descriptor */
 	cmd = intelxl_admin_command_descriptor ( intelxl );
 	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_ADD_TXQ );
@@ -1324,27 +1317,29 @@ static int intelxl_admin_add_txq ( struct intelxl_nic *intelxl,
 	buf->add_txq.parent = cpu_to_le32 ( intelxl->teid );
 	buf->add_txq.count = 1;
 	address = dma ( &ring->map, ring->desc.raw );
+	port = intelxl->port;
 	buf->add_txq.base_port =
-		cpu_to_le64 ( ICE_TXQ_BASE_PORT ( address, port ) );
-	buf->add_txq.pf_type = cpu_to_le16 ( ICE_TXQ_PF_TYPE ( pf ) );
+		cpu_to_le64 ( INTELXL_TXQ_BASE_PORT ( address, port ) );
+	pf = intelxl->pf;
+	buf->add_txq.pf_type = cpu_to_le16 ( INTELXL_TXQ_PF_TYPE ( pf ) );
 	buf->add_txq.vsi = cpu_to_le16 ( intelxl->vsi );
-	buf->add_txq.len = cpu_to_le16 ( ICE_TXQ_LEN ( INTELXL_TX_NUM_DESC ) );
-	buf->add_txq.flags = cpu_to_le16 ( ICE_TXQ_FL_TSO | ICE_TXQ_FL_LEGACY );
-
-	//
-	buf->add_txq.config.sections = 0x07; // hack
-	buf->add_txq.config.commit_weight = cpu_to_le16 ( 4 );
-	buf->add_txq.config.excess_weight = cpu_to_le16 ( 4 );
+	buf->add_txq.len =
+		cpu_to_le16 ( INTELXL_TXQ_LEN ( INTELXL_TX_NUM_DESC ) );
+	buf->add_txq.flags =
+		cpu_to_le16 ( INTELXL_TXQ_FL_TSO | INTELXL_TXQ_FL_LEGACY );
+	buf->add_txq.config.sections = ( INTELXL_SCHEDULE_GENERIC |
+					 INTELXL_SCHEDULE_COMMIT |
+					 INTELXL_SCHEDULE_EXCESS );
+	buf->add_txq.config.commit_weight =
+		cpu_to_le16 ( INTELXL_SCHEDULE_WEIGHT );
+	buf->add_txq.config.excess_weight =
+		cpu_to_le16 ( INTELXL_SCHEDULE_WEIGHT );
 
 	/* Issue command */
 	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
 		return rc;
-
-	//
-	DBGC ( intelxl, "INTELXL %p added TEID %#04x\n", intelxl,
-	       le32_to_cpu ( buf->add_txq.teid ) );
-
-	ice_context_dump_tx ( intelxl );
+	ring->id = le32_to_cpu ( buf->add_txq.teid );
+	DBGC ( intelxl, "INTELXL %p added TEID %#04x\n", intelxl, ring->id );
 
 	return 0;
 }
@@ -1506,6 +1501,15 @@ void intelxl_close_admin ( struct intelxl_nic *intelxl ) {
 	intelxl_free_admin ( intelxl, &intelxl->command );
 	intelxl_free_admin ( intelxl, &intelxl->event );
 }
+
+/******************************************************************************
+ *
+ * Transmit context
+ *
+ ******************************************************************************
+ */
+
+
 
 /******************************************************************************
  *
