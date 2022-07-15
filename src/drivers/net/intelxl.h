@@ -786,11 +786,18 @@ struct intelxl_admin_disable_txq_params {
 	/** Number of queue groups */
 	uint8_t count;
 	/** Reserved */
-	uint8_t reserved[6];
+	uint8_t reserved_a;
+	/** Timeout */
+	uint8_t timeout;
+	/** Reserved */
+	uint8_t reserved_b[4];
 } __attribute__ (( packed ));
 
-/** Disable queue without function reset */
-#define INTELXL_TXQ_FL_DISABLE 0x01
+/** Disable queue and flush pipe */
+#define INTELXL_TXQ_FL_FLUSH 0x08
+
+/** Disable queue timeout */
+#define INTELXL_TXQ_TIMEOUT 0xc8
 
 /** Admin queue Disable Transmit Queues data buffer */
 struct intelxl_admin_disable_txq_buffer {
@@ -1252,8 +1259,6 @@ struct intelxl_ring {
 	unsigned int prod;
 	/** Consumer index */
 	unsigned int cons;
-	/** Hardware element ID */
-	uint32_t id;
 
 	/** Register block */
 	unsigned int reg;
@@ -1474,6 +1479,12 @@ struct intelxl_api_version {
 	 * @v intelxl		Intel device
 	 */
 	void ( * destroy_rx ) ( struct intelxl_nic *intelxl );
+	/**
+	 * Dump queue contexts (for debugging)
+	 *
+	 * @v intelxl		Intel device
+	 */
+	void ( * dump ) ( struct intelxl_nic *intelxl );
 };
 
 /** An Intel 40 Gigabit network card */

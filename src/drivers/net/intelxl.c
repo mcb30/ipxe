@@ -47,61 +47,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 static struct intelxl_api_version intelxl_api_v1;
 static struct intelxl_api_version intelxl_api_v2;
 
-/**
- * Dump transmit queue context (for debugging)
- *
- * @v intelxl		Intel device
- */
-static __attribute__ (( unused )) void
-ice_context_dump_tx ( struct intelxl_nic *intelxl ) {
-	unsigned int i;
-	unsigned int j;
-	uint32_t stat;
-	uint32_t ctx[6];
-
-	writel ( 1 << 19, intelxl->regs + 0x2d2dc8 );
-	for ( i = 0 ; i < 100 ; i++ ) {
-		stat = readl ( intelxl->regs + 0x2d2dcc );
-		if ( ! ( stat & 0x1 ) ) {
-			for ( j = 0 ; j < 6 ; j++ ) {
-				ctx[j] = readl ( intelxl->regs + 0x002D2D40 + ( 4 * j ) );
-			}
-			DBGC ( intelxl, "INTELXL %p TX context:\n", intelxl );
-			DBGC_HDA ( intelxl, 0, ctx, sizeof ( ctx ) );
-			return;
-		}
-	}
-	DBGC ( intelxl, "INTELXL %p timed out reading TX context\n", intelxl );
-}
-
-/**
- * Dump receive queue context (for debugging)
- *
- * @v intelxl		Intel device
- */
-static __attribute__ (( unused )) void
-ice_context_dump_rx ( struct intelxl_nic *intelxl ) {
-	union {
-		struct intelxl_context_rx rx;
-		uint32_t raw[ sizeof ( struct intelxl_context_rx ) /
-			      sizeof ( uint32_t ) ];
-	} ctx;
-	unsigned int i;
-
-	/* Do nothing unless debug output is enabled */
-	if ( ! DBG_EXTRA )
-		return;
-
-	/* Read context registers */
-	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
-		ctx.raw[i] = cpu_to_le32 ( readl ( intelxl->regs +
-						   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
-	}
-	DBGC2 ( intelxl, "INTELXL %p RX context:\n", intelxl );
-	DBGC2_HDA ( intelxl, INTELXL_QRX_CONTEXT ( intelxl->queue, 0 ),
-		    &ctx, sizeof ( ctx ) );
-}
-
 /******************************************************************************
  *
  * Static queue configuration
@@ -1286,8 +1231,8 @@ static int intelxl_admin_add_txq ( struct intelxl_nic *intelxl,
 	/* Issue command */
 	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
 		return rc;
-	ring->id = le32_to_cpu ( buf->add_txq.teid );
-	DBGC ( intelxl, "INTELXL %p added TEID %#04x\n", intelxl, ring->id );
+	DBGC ( intelxl, "INTELXL %p added TEID %#04x\n",
+	       intelxl, le32_to_cpu ( buf->add_txq.teid ) );
 
 	return 0;
 }
@@ -1299,8 +1244,7 @@ static int intelxl_admin_add_txq ( struct intelxl_nic *intelxl,
  * @v ring		Descriptor ring
  * @ret rc		Return status code
  */
-static int intelxl_admin_disable_txq ( struct intelxl_nic *intelxl,
-				       struct intelxl_ring *ring ) {
+static int intelxl_admin_disable_txq ( struct intelxl_nic *intelxl ) {
 	struct intelxl_admin_descriptor *cmd;
 	struct intelxl_admin_disable_txq_params *disable_txq;
 	union intelxl_admin_buffer *buf;
@@ -1312,17 +1256,16 @@ static int intelxl_admin_disable_txq ( struct intelxl_nic *intelxl,
 	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_RD | INTELXL_ADMIN_FL_BUF );
 	cmd->len = cpu_to_le16 ( sizeof ( buf->disable_txq ) );
 	disable_txq = &cmd->params.disable_txq;
-	disable_txq->flags = INTELXL_TXQ_FL_DISABLE;
+	disable_txq->flags = INTELXL_TXQ_FL_FLUSH;
 	disable_txq->count = 1;
+	disable_txq->timeout = INTELXL_TXQ_TIMEOUT;
 	buf = intelxl_admin_command_buffer ( intelxl );
-	buf->disable_txq.parent = cpu_to_le32 ( ring->id );
+	buf->disable_txq.parent = cpu_to_le32 ( intelxl->teid );
 	buf->disable_txq.count = 1;
 
 	/* Issue command */
 	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
 		return rc;
-	DBGC ( intelxl, "INTELXL %p disabled TEID %#04x\n",
-	       intelxl, ring->id );
 
 	return 0;
 }
@@ -1562,10 +1505,6 @@ intelxl_context_dump ( struct intelxl_nic *intelxl, uint32_t op, size_t len ) {
 	unsigned int index;
 	unsigned int i;
 
-	/* Do nothing unless debug output is enabled */
-	if ( ! DBG_EXTRA )
-		return;
-
 	/* Dump context */
 	DBGC2 ( intelxl, "INTELXL %p context %#08x:\n", intelxl, op );
 	for ( index = 0 ; ( sizeof ( line ) * index ) < len ; index++ ) {
@@ -1601,6 +1540,26 @@ intelxl_context_dump ( struct intelxl_nic *intelxl, uint32_t op, size_t len ) {
 		DBGC2_HDA ( intelxl, ( sizeof ( line ) * index ),
 			    &line, sizeof ( line ) );
 	}
+}
+
+/**
+ * Dump queue contexts (for debugging) (API version 1)
+ *
+ * @v intelxl		Intel device
+ */
+static void intelxl_dump_v1 ( struct intelxl_nic *intelxl ) {
+
+	/* Do nothing unless debug output is enabled */
+	if ( ! DBG_EXTRA )
+		return;
+
+	/* Dump transmit context */
+	intelxl_context_dump ( intelxl, INTELXL_PFCM_LANCTXCTL_TYPE_TX,
+			       sizeof ( struct intelxl_context_tx ) );
+
+	/* Dump receive context */
+	intelxl_context_dump ( intelxl, INTELXL_PFCM_LANCTXCTL_TYPE_RX,
+			       sizeof ( struct intelxl_context_rx ) );
 }
 
 /**
@@ -1895,6 +1854,60 @@ static void intelxl_destroy_rx_v1 ( struct intelxl_nic *intelxl ) {
 }
 
 /**
+ * Dump queue contexts (for debugging) (API version 2)
+ *
+ * @v intelxl		Intel device
+ */
+static void intelxl_dump_v2 ( struct intelxl_nic *intelxl ) {
+	{
+	unsigned int i;
+	unsigned int j;
+	uint32_t stat;
+	uint32_t ctx[6];
+
+	//
+
+	writel ( 1 << 19, intelxl->regs + 0x2d2dc8 );
+	for ( i = 0 ; i < 100 ; i++ ) {
+		stat = readl ( intelxl->regs + 0x2d2dcc );
+		if ( ! ( stat & 0x1 ) ) {
+			for ( j = 0 ; j < 6 ; j++ ) {
+				ctx[j] = readl ( intelxl->regs + 0x002D2D40 + ( 4 * j ) );
+			}
+			DBGC ( intelxl, "INTELXL %p TX context:\n", intelxl );
+			DBGC_HDA ( intelxl, 0, ctx, sizeof ( ctx ) );
+			return;
+		}
+	}
+	DBGC ( intelxl, "INTELXL %p timed out reading TX context\n", intelxl );
+
+	}
+
+
+	{
+	union {
+		struct intelxl_context_rx rx;
+		uint32_t raw[ sizeof ( struct intelxl_context_rx ) /
+			      sizeof ( uint32_t ) ];
+	} ctx;
+	unsigned int i;
+
+	/* Do nothing unless debug output is enabled */
+	if ( ! DBG_EXTRA )
+		return;
+
+	/* Read context registers */
+	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
+		ctx.raw[i] = cpu_to_le32 ( readl ( intelxl->regs +
+						   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
+	}
+	DBGC2 ( intelxl, "INTELXL %p RX context:\n", intelxl );
+	DBGC2_HDA ( intelxl, INTELXL_QRX_CONTEXT ( intelxl->queue, 0 ),
+		    &ctx, sizeof ( ctx ) );
+	}
+}
+
+/**
  * Create transmit ring (API version 2)
  *
  * @v intelxl		Intel device
@@ -1931,7 +1944,7 @@ static void intelxl_destroy_tx_v2 ( struct intelxl_nic *intelxl ) {
 	int rc;
 
 	/* Disable transmit queue */
-	if ( ( rc = intelxl_admin_disable_txq ( intelxl, ring ) ) != 0 ) {
+	if ( ( rc = intelxl_admin_disable_txq ( intelxl ) ) != 0 ) {
 		/* Leak memory; there's nothing else we can do */
 		return;
 	}
@@ -2118,12 +2131,8 @@ static void intelxl_close ( struct net_device *netdev ) {
 	struct intelxl_nic *intelxl = netdev->priv;
 
 	/* Dump contexts (for debugging) */
-	//intelxl_context_dump ( intelxl, INTELXL_PFCM_LANCTXCTL_TYPE_TX,
-	//			       sizeof ( struct intelxl_context_tx ) );
-	//intelxl_context_dump ( intelxl, INTELXL_PFCM_LANCTXCTL_TYPE_RX,
-	//			       sizeof ( struct intelxl_context_rx ) );
-	ice_context_dump_rx ( intelxl );
-
+	if ( DBG_EXTRA )
+		intelxl->api->dump ( intelxl );
 
 	/* Destroy transmit descriptor ring */
 	intelxl->api->destroy_tx ( intelxl );
@@ -2170,15 +2179,9 @@ int intelxl_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 	/* Notify card that there are packets ready to transmit */
 	writel ( tx_tail, ( intelxl->regs + intelxl->tx.tail ) );
 
-
 	DBGC2 ( intelxl, "INTELXL %p TX %d is [%08lx,%08lx)\n",
 		intelxl, tx_idx, virt_to_phys ( iobuf->data ),
 		( virt_to_phys ( iobuf->data ) + len ) );
-
-	//
-	mdelay ( 100 );
-	ice_context_dump_tx ( intelxl );
-
 	return 0;
 }
 
@@ -2332,6 +2335,7 @@ static struct intelxl_api_version intelxl_api_v1 = {
 	.destroy_tx = intelxl_destroy_tx_v1,
 	.create_rx = intelxl_create_rx_v1,
 	.destroy_rx = intelxl_destroy_rx_v1,
+	.dump = intelxl_dump_v1,
 };
 
 /** Updated E810 API version */
@@ -2347,6 +2351,7 @@ static struct intelxl_api_version intelxl_api_v2 = {
 	.destroy_tx = intelxl_destroy_tx_v2,
 	.create_rx = intelxl_create_rx_v2,
 	.destroy_rx = intelxl_destroy_rx_v2,
+	.dump = intelxl_dump_v2,
 };
 
 /**
