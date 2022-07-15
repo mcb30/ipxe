@@ -412,7 +412,7 @@ struct intelxl_schedule_config {
 #define INTELXL_SCHEDULE_EXCESS 0x04
 
 /** Transmit scheduler configuration default weight */
-#define INTELXL_SCHEDULE_WEIGHT 4
+#define INTELXL_SCHEDULE_WEIGHT 0x0004
 
 /** Admin queue Query Default Scheduling Tree Topology node */
 struct intelxl_admin_schedule_node {
@@ -717,10 +717,10 @@ struct intelxl_admin_vf_promisc_buffer {
 	uint16_t flags;
 } __attribute__ (( packed ));
 
-/** Admin queue Add TX LAN Queues command */
+/** Admin queue Add Transmit Queues command */
 #define INTELXL_ADMIN_ADD_TXQ 0x0c30
 
-/** Admin queue Add TX LAN Queues command parameters */
+/** Admin queue Add Transmit Queues command parameters */
 struct intelxl_admin_add_txq_params {
 	/** Number of queue groups */
 	uint8_t count;
@@ -728,7 +728,7 @@ struct intelxl_admin_add_txq_params {
 	uint8_t reserved[7];
 } __attribute__ (( packed ));
 
-/** Admin queue Add TX LAN Queues data buffer */
+/** Admin queue Add Transmit Queues data buffer */
 struct intelxl_admin_add_txq_buffer {
 	/** Parent TEID */
 	uint32_t parent;
@@ -736,7 +736,7 @@ struct intelxl_admin_add_txq_buffer {
 	uint8_t count;
 	/** Reserved */
 	uint8_t reserved_a[3];
-	/** TX queue ID */
+	/** Transmit queue ID */
 	uint16_t id;
 	/** Reserved */
 	uint8_t reserved_b[2];
@@ -776,6 +776,34 @@ struct intelxl_admin_add_txq_buffer {
 /** Transmit queue uses legacy mode*/
 #define INTELXL_TXQ_FL_LEGACY 0x1000
 
+/** Admin queue Disable Transmit Queues command */
+#define INTELXL_ADMIN_DISABLE_TXQ 0x0c31
+
+/** Admin queue Disable Transmit Queues command parameters */
+struct intelxl_admin_disable_txq_params {
+	/** Flags */
+	uint8_t flags;
+	/** Number of queue groups */
+	uint8_t count;
+	/** Reserved */
+	uint8_t reserved[6];
+} __attribute__ (( packed ));
+
+/** Disable queue without function reset */
+#define INTELXL_TXQ_FL_DISABLE 0x01
+
+/** Admin queue Disable Transmit Queues data buffer */
+struct intelxl_admin_disable_txq_buffer {
+	/** Parent TEID */
+	uint32_t parent;
+	/** Number of queues */
+	uint8_t count;
+	/** Reserved */
+	uint8_t reserved;
+	/** Transmit queue ID */
+	uint16_t id;
+} __attribute__ (( packed ));
+
 /** Admin queue command parameters */
 union intelxl_admin_params {
 	/** Additional data buffer command parameters */
@@ -806,8 +834,10 @@ union intelxl_admin_params {
 	struct intelxl_admin_autoneg_params autoneg;
 	/** Get Link Status command parameters */
 	union intelxl_admin_link_params link;
-	/** Add TX LAN queue command parameters */
+	/** Add Transmit Queue command parameters */
 	struct intelxl_admin_add_txq_params add_txq;
+	/** Disable Transmit Queue command parameters */
+	struct intelxl_admin_disable_txq_params disable_txq;
 } __attribute__ (( packed ));
 
 /** Admin queue data buffer */
@@ -838,8 +868,10 @@ union intelxl_admin_buffer {
 	struct intelxl_admin_vf_promisc_buffer promisc;
 	/** VF IRQ Map data buffer */
 	struct intelxl_admin_vf_irq_map_buffer irq;
-	/** Add TX LAN queue data buffer */
+	/** Add Transmit Queue data buffer */
 	struct intelxl_admin_add_txq_buffer add_txq;
+	/** Disable Transmit Queue data buffer */
+	struct intelxl_admin_disable_txq_buffer disable_txq;
 	/** Alignment padding */
 	uint8_t pad[INTELXL_ALIGN];
 } __attribute__ (( packed ));
@@ -1091,7 +1123,17 @@ struct intelxl_context_rx {
 /** Queue Tail Pointer Register (offset) */
 #define INTELXL_QXX_TAIL 0x8000
 
-/** Transmit Comm Scheduler Queue Doorbell */
+/** Global Receive Queue Control register */
+#define INTELXL_QRX_CTRL(x) ( 0x120000 + ( 0x4 * (x) ) )
+
+/** Receive Queue Context register */
+#define INTELXL_QRX_CONTEXT(x, i) \
+	( 0x280000 + ( 0x4 * (x) ) + ( 0x2000 * (i) ) )
+
+/** Receive Queue Tail register */
+#define INTELXL_QRX_TAIL(x) ( 0x290000 + ( 0x4 * (x) ) )
+
+/** Transmit Comm Scheduler Queue Doorbell register */
 #define INTELXL_QTX_COMM_DBELL 0x2c0000
 
 /** Transmit data descriptor */
@@ -1219,13 +1261,6 @@ struct intelxl_ring {
 	unsigned int tail;
 	/** Length (in bytes) */
 	size_t len;
-
-	/** Program queue context
-	 *
-	 * @v intelxl		Intel device
-	 * @v address		Descriptor ring base address
-	 */
-	int ( * context ) ( struct intelxl_nic *intelxl, physaddr_t address );
 };
 
 /**
@@ -1234,15 +1269,12 @@ struct intelxl_ring {
  * @v ring		Descriptor ring
  * @v count		Number of descriptors
  * @v len		Length of a single descriptor
- * @v context		Method to program queue context
  */
 static inline __attribute__ (( always_inline)) void
-intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count, size_t len,
-		    int ( * context ) ( struct intelxl_nic *intelxl,
-					physaddr_t address ) ) {
+intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count,
+		    size_t len ) {
 
 	ring->len = ( count * len );
-	ring->context = context;
 }
 
 /** Number of transmit descriptors
@@ -1416,6 +1448,32 @@ struct intelxl_api_version {
 	unsigned int ( * mfs ) ( struct intelxl_nic *intelxl,
 				  union intelxl_admin_link_params *link,
 				  union intelxl_admin_buffer *buf );
+	/**
+	 * Create transmit ring
+	 *
+	 * @v intelxl		Intel device
+	 * @ret rc		Return status code
+	 */
+	int ( * create_tx ) ( struct intelxl_nic *intelxl );
+	/**
+	 * Destroy transmit ring
+	 *
+	 * @v intelxl		Intel device
+	 */
+	void ( * destroy_tx ) ( struct intelxl_nic *intelxl );
+	/**
+	 * Create receive ring
+	 *
+	 * @v intelxl		Intel device
+	 * @ret rc		Return status code
+	 */
+	int ( * create_rx ) ( struct intelxl_nic *intelxl );
+	/**
+	 * Destroy receive ring
+	 *
+	 * @v intelxl		Intel device
+	 */
+	void ( * destroy_rx ) ( struct intelxl_nic *intelxl );
 };
 
 /** An Intel 40 Gigabit network card */

@@ -47,15 +47,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 static struct intelxl_api_version intelxl_api_v1;
 static struct intelxl_api_version intelxl_api_v2;
 
-/** Global Receive Queue Control register */
-#define ICE_QRX_CTRL(x) ( 0x120000 + ( 0x4 * (x) ) )
-
-/** Receive queue context */
-#define ICE_QRX_CONTEXT(x, i) ( 0x280000 + ( 0x4 * (x) ) + ( 0x2000 * (i) ) )
-
-/** Receive queue tail */
-#define ICE_QRX_TAIL(x) ( 0x290000 + ( 0x4 * (x) ) )
-
 /**
  * Dump transmit queue context (for debugging)
  *
@@ -103,48 +94,12 @@ ice_context_dump_rx ( struct intelxl_nic *intelxl ) {
 
 	/* Read context registers */
 	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
-		ctx.raw[i] = readl ( intelxl->regs +
-				     ICE_QRX_CONTEXT ( intelxl->queue, i ) );
+		ctx.raw[i] = cpu_to_le32 ( readl ( intelxl->regs +
+						   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
 	}
 	DBGC2 ( intelxl, "INTELXL %p RX context:\n", intelxl );
-	DBGC2_HDA ( intelxl, ICE_QRX_CONTEXT ( intelxl->queue, 0 ),
+	DBGC2_HDA ( intelxl, INTELXL_QRX_CONTEXT ( intelxl->queue, 0 ),
 		    &ctx, sizeof ( ctx ) );
-}
-
-/**
- * Program receive queue context
- *
- * @v intelxl		Intel device
- * @v address		Descriptor ring base address
- * @ret rc		Return status code
- */
-static int ice_context_rx ( struct intelxl_nic *intelxl, physaddr_t address ) {
-	union {
-		struct intelxl_context_rx rx;
-		uint32_t raw[ sizeof ( struct intelxl_context_rx ) /
-			      sizeof ( uint32_t ) ];
-	} ctx;
-	uint64_t base_count;
-	unsigned int i;
-
-	/* Initialise context */
-	memset ( &ctx, 0, sizeof ( ctx ) );
-	base_count = INTELXL_CTX_RX_BASE_COUNT ( address, INTELXL_RX_NUM_DESC );
-	ctx.rx.base_count = cpu_to_le64 ( base_count );
-	ctx.rx.len = cpu_to_le16 ( INTELXL_CTX_RX_LEN ( intelxl->mfs ) );
-	ctx.rx.flags = ( INTELXL_CTX_RX_FL_DSIZE | INTELXL_CTX_RX_FL_CRCSTRIP );
-	ctx.rx.mfs = cpu_to_le16 ( INTELXL_CTX_RX_MFS ( intelxl->mfs ) );
-	DBGC2 ( intelxl, "INTELXL %p RX context:\n", intelxl );
-	DBGC2_HDA ( intelxl, ICE_QRX_CONTEXT ( intelxl->queue, 0 ),
-		    &ctx, sizeof ( ctx ) );
-
-	/* Write context registers */
-	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
-		writel ( ctx.raw[i], ( intelxl->regs +
-				       ICE_QRX_CONTEXT ( intelxl->queue, i )));
-	}
-
-	return 0;
 }
 
 /******************************************************************************
@@ -215,8 +170,8 @@ static void intelxl_queues_v2 ( struct intelxl_nic *intelxl ) {
 
 	/* Configure queue register addresses */
 	intelxl->tx.tail = INTELXL_QTX_COMM_DBELL;
-	intelxl->rx.reg = ICE_QRX_CTRL ( intelxl->queue );
-	intelxl->rx.tail = ICE_QRX_TAIL ( intelxl->queue );
+	intelxl->rx.reg = INTELXL_QRX_CTRL ( intelxl->queue );
+	intelxl->rx.tail = INTELXL_QRX_TAIL ( intelxl->queue );
 }
 
 /******************************************************************************
@@ -1264,13 +1219,6 @@ static int intelxl_admin_schedule ( struct intelxl_nic *intelxl ) {
 	}
 	branch = buf->sched.branch;
 
-	for ( i = ( le16_to_cpu ( branch->count ) - 1 ) ; i >= 0 ; i-- ) {
-		node = &branch->node[i];
-		DBGC ( intelxl, "*** %d type %d teid %#08x parent %#08x\n",
-		       i, node->config.type, node->teid, node->parent );
-		DBGC_HDA ( intelxl, 0, node, sizeof ( *node ) );
-	}
-
 	/* Identify leaf node */
 	for ( i = ( le16_to_cpu ( branch->count ) - 1 ) ; i >= 0 ; i-- ) {
 		node = &branch->node[i];
@@ -1340,6 +1288,41 @@ static int intelxl_admin_add_txq ( struct intelxl_nic *intelxl,
 		return rc;
 	ring->id = le32_to_cpu ( buf->add_txq.teid );
 	DBGC ( intelxl, "INTELXL %p added TEID %#04x\n", intelxl, ring->id );
+
+	return 0;
+}
+
+/**
+ * Disable transmit queue
+ *
+ * @v intelxl		Intel device
+ * @v ring		Descriptor ring
+ * @ret rc		Return status code
+ */
+static int intelxl_admin_disable_txq ( struct intelxl_nic *intelxl,
+				       struct intelxl_ring *ring ) {
+	struct intelxl_admin_descriptor *cmd;
+	struct intelxl_admin_disable_txq_params *disable_txq;
+	union intelxl_admin_buffer *buf;
+	int rc;
+
+	/* Populate descriptor */
+	cmd = intelxl_admin_command_descriptor ( intelxl );
+	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_DISABLE_TXQ );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_RD | INTELXL_ADMIN_FL_BUF );
+	cmd->len = cpu_to_le16 ( sizeof ( buf->disable_txq ) );
+	disable_txq = &cmd->params.disable_txq;
+	disable_txq->flags = INTELXL_TXQ_FL_DISABLE;
+	disable_txq->count = 1;
+	buf = intelxl_admin_command_buffer ( intelxl );
+	buf->disable_txq.parent = cpu_to_le32 ( ring->id );
+	buf->disable_txq.count = 1;
+
+	/* Issue command */
+	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
+		return rc;
+	DBGC ( intelxl, "INTELXL %p disabled TEID %#04x\n",
+	       intelxl, ring->id );
 
 	return 0;
 }
@@ -1501,15 +1484,6 @@ void intelxl_close_admin ( struct intelxl_nic *intelxl ) {
 	intelxl_free_admin ( intelxl, &intelxl->command );
 	intelxl_free_admin ( intelxl, &intelxl->event );
 }
-
-/******************************************************************************
- *
- * Transmit context
- *
- ******************************************************************************
- */
-
-
 
 /******************************************************************************
  *
@@ -1707,70 +1681,6 @@ static int intelxl_context ( struct intelxl_nic *intelxl,
 }
 
 /**
- * Program transmit queue context
- *
- * @v intelxl		Intel device
- * @v address		Descriptor ring base address
- * @ret rc		Return status code
- */
-static int intelxl_context_tx ( struct intelxl_nic *intelxl,
-				physaddr_t address ) {
-	union {
-		struct intelxl_context_tx tx;
-		struct intelxl_context_line line;
-	} ctx;
-	int rc;
-
-	/* Initialise context */
-	memset ( &ctx, 0, sizeof ( ctx ) );
-	ctx.tx.flags = cpu_to_le16 ( INTELXL_CTX_TX_FL_NEW );
-	ctx.tx.base = cpu_to_le64 ( INTELXL_CTX_TX_BASE ( address ) );
-	ctx.tx.count =
-		cpu_to_le16 ( INTELXL_CTX_TX_COUNT ( INTELXL_TX_NUM_DESC ) );
-	ctx.tx.qset = INTELXL_CTX_TX_QSET ( intelxl->qset );
-
-	/* Program context */
-	if ( ( rc = intelxl_context ( intelxl, &ctx.line, sizeof ( ctx ),
-				      INTELXL_PFCM_LANCTXCTL_TYPE_TX ) ) != 0 )
-		return rc;
-
-	return 0;
-}
-
-/**
- * Program receive queue context
- *
- * @v intelxl		Intel device
- * @v address		Descriptor ring base address
- * @ret rc		Return status code
- */
-//static
-int intelxl_context_rx ( struct intelxl_nic *intelxl,
-				physaddr_t address ) {
-	union {
-		struct intelxl_context_rx rx;
-		struct intelxl_context_line line;
-	} ctx;
-	uint64_t base_count;
-	int rc;
-
-	/* Initialise context */
-	memset ( &ctx, 0, sizeof ( ctx ) );
-	base_count = INTELXL_CTX_RX_BASE_COUNT ( address, INTELXL_RX_NUM_DESC );
-	ctx.rx.base_count = cpu_to_le64 ( base_count );
-	ctx.rx.len = cpu_to_le16 ( INTELXL_CTX_RX_LEN ( intelxl->mfs ) );
-	ctx.rx.flags = ( INTELXL_CTX_RX_FL_DSIZE | INTELXL_CTX_RX_FL_CRCSTRIP );
-	ctx.rx.mfs = cpu_to_le16 ( INTELXL_CTX_RX_MFS ( intelxl->mfs ) );
-
-	/* Program context */
-	if ( ( rc = intelxl_context ( intelxl, &ctx.line, sizeof ( ctx ),
-				      INTELXL_PFCM_LANCTXCTL_TYPE_RX ) ) != 0 )
-		return rc;
-
-	return 0;
-}
-
-/**
  * Enable descriptor ring
  *
  * @v intelxl		Intel device
@@ -1829,24 +1739,51 @@ static int intelxl_disable_ring ( struct intelxl_nic *intelxl,
 }
 
 /**
- * Create descriptor ring
+ * Create transmit ring (API version 1)
  *
  * @v intelxl		Intel device
- * @v ring		Descriptor ring
  * @ret rc		Return status code
  */
-static int intelxl_create_ring ( struct intelxl_nic *intelxl,
-				 struct intelxl_ring *ring ) {
+static int intelxl_create_tx_v1 ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->tx;
+	union {
+		struct intelxl_context_tx tx;
+		struct intelxl_context_line line;
+	} ctx;
 	physaddr_t address;
+	unsigned int queue;
 	int rc;
 
 	/* Allocate descriptor ring */
 	if ( ( rc = intelxl_alloc_ring ( intelxl, ring ) ) != 0 )
 		goto err_alloc;
 
-	/* Program queue context */
+	/* Associate transmit queue to PF */
+	writel ( ( INTELXL_QXX_CTL_PFVF_Q_PF |
+		   INTELXL_QXX_CTL_PFVF_PF_INDX ( intelxl->pf ) ),
+		 ( intelxl->regs + ring->reg + INTELXL_QXX_CTL ) );
+
+	/* Clear transmit pre queue disable */
+	queue = ( intelxl->base + intelxl->queue );
+	writel ( ( INTELXL_GLLAN_TXPRE_QDIS_CLEAR_QDIS |
+		   INTELXL_GLLAN_TXPRE_QDIS_QINDX ( queue ) ),
+		 ( intelxl->regs + INTELXL_GLLAN_TXPRE_QDIS ( queue ) ) );
+
+	/* Reset transmit queue head */
+	writel ( 0, ( intelxl->regs + INTELXL_QTX_HEAD ( intelxl->queue ) ) );
+
+	/* Initialise context */
+	memset ( &ctx, 0, sizeof ( ctx ) );
+	ctx.tx.flags = cpu_to_le16 ( INTELXL_CTX_TX_FL_NEW );
 	address = dma ( &ring->map, ring->desc.raw );
-	if ( ( rc = ring->context ( intelxl, address ) ) != 0 )
+	ctx.tx.base = cpu_to_le64 ( INTELXL_CTX_TX_BASE ( address ) );
+	ctx.tx.count =
+		cpu_to_le16 ( INTELXL_CTX_TX_COUNT ( INTELXL_TX_NUM_DESC ) );
+	ctx.tx.qset = INTELXL_CTX_TX_QSET ( intelxl->qset );
+
+	/* Program context */
+	if ( ( rc = intelxl_context ( intelxl, &ctx.line, sizeof ( ctx ),
+				      INTELXL_PFCM_LANCTXCTL_TYPE_TX ) ) != 0 )
 		goto err_context;
 
 	/* Enable ring */
@@ -1864,13 +1801,87 @@ static int intelxl_create_ring ( struct intelxl_nic *intelxl,
 }
 
 /**
- * Destroy descriptor ring
+ * Destroy transmit ring (API version 1)
  *
  * @v intelxl		Intel device
- * @v ring		Descriptor ring
  */
-static void intelxl_destroy_ring ( struct intelxl_nic *intelxl,
-				   struct intelxl_ring *ring ) {
+static void intelxl_destroy_tx_v1 ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->tx;
+	unsigned int queue;
+	int rc;
+
+	/* Pre-disable transmit queue */
+	queue = ( intelxl->base + intelxl->queue );
+	writel ( ( INTELXL_GLLAN_TXPRE_QDIS_SET_QDIS |
+		   INTELXL_GLLAN_TXPRE_QDIS_QINDX ( queue ) ),
+		 ( intelxl->regs + INTELXL_GLLAN_TXPRE_QDIS ( queue ) ) );
+	udelay ( INTELXL_QUEUE_PRE_DISABLE_DELAY_US );
+
+	/* Disable ring */
+	if ( ( rc = intelxl_disable_ring ( intelxl, ring ) ) != 0 ) {
+		/* Leak memory; there's nothing else we can do */
+		return;
+	}
+
+	/* Free descriptor ring */
+	intelxl_free_ring ( intelxl, ring );
+}
+
+/**
+ * Create receive ring (API version 1)
+ *
+ * @v intelxl		Intel device
+ * @ret rc		Return status code
+ */
+static int intelxl_create_rx_v1 ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->rx;
+	union {
+		struct intelxl_context_rx rx;
+		struct intelxl_context_line line;
+	} ctx;
+	physaddr_t address;
+	uint64_t base_count;
+	int rc;
+
+	/* Allocate descriptor ring */
+	if ( ( rc = intelxl_alloc_ring ( intelxl, ring ) ) != 0 )
+		goto err_alloc;
+
+	/* Initialise context */
+	memset ( &ctx, 0, sizeof ( ctx ) );
+	address = dma ( &ring->map, ring->desc.raw );
+	base_count = INTELXL_CTX_RX_BASE_COUNT ( address, INTELXL_RX_NUM_DESC );
+	ctx.rx.base_count = cpu_to_le64 ( base_count );
+	ctx.rx.len = cpu_to_le16 ( INTELXL_CTX_RX_LEN ( intelxl->mfs ) );
+	ctx.rx.flags = ( INTELXL_CTX_RX_FL_DSIZE | INTELXL_CTX_RX_FL_CRCSTRIP );
+	ctx.rx.mfs = cpu_to_le16 ( INTELXL_CTX_RX_MFS ( intelxl->mfs ) );
+
+	/* Program context */
+	if ( ( rc = intelxl_context ( intelxl, &ctx.line, sizeof ( ctx ),
+				      INTELXL_PFCM_LANCTXCTL_TYPE_RX ) ) != 0 )
+		goto err_context;
+
+	/* Enable ring */
+	if ( ( rc = intelxl_enable_ring ( intelxl, ring ) ) != 0 )
+		goto err_enable;
+
+	return 0;
+
+	intelxl_disable_ring ( intelxl, ring );
+ err_enable:
+ err_context:
+	intelxl_free_ring ( intelxl, ring );
+ err_alloc:
+	return rc;
+}
+
+/**
+ * Destroy receive ring (API version 1)
+ *
+ * @v intelxl		Intel device
+ */
+static void intelxl_destroy_rx_v1 ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->rx;
 	int rc;
 
 	/* Disable ring */
@@ -1881,6 +1892,100 @@ static void intelxl_destroy_ring ( struct intelxl_nic *intelxl,
 
 	/* Free descriptor ring */
 	intelxl_free_ring ( intelxl, ring );
+}
+
+/**
+ * Create transmit ring (API version 2)
+ *
+ * @v intelxl		Intel device
+ * @ret rc		Return status code
+ */
+static int intelxl_create_tx_v2 ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->tx;
+	int rc;
+
+	/* Allocate descriptor ring */
+	if ( ( rc = intelxl_alloc_ring ( intelxl, ring ) ) != 0 )
+		goto err_alloc;
+
+	/* Add transmit queue */
+	if ( ( rc = intelxl_admin_add_txq ( intelxl, ring ) ) != 0 )
+		goto err_add_txq;
+
+	return 0;
+
+ err_add_txq:
+	intelxl_free_ring ( intelxl, ring );
+ err_alloc:
+	return rc;
+}
+
+/**
+ * Destroy transmit ring (API version 2)
+ *
+ * @v intelxl		Intel device
+ * @ret rc		Return status code
+ */
+static void intelxl_destroy_tx_v2 ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->tx;
+	int rc;
+
+	/* Disable transmit queue */
+	if ( ( rc = intelxl_admin_disable_txq ( intelxl, ring ) ) != 0 ) {
+		/* Leak memory; there's nothing else we can do */
+		return;
+	}
+
+	/* Free descriptor ring */
+	intelxl_free_ring ( intelxl, ring );
+}
+
+/**
+ * Create receive ring (API version 2)
+ *
+ * @v intelxl		Intel device
+ * @ret rc		Return status code
+ */
+static int intelxl_create_rx_v2 ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->rx;
+	union {
+		struct intelxl_context_rx rx;
+		uint32_t raw[ sizeof ( struct intelxl_context_rx ) /
+			      sizeof ( uint32_t ) ];
+	} ctx;
+	physaddr_t address;
+	uint64_t base_count;
+	unsigned int i;
+
+	/* Initialise context */
+	memset ( &ctx, 0, sizeof ( ctx ) );
+	address = dma ( &ring->map, ring->desc.raw );
+	base_count = INTELXL_CTX_RX_BASE_COUNT ( address, INTELXL_RX_NUM_DESC );
+	ctx.rx.base_count = cpu_to_le64 ( base_count );
+	ctx.rx.len = cpu_to_le16 ( INTELXL_CTX_RX_LEN ( intelxl->mfs ) );
+	ctx.rx.flags = ( INTELXL_CTX_RX_FL_DSIZE | INTELXL_CTX_RX_FL_CRCSTRIP );
+	ctx.rx.mfs = cpu_to_le16 ( INTELXL_CTX_RX_MFS ( intelxl->mfs ) );
+
+	/* Write context registers */
+	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
+		writel ( le32_to_cpu ( ctx.raw[i] ),
+			 ( intelxl->regs +
+			   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
+	}
+
+	return 0;
+}
+
+/**
+ * Destroy receive ring (API version 2)
+ *
+ * @v intelxl		Intel device
+ */
+static void intelxl_destroy_rx_v2 ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->rx;
+
+	//
+	( void ) ring;
 }
 
 /**
@@ -1962,7 +2067,6 @@ void intelxl_empty_rx ( struct intelxl_nic *intelxl ) {
  */
 static int intelxl_open ( struct net_device *netdev ) {
 	struct intelxl_nic *intelxl = netdev->priv;
-	unsigned int queue;
 	int rc;
 
 	/* Calculate maximum frame size */
@@ -1977,37 +2081,13 @@ static int intelxl_open ( struct net_device *netdev ) {
 	if ( ( rc = intelxl_admin_mac_config ( intelxl ) ) != 0 )
 		goto err_mac_config;
 
-	/* Associate transmit queue to PF */
-	if ( 0 ) {
-	writel ( ( INTELXL_QXX_CTL_PFVF_Q_PF |
-		   INTELXL_QXX_CTL_PFVF_PF_INDX ( intelxl->pf ) ),
-		 ( intelxl->regs + intelxl->tx.reg + INTELXL_QXX_CTL ) );
-	}
-
-	/* Clear transmit pre queue disable */
-	if ( 0 ) {
-	queue = ( intelxl->base + intelxl->queue );
-	writel ( ( INTELXL_GLLAN_TXPRE_QDIS_CLEAR_QDIS |
-		   INTELXL_GLLAN_TXPRE_QDIS_QINDX ( queue ) ),
-		 ( intelxl->regs + INTELXL_GLLAN_TXPRE_QDIS ( queue ) ) );
-	}
-
-	/* Reset transmit queue head */
-	if ( 0 ) {
-	writel ( 0, ( intelxl->regs + INTELXL_QTX_HEAD ( intelxl->queue ) ) );
-	}
-
 	/* Create receive descriptor ring */
-	if ( ( rc = intelxl_create_ring ( intelxl, &intelxl->rx ) ) != 0 )
+	if ( ( rc = intelxl->api->create_rx ( intelxl ) ) != 0 )
 		goto err_create_rx;
 
 	/* Create transmit descriptor ring */
-	if ( 0 && ( rc = intelxl_create_ring ( intelxl, &intelxl->tx ) ) != 0 )
+	if ( ( rc = intelxl->api->create_tx ( intelxl ) ) != 0 )
 		goto err_create_tx;
-
-	//
-	intelxl_alloc_ring ( intelxl, &intelxl->tx );
-	intelxl_admin_add_txq ( intelxl, &intelxl->tx );
 
 	/* Fill receive ring */
 	intelxl_refill_rx ( intelxl );
@@ -2020,13 +2100,9 @@ static int intelxl_open ( struct net_device *netdev ) {
 
 	return 0;
 
-	writel ( ( INTELXL_GLLAN_TXPRE_QDIS_SET_QDIS |
-		   INTELXL_GLLAN_TXPRE_QDIS_QINDX ( queue ) ),
-		 ( intelxl->regs + INTELXL_GLLAN_TXPRE_QDIS ( queue ) ) );
-	udelay ( INTELXL_QUEUE_PRE_DISABLE_DELAY_US );
-	//intelxl_destroy_ring ( intelxl, &intelxl->tx );
+	intelxl->api->destroy_tx ( intelxl );
  err_create_tx:
-	intelxl_destroy_ring ( intelxl, &intelxl->rx );
+	intelxl->api->destroy_rx ( intelxl );
  err_create_rx:
  err_mac_config:
  err_mac_write:
@@ -2040,7 +2116,6 @@ static int intelxl_open ( struct net_device *netdev ) {
  */
 static void intelxl_close ( struct net_device *netdev ) {
 	struct intelxl_nic *intelxl = netdev->priv;
-	unsigned int queue;
 
 	/* Dump contexts (for debugging) */
 	//intelxl_context_dump ( intelxl, INTELXL_PFCM_LANCTXCTL_TYPE_TX,
@@ -2049,18 +2124,12 @@ static void intelxl_close ( struct net_device *netdev ) {
 	//			       sizeof ( struct intelxl_context_rx ) );
 	ice_context_dump_rx ( intelxl );
 
-	/* Pre-disable transmit queue */
-	queue = ( intelxl->base + intelxl->queue );
-	writel ( ( INTELXL_GLLAN_TXPRE_QDIS_SET_QDIS |
-		   INTELXL_GLLAN_TXPRE_QDIS_QINDX ( queue ) ),
-		 ( intelxl->regs + INTELXL_GLLAN_TXPRE_QDIS ( queue ) ) );
-	udelay ( INTELXL_QUEUE_PRE_DISABLE_DELAY_US );
 
 	/* Destroy transmit descriptor ring */
-	//intelxl_destroy_ring ( intelxl, &intelxl->tx );
+	intelxl->api->destroy_tx ( intelxl );
 
 	/* Destroy receive descriptor ring */
-	intelxl_destroy_ring ( intelxl, &intelxl->rx );
+	intelxl->api->destroy_rx ( intelxl );
 
 	/* Discard any unused receive buffers */
 	intelxl_empty_rx ( intelxl );
@@ -2259,6 +2328,10 @@ static struct intelxl_api_version intelxl_api_v1 = {
 	.sw = intelxl_admin_switch_v1,
 	.link = intelxl_admin_link_status_v1,
 	.mfs = intelxl_admin_link_mfs_v1,
+	.create_tx = intelxl_create_tx_v1,
+	.destroy_tx = intelxl_destroy_tx_v1,
+	.create_rx = intelxl_create_rx_v1,
+	.destroy_rx = intelxl_destroy_rx_v1,
 };
 
 /** Updated E810 API version */
@@ -2270,6 +2343,10 @@ static struct intelxl_api_version intelxl_api_v2 = {
 	.sw = intelxl_admin_switch_v2,
 	.link = intelxl_admin_link_status_v2,
 	.mfs = intelxl_admin_link_mfs_v2,
+	.create_tx = intelxl_create_tx_v2,
+	.destroy_tx = intelxl_destroy_tx_v2,
+	.create_rx = intelxl_create_rx_v2,
+	.destroy_rx = intelxl_destroy_rx_v2,
 };
 
 /**
@@ -2300,11 +2377,9 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	intelxl_init_admin ( &intelxl->event, INTELXL_ADMIN_EVT,
 			     &intelxl_admin_offsets );
 	intelxl_init_ring ( &intelxl->tx, INTELXL_TX_NUM_DESC,
-			    sizeof ( intelxl->tx.desc.tx[0] ),
-			    intelxl_context_tx );
+			    sizeof ( intelxl->tx.desc.tx[0] ) );
 	intelxl_init_ring ( &intelxl->rx, INTELXL_RX_NUM_DESC,
-			    sizeof ( intelxl->rx.desc.rx[0] ),
-			    ice_context_rx );
+			    sizeof ( intelxl->rx.desc.rx[0] ) );
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
