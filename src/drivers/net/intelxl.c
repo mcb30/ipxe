@@ -876,6 +876,28 @@ static int intelxl_admin_promisc ( struct intelxl_nic *intelxl ) {
 	int rc;
 
 	//
+	union intelxl_admin_buffer *buf;
+	static uint8_t wtf[32] = {
+		0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+		0x40, 0x00, 0x02, 0x00, 0x00, 0x00, 0x10, 0x00,
+		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00
+	};
+	cmd = intelxl_admin_command_descriptor ( intelxl );
+	cmd->opcode = cpu_to_le16 ( 0x02a0 );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF | INTELXL_ADMIN_FL_RD );
+	cmd->len = cpu_to_le16 ( sizeof ( wtf ) );
+	cmd->params.buffer.reserved[0] = 1;
+	buf = intelxl_admin_command_buffer ( intelxl );
+	memcpy ( buf, wtf, sizeof ( wtf ) );
+
+
+	/* Issue command */
+	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
+		return rc;
+
+
+	//
 	return 0;
 
 	/* Populate descriptor */
@@ -1652,6 +1674,11 @@ static int intelxl_enable_ring ( struct intelxl_nic *intelxl,
 	uint32_t qxx_ena;
 
 	/* Enable ring */
+	//
+	DBGC ( intelxl, "*** RXQ ctrl %08x <= %08lx\n",
+	       ( ring->reg + INTELXL_QXX_ENA ),
+	       INTELXL_QXX_ENA_REQ );
+
 	writel ( INTELXL_QXX_ENA_REQ, ( ring_regs + INTELXL_QXX_ENA ) );
 	udelay ( INTELXL_QUEUE_ENABLE_DELAY_US );
 	qxx_ena = readl ( ring_regs + INTELXL_QXX_ENA );
@@ -1969,6 +1996,7 @@ static int intelxl_create_rx_v2 ( struct intelxl_nic *intelxl ) {
 	physaddr_t address;
 	uint64_t base_count;
 	unsigned int i;
+	int rc;
 
 	/* Initialise context */
 	memset ( &ctx, 0, sizeof ( ctx ) );
@@ -1980,13 +2008,26 @@ static int intelxl_create_rx_v2 ( struct intelxl_nic *intelxl ) {
 	ctx.rx.mfs = cpu_to_le16 ( INTELXL_CTX_RX_MFS ( intelxl->mfs ) );
 
 	/* Write context registers */
+	//
+	DBGC ( intelxl, "*** RXQ @ %08lx\n", ( unsigned long ) address );
 	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
+		//
+		DBGC ( intelxl, "*** RXQ context %08x <= %08x\n",
+		       INTELXL_QRX_CONTEXT ( intelxl->queue, i ),
+		       le32_to_cpu ( ctx.raw[i] ) );
 		writel ( le32_to_cpu ( ctx.raw[i] ),
 			 ( intelxl->regs +
 			   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
 	}
 
+	/* Enable ring */
+	if ( ( rc = intelxl_enable_ring ( intelxl, ring ) ) != 0 )
+		goto err_enable;
+
 	return 0;
+
+ err_enable:
+	return rc;
 }
 
 /**
@@ -2046,6 +2087,10 @@ static void intelxl_refill_rx ( struct intelxl_nic *intelxl ) {
 		wmb();
 		rx_tail = ( intelxl->rx.prod % INTELXL_RX_NUM_DESC );
 		writel ( rx_tail, ( intelxl->regs + intelxl->rx.tail ) );
+
+		//
+		DBGC ( intelxl, "*** RXQ tail %08x <= %08x\n",
+		       intelxl->rx.tail, rx_tail );
 	}
 }
 
