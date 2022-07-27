@@ -117,6 +117,14 @@ static void intelxl_queues_v2 ( struct intelxl_nic *intelxl ) {
 	intelxl->tx.tail = INTELXL_QTX_COMM_DBELL;
 	intelxl->rx.reg = INTELXL_QRX_CTRL ( intelxl->queue );
 	intelxl->rx.tail = INTELXL_QRX_TAIL ( intelxl->queue );
+
+	/* Set a default value for the queue context flex extension,
+	 * since this register erroneously retains its value across at
+	 * least a PCIe FLR.
+	 */
+	writel ( ( INTELXL_QRX_FLXP_CNTXT_RXDID_IDX_LEGACY_32 |
+		   INTELXL_QRX_FLXP_CNTXT_RXDID_PRIO_MAX ),
+		 intelxl->regs + INTELXL_QRX_FLXP_CNTXT );
 }
 
 /******************************************************************************
@@ -2042,6 +2050,10 @@ static int intelxl_create_rx_v2 ( struct intelxl_nic *intelxl ) {
 			   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
 	}
 
+	//
+	DBGC ( intelxl, "*** QRXFLXP_CNTXT %08x\n",
+	       readl ( intelxl->regs + 0x480000 ) );
+
 	/* Enable ring */
 	if ( ( rc = intelxl_enable_ring ( intelxl, ring ) ) != 0 )
 		goto err_enable;
@@ -2312,11 +2324,6 @@ static void intelxl_poll_rx ( struct net_device *netdev ) {
 		iobuf = intelxl->rx_iobuf[rx_idx];
 		intelxl->rx_iobuf[rx_idx] = NULL;
 		len = INTELXL_RX_WB_LEN ( le32_to_cpu ( rx_wb->len ) );
-
-
-		//
-		len = intelxl->mfs;
-
 		iob_put ( iobuf, len );
 
 		/* Find VLAN device, if applicable */

@@ -1143,6 +1143,17 @@ struct intelxl_context_rx {
 /** Transmit Comm Scheduler Queue Doorbell register */
 #define INTELXL_QTX_COMM_DBELL 0x2c0000
 
+/** Queue Context Flex Extension register */
+#define INTELXL_QRX_FLXP_CNTXT 0x480000
+#define INTELXL_QRX_FLXP_CNTXT_RXDID_IDX(x) \
+	( (x) << 0 )					/**< RX profile */
+#define INTELXL_QRX_FLXP_CNTXT_RXDID_IDX_LEGACY_32 \
+	INTELXL_QRX_FLXP_CNTXT_RXDID_IDX ( 1 )		/**< 32-byte legacy */
+#define INTELXL_QRX_FLXP_CNTXT_RXDID_PRIO(x) \
+	( (x) << 8 )					/**< Priority */
+#define INTELXL_QRX_FLXP_CNTXT_RXDID_PRIO_MAX \
+	INTELXL_QRX_FLXP_CNTXT_RXDID_PRIO ( 7 )		/**< Maximum priority */
+
 /** Transmit data descriptor */
 struct intelxl_tx_data_descriptor {
 	/** Buffer address */
