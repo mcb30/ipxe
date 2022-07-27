@@ -898,6 +898,28 @@ static int intelxl_admin_promisc ( struct intelxl_nic *intelxl ) {
 
 
 	//
+	static uint8_t wtf2[32] = {
+		0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+		0x40, 0x00, 0x02, 0x00, 0x00, 0x00, 0x10, 0x00,
+		0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00
+	};
+	cmd = intelxl_admin_command_descriptor ( intelxl );
+	cmd->opcode = cpu_to_le16 ( 0x02a0 );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF | INTELXL_ADMIN_FL_RD );
+	cmd->len = cpu_to_le16 ( sizeof ( wtf2 ) );
+	cmd->params.buffer.reserved[0] = 1;
+	buf = intelxl_admin_command_buffer ( intelxl );
+	memcpy ( buf, wtf2, sizeof ( wtf2 ) );
+
+
+	/* Issue command */
+	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
+		return rc;
+
+
+
+	//
 	return 0;
 
 	/* Populate descriptor */
@@ -2064,6 +2086,9 @@ static void intelxl_refill_rx ( struct intelxl_nic *intelxl ) {
 			break;
 		}
 
+		//
+		memset ( iobuf->data, 0, intelxl->mfs );
+
 		/* Get next receive descriptor */
 		rx_idx = ( intelxl->rx.prod++ % INTELXL_RX_NUM_DESC );
 		rx = &intelxl->rx.desc.rx[rx_idx].data;
@@ -2287,6 +2312,11 @@ static void intelxl_poll_rx ( struct net_device *netdev ) {
 		iobuf = intelxl->rx_iobuf[rx_idx];
 		intelxl->rx_iobuf[rx_idx] = NULL;
 		len = INTELXL_RX_WB_LEN ( le32_to_cpu ( rx_wb->len ) );
+
+
+		//
+		len = intelxl->mfs;
+
 		iob_put ( iobuf, len );
 
 		/* Find VLAN device, if applicable */
@@ -2305,6 +2335,11 @@ static void intelxl_poll_rx ( struct net_device *netdev ) {
 		} else {
 			DBGC2 ( intelxl, "INTELXL %p RX %d complete (length "
 				"%zd)\n", intelxl, rx_idx, len );
+
+			//
+			DBGC2_HD ( intelxl, rx_wb, sizeof ( *rx_wb ) );
+			DBGC2_HD ( intelxl, iobuf->data, 0x40 );
+
 			vlan_netdev_rx ( netdev, tag, iobuf );
 		}
 		intelxl->rx.cons++;
