@@ -118,6 +118,12 @@ static void intelxl_queues_v2 ( struct intelxl_nic *intelxl ) {
 	intelxl->rx.reg = INTELXL_QRX_CTRL ( intelxl->queue );
 	intelxl->rx.tail = INTELXL_QRX_TAIL ( intelxl->queue );
 
+	//
+	writel ( ( ( 1UL << 30 ) | ( 3UL << 11 ) ),
+		 intelxl->regs + 0x140000 );
+	writel ( ( ( 1UL << 30 ) | ( 3UL << 11 ) ),
+		 intelxl->regs + 0x150000 );
+
 	/* Set a default value for the queue context flex extension,
 	 * since this register erroneously retains its value across at
 	 * least a PCIe FLR.
@@ -2373,9 +2379,6 @@ void intelxl_poll ( struct net_device *netdev ) {
 	/* Refill RX ring */
 	intelxl_refill_rx ( intelxl );
 
-	//
-	return;
-
 	/* Rearm interrupt, since otherwise receive descriptors will
 	 * be written back only after a complete cacheline (four
 	 * packets) have been received.
@@ -2463,7 +2466,7 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	pci_set_drvdata ( pci, netdev );
 	netdev->dev = &pci->dev;
 	memset ( intelxl, 0, sizeof ( *intelxl ) );
-	intelxl->intr = INTELXL_PFINT_DYN_CTL0;
+	intelxl->intr = 0x160000; //INTELXL_PFINT_DYN_CTL0;
 	intelxl_init_admin ( &intelxl->command, INTELXL_ADMIN_CMD,
 			     &intelxl_admin_offsets );
 	intelxl_init_admin ( &intelxl->event, INTELXL_ADMIN_EVT,
