@@ -214,7 +214,7 @@ void intelxl_msix_disable ( struct intelxl_nic *intelxl,
  */
 
 /** Admin queue register offsets */
-static const struct intelxl_admin_offsets intelxl_admin_offsets = {
+const struct intelxl_admin_offsets intelxl_admin_offsets = {
 	.bal = INTELXL_ADMIN_BAL,
 	.bah = INTELXL_ADMIN_BAH,
 	.len = INTELXL_ADMIN_LEN,
@@ -715,7 +715,7 @@ static int intelxl_admin_mac_write ( struct net_device *netdev ) {
  * @v intelxl		Intel device
  * @ret rc		Return status code
  */
-static int intelxl_admin_clear_pxe ( struct intelxl_nic *intelxl ) {
+int intelxl_admin_clear_pxe ( struct intelxl_nic *intelxl ) {
 	struct intelxl_admin_descriptor *cmd;
 	struct intelxl_admin_clear_pxe_params *pxe;
 	int rc;
@@ -2590,8 +2590,6 @@ static void intelxl_remove ( struct pci_device *pci ) {
 
 /** PCI device IDs */
 static struct pci_device_id intelxl_nics[] = {
-
-	/* XL710 */
 	PCI_ROM ( 0x8086, 0x1572, "x710-sfp", "X710 10GbE SFP+", 0 ),
 	PCI_ROM ( 0x8086, 0x1574, "xl710-qemu", "Virtual XL710", 0 ),
 	PCI_ROM ( 0x8086, 0x1580, "xl710-kx-b", "XL710 40GbE backplane", 0 ),
@@ -2611,33 +2609,6 @@ static struct pci_device_id intelxl_nics[] = {
 	PCI_ROM ( 0x8086, 0x37d1, "x722-1gt", "X722 1GBASE-T", 0 ),
 	PCI_ROM ( 0x8086, 0x37d2, "x722-10gt", "X722 10GBASE-T", 0 ),
 	PCI_ROM ( 0x8086, 0x37d3, "x722-sfp-i", "X722 10GbE SFP+", 0 ),
-
-	/* E810 */
-	PCI_ROM ( 0x8086, 0x124c, "e823l-bp", "E823-L backplane", 0 ),
-	PCI_ROM ( 0x8086, 0x124d, "e823l-sfp", "E823-L SFP", 0 ),
-	PCI_ROM ( 0x8086, 0x124e, "e823l-10gt", "E823-L 10GBASE-T", 0 ),
-	PCI_ROM ( 0x8086, 0x124f, "e823l-1g", "E823-L 1GbE", 0 ),
-	PCI_ROM ( 0x8086, 0x151d, "e823l-qsfp", "E823-L QSFP", 0 ),
-	PCI_ROM ( 0x8086, 0x1591, "e810c-bp", "E810-C backplane", 0 ),
-	PCI_ROM ( 0x8086, 0x1592, "e810c-qsfp", "E810-C QSFP", 0 ),
-	PCI_ROM ( 0x8086, 0x1593, "e810c-sfp", "E810-C SFP", 0 ),
-	PCI_ROM ( 0x8086, 0x1599, "e810-xxv-bp", "E810-XXV backplane", 0 ),
-	PCI_ROM ( 0x8086, 0x159a, "e810-xxv-qsfp", "E810-XXV QSFP", 0 ),
-	PCI_ROM ( 0x8086, 0x159b, "e810-xxv-sfp", "E810-XXV SFP", 0 ),
-	PCI_ROM ( 0x8086, 0x188a, "e823c-bp", "E823-C backplane", 0 ),
-	PCI_ROM ( 0x8086, 0x188b, "e823c-qsfp", "E823-C QSFP", 0 ),
-	PCI_ROM ( 0x8086, 0x188c, "e823c-sfp", "E823-C SFP", 0 ),
-	PCI_ROM ( 0x8086, 0x188d, "e823c-10gt", "E823-C 10GBASE-T", 0 ),
-	PCI_ROM ( 0x8086, 0x188e, "e823c-1g", "E823-C 1GbE", 0 ),
-	PCI_ROM ( 0x8086, 0x1890, "e822c-bp", "E822-C backplane", 0 ),
-	PCI_ROM ( 0x8086, 0x1891, "e822c-qsfp", "E822-C QSFP", 0 ),
-	PCI_ROM ( 0x8086, 0x1892, "e822c-sfp", "E822-C SFP", 0 ),
-	PCI_ROM ( 0x8086, 0x1893, "e822c-10gt", "E822-C 10GBASE-T", 0 ),
-	PCI_ROM ( 0x8086, 0x1894, "e822c-1g", "E822-C 1GbE", 0 ),
-	PCI_ROM ( 0x8086, 0x1897, "e822l-bp", "E822-L backplane", 0 ),
-	PCI_ROM ( 0x8086, 0x1898, "e822l-sfp", "E822-L SFP", 0 ),
-	PCI_ROM ( 0x8086, 0x1899, "e822l-10gt", "E822-L 10GBASE-T", 0 ),
-	PCI_ROM ( 0x8086, 0x189a, "e822l-1g", "E822-L 1GbE", 0 ),
 };
 
 /** PCI driver */
