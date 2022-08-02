@@ -118,11 +118,13 @@ static void intelxl_queues_v2 ( struct intelxl_nic *intelxl ) {
 	intelxl->rx.reg = INTELXL_QRX_CTRL ( intelxl->queue );
 	intelxl->rx.tail = INTELXL_QRX_TAIL ( intelxl->queue );
 
-	//
-	writel ( ( ( 1UL << 30 ) | ( 3UL << 11 ) ),
-		 intelxl->regs + 0x140000 );
-	writel ( ( ( 1UL << 30 ) | ( 3UL << 11 ) ),
-		 intelxl->regs + 0x150000 );
+	/* Configure interrupt causes */
+	writel ( ( INTELXL_QINT_TQCTL_V2_ITR_INDX_NONE |
+		   INTELXL_QINT_TQCTL_V2_CAUSE_ENA ),
+		 intelxl->regs + INTELXL_QINT_TQCTL_V2 );
+	writel ( ( INTELXL_QINT_RQCTL_V2_ITR_INDX_NONE |
+		   INTELXL_QINT_RQCTL_V2_CAUSE_ENA ),
+		 intelxl->regs + INTELXL_QINT_RQCTL_V2 );
 
 	/* Set a default value for the queue context flex extension,
 	 * since this register erroneously retains its value across at
@@ -1710,11 +1712,6 @@ static int intelxl_enable_ring ( struct intelxl_nic *intelxl,
 	uint32_t qxx_ena;
 
 	/* Enable ring */
-	//
-	DBGC ( intelxl, "*** RXQ ctrl %08x <= %08lx\n",
-	       ( ring->reg + INTELXL_QXX_ENA ),
-	       INTELXL_QXX_ENA_REQ );
-
 	writel ( INTELXL_QXX_ENA_REQ, ( ring_regs + INTELXL_QXX_ENA ) );
 	udelay ( INTELXL_QUEUE_ENABLE_DELAY_US );
 	qxx_ena = readl ( ring_regs + INTELXL_QXX_ENA );
@@ -2044,21 +2041,11 @@ static int intelxl_create_rx_v2 ( struct intelxl_nic *intelxl ) {
 	ctx.rx.mfs = cpu_to_le16 ( INTELXL_CTX_RX_MFS ( intelxl->mfs ) );
 
 	/* Write context registers */
-	//
-	DBGC ( intelxl, "*** RXQ @ %08lx\n", ( unsigned long ) address );
 	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
-		//
-		DBGC ( intelxl, "*** RXQ context %08x <= %08x\n",
-		       INTELXL_QRX_CONTEXT ( intelxl->queue, i ),
-		       le32_to_cpu ( ctx.raw[i] ) );
 		writel ( le32_to_cpu ( ctx.raw[i] ),
 			 ( intelxl->regs +
 			   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
 	}
-
-	//
-	DBGC ( intelxl, "*** QRXFLXP_CNTXT %08x\n",
-	       readl ( intelxl->regs + 0x480000 ) );
 
 	/* Enable ring */
 	if ( ( rc = intelxl_enable_ring ( intelxl, ring ) ) != 0 )
@@ -2104,9 +2091,6 @@ static void intelxl_refill_rx ( struct intelxl_nic *intelxl ) {
 			break;
 		}
 
-		//
-		memset ( iobuf->data, 0, intelxl->mfs );
-
 		/* Get next receive descriptor */
 		rx_idx = ( intelxl->rx.prod++ % INTELXL_RX_NUM_DESC );
 		rx = &intelxl->rx.desc.rx[rx_idx].data;
@@ -2130,10 +2114,6 @@ static void intelxl_refill_rx ( struct intelxl_nic *intelxl ) {
 		wmb();
 		rx_tail = ( intelxl->rx.prod % INTELXL_RX_NUM_DESC );
 		writel ( rx_tail, ( intelxl->regs + intelxl->rx.tail ) );
-
-		//
-		DBGC ( intelxl, "*** RXQ tail %08x <= %08x\n",
-		       intelxl->rx.tail, rx_tail );
 	}
 }
 
@@ -2348,11 +2328,6 @@ static void intelxl_poll_rx ( struct net_device *netdev ) {
 		} else {
 			DBGC2 ( intelxl, "INTELXL %p RX %d complete (length "
 				"%zd)\n", intelxl, rx_idx, len );
-
-			//
-			DBGC2_HD ( intelxl, rx_wb, sizeof ( *rx_wb ) );
-			DBGC2_HD ( intelxl, iobuf->data, 0x40 );
-
 			vlan_netdev_rx ( netdev, tag, iobuf );
 		}
 		intelxl->rx.cons++;
@@ -2466,7 +2441,7 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	pci_set_drvdata ( pci, netdev );
 	netdev->dev = &pci->dev;
 	memset ( intelxl, 0, sizeof ( *intelxl ) );
-	intelxl->intr = 0x160000; //INTELXL_PFINT_DYN_CTL0;
+	intelxl->intr = INTELXL_GLINT_DYN_CTL;
 	intelxl_init_admin ( &intelxl->command, INTELXL_ADMIN_CMD,
 			     &intelxl_admin_offsets );
 	intelxl_init_admin ( &intelxl->event, INTELXL_ADMIN_EVT,

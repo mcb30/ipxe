@@ -1396,6 +1396,23 @@ intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count,
 #define INTELXL_PFGEN_PORTNUM_V2_PORT_NUM(x) \
 	( ( (x) >> 0 ) & 0x7 )				/**< Port number */
 
+/** Transmit Queue Interrupt Cause Control Register */
+#define INTELXL_QINT_TQCTL_V2 0x140000
+#define INTELXL_QINT_TQCTL_V2_ITR_INDX(x) ( (x) << 11 )	/**< Throttling */
+#define INTELXL_QINT_TQCTL_V2_ITR_INDX_NONE \
+	INTELXL_QINT_TQCTL_V2_ITR_INDX ( 0x3 )		/**< No throttling */
+#define INTELXL_QINT_TQCTL_V2_CAUSE_ENA	0x40000000UL	/**< Enable */
+
+/** Receive Queue Interrupt Cause Control Register */
+#define INTELXL_QINT_RQCTL_V2 0x150000
+#define INTELXL_QINT_RQCTL_V2_ITR_INDX(x) ( (x) << 11 )	/**< Throttling */
+#define INTELXL_QINT_RQCTL_V2_ITR_INDX_NONE \
+	INTELXL_QINT_RQCTL_V2_ITR_INDX ( 0x3 )		/**< No throttling */
+#define INTELXL_QINT_RQCTL_V2_CAUSE_ENA	0x40000000UL	/**< Enable */
+
+/** Global Interrupt Dynamic Control Register */
+#define INTELXL_GLINT_DYN_CTL 0x160000
+
 /** MSI-X interrupt */
 struct intelxl_msix {
 	/** PCI capability */
