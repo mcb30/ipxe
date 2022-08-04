@@ -89,21 +89,9 @@ struct intelxl_admin_buffer_params {
 /** Admin queue version number */
 struct intelxl_admin_version {
 	/** Major version number */
-	union {
-		/** Original 16-bit major version number */
-		uint16_t major16;
-		/** Branch-based major version number */
-		struct {
-			/** Branch identifier */
-			uint8_t branch;
-			/** New 8-bit major version number */
-			uint8_t major8;
-		} __attribute__ (( packed ));
-	};
+	uint16_t major;
 	/** Minor version number */
-	uint8_t minor;
-	/** Patch level */
-	uint8_t patch;
+	uint16_t minor;
 } __attribute__ (( packed ));
 
 /** Admin queue Get Version command parameters */
@@ -165,11 +153,7 @@ struct intelxl_admin_mac_read_params {
 	/** Valid addresses */
 	uint8_t valid;
 	/** Reserved */
-	uint8_t reserved_a[3];
-	/** Number of addresses in response */
-	uint8_t count;
-	/** Reserved */
-	uint8_t reserved_b[11];
+	uint8_t reserved[15];
 } __attribute__ (( packed ));
 
 /** LAN MAC address is valid */
@@ -189,23 +173,15 @@ struct intelxl_admin_mac_read_address {
 #define INTELXL_ADMIN_MAC_READ_TYPE_LAN 0
 
 /** Admin queue Manage MAC Address Read data buffer */
-union intelxl_admin_mac_read_buffer {
-	/** Version 1 */
-	struct {
-		/** Physical function MAC address */
-		uint8_t pf[ETH_ALEN];
-		/** Reserved */
-		uint8_t reserved[ETH_ALEN];
-		/** Port MAC address */
-		uint8_t port[ETH_ALEN];
-		/** Physical function wake-on-LAN MAC address */
-		uint8_t wol[ETH_ALEN];
-	} __attribute__ (( packed )) v1;
-	/** Version 2 */
-	struct {
-		/** MAC addresses */
-		struct intelxl_admin_mac_read_address mac[4];
-	} __attribute__ (( packed )) v2;
+struct intelxl_admin_mac_read_buffer {
+	/** Physical function MAC address */
+	uint8_t pf[ETH_ALEN];
+	/** Reserved */
+	uint8_t reserved[ETH_ALEN];
+	/** Port MAC address */
+	uint8_t port[ETH_ALEN];
+	/** Physical function wake-on-LAN MAC address */
+	uint8_t wol[ETH_ALEN];
 } __attribute__ (( packed ));
 
 /** Admin queue Manage MAC Address Write command */
@@ -241,7 +217,7 @@ struct intelxl_admin_clear_pxe_params {
 #define INTELXL_ADMIN_SWITCH 0x0200
 
 /** Switching element configuration */
-struct intelxl_admin_switch_config_v1 {
+struct intelxl_admin_switch_config {
 	/** Switching element type */
 	uint8_t type;
 	/** Revision */
@@ -263,23 +239,7 @@ struct intelxl_admin_switch_config_v1 {
 } __attribute__ (( packed ));
 
 /** Virtual Station Inferface element type */
-#define INTELXL_ADMIN_SWITCH_V1_TYPE_VSI 19
-
-/** Switching element configuration */
-struct intelxl_admin_switch_config_v2 {
-	/** Switching element ID and flags */
-	uint16_t seid;
-	/** Uplink switching element ID */
-	uint16_t uplink;
-	/** PF/VF number */
-	uint16_t func;
-} __attribute__ (( packed ));
-
-/** Switching element ID type mask */
-#define INTELXL_ADMIN_SWITCH_V2_TYPE_MASK 0xc000
-
-/** Virtual Station Interface element type */
-#define INTELXL_ADMIN_SWITCH_V2_TYPE_VSI 0x8000
+#define INTELXL_ADMIN_SWITCH_TYPE_VSI 19
 
 /** Admin queue Get Switch Configuration command parameters */
 struct intelxl_admin_switch_params {
@@ -292,24 +252,16 @@ struct intelxl_admin_switch_params {
 } __attribute__ (( packed ));
 
 /** Admin queue Get Switch Configuration data buffer */
-union intelxl_admin_switch_buffer {
-	/** Version 1 */
-	struct {
-		/** Number of switching elements reported */
-		uint16_t count;
-		/** Total number of switching elements */
-		uint16_t total;
-		/** Reserved */
-		uint8_t reserved_a[12];
-		/** Switch configuration */
-		struct intelxl_admin_switch_config_v1 cfg[1];
-	} __attribute__ (( packed )) v1;
-	/** Version 2 */
-	struct {
-		/** Switch configuration */
-		struct intelxl_admin_switch_config_v2 cfg[1];
-	} __attribute__ (( packed )) v2;
-};
+struct intelxl_admin_switch_buffer {
+	/** Number of switching elements reported */
+	uint16_t count;
+	/** Total number of switching elements */
+	uint16_t total;
+	/** Reserved */
+	uint8_t reserved_a[12];
+	/** Switch configuration */
+	struct intelxl_admin_switch_config cfg;
+} __attribute__ (( packed ));
 
 /** Admin queue Get VSI Parameters command */
 #define INTELXL_ADMIN_VSI 0x0212
@@ -365,85 +317,6 @@ struct intelxl_admin_promisc_params {
 /** Promiscuous VLAN mode */
 #define INTELXL_ADMIN_PROMISC_FL_VLAN 0x0010
 
-/** Admin queue Query Default Scheduling Tree Topology command */
-#define INTELXL_ADMIN_SCHEDULE 0x0400
-
-/** Admin queue Query Default Scheduling Tree Topology command parameters */
-struct intelxl_admin_schedule_params {
-	/** Reserved */
-	uint8_t reserved_a;
-	/** Total branches */
-	uint8_t branches;
-	/** Reserved */
-	uint8_t reserved_b[6];
-} __attribute__ (( packed ));
-
-/** Transmit scheduler configuration */
-struct intelxl_schedule_config {
-	/** Node type */
-	uint8_t type;
-	/** Valid sections */
-	uint8_t sections;
-	/** Generic information */
-	uint8_t generic;
-	/** Flags */
-	uint8_t flags;
-	/** Committed bandwidth profile ID */
-	uint16_t commit_id;
-	/** Committeed bandwidth weight */
-	uint16_t commit_weight;
-	/** Excess bandwidth profile ID */
-	uint16_t excess_id;
-	/** Excess bandwidth weight */
-	uint16_t excess_weight;
-	/** Shared rate limit profile ID */
-	uint16_t shared;
-	/** Reserved */
-	uint16_t reserved;
-} __attribute__ (( packed ));
-
-/** Transmit scheduler configuration generic section is valid */
-#define INTELXL_SCHEDULE_GENERIC 0x01
-
-/** Transmit scheduler configuration committed bandwidth section is valid */
-#define INTELXL_SCHEDULE_COMMIT 0x02
-
-/** Transmit scheduler configuration excess bandwidth section is valid */
-#define INTELXL_SCHEDULE_EXCESS 0x04
-
-/** Transmit scheduler configuration default weight */
-#define INTELXL_SCHEDULE_WEIGHT 0x0004
-
-/** Admin queue Query Default Scheduling Tree Topology node */
-struct intelxl_admin_schedule_node {
-	/** Parent TEID */
-	uint32_t parent;
-	/** Node TEID */
-	uint32_t teid;
-	/** Scheduler configuration */
-	struct intelxl_schedule_config config;
-} __attribute__ (( packed ));
-
-/** Admin queue Query Default Scheduling Tree Topology branch */
-struct intelxl_admin_schedule_branch {
-	/** Reserved */
-	uint8_t reserved_a[4];
-	/** Number of nodes */
-	uint16_t count;
-	/** Reserved */
-	uint8_t reserved_b[2];
-	/** Nodes */
-	struct intelxl_admin_schedule_node node[0];
-} __attribute__ (( packed ));
-
-/** Admin queue Query Default Scheduling Tree Topology data buffer */
-union intelxl_admin_schedule_buffer {
-	/** Branches */
-	struct intelxl_admin_schedule_branch branch[0];
-	/** Raw data */
-	uint8_t raw[4096];
-} __attribute__ (( packed ));
-
 /** Admin queue Set MAC Configuration command */
 #define INTELXL_ADMIN_MAC_CONFIG 0x0603
 
@@ -481,61 +354,27 @@ struct intelxl_admin_autoneg_params {
 #define INTELXL_ADMIN_LINK 0x0607
 
 /** Admin queue Get Link Status command parameters */
-union intelxl_admin_link_params {
-	/** Version 1 */
-	struct {
-		/** Link status notification */
-		uint8_t notify;
-		/** Reserved */
-		uint8_t reserved_a;
-		/** PHY type */
-		uint8_t phy;
-		/** Link speed */
-		uint8_t speed;
-		/** Link status */
-		uint8_t status;
-		/** Reserved */
-		uint8_t reserved_b[3];
-		/** Maximum frame size */
-		uint16_t mfs;
-		/** Reserved */
-		uint8_t reserved_c[6];
-	} __attribute__ (( packed )) v1;
-	/** Version 2 */
-	struct {
-		/** Logical port number */
-		uint8_t port;
-		/** Reserved */
-		uint8_t reserved_a;
-		/** Link status notification */
-		uint8_t notify;
-		/** Reserved */
-		uint8_t reserved_b[13];
-	} __attribute__ (( packed )) v2;
+struct intelxl_admin_link_params {
+	/** Link status notification */
+	uint8_t notify;
+	/** Reserved */
+	uint8_t reserved_a;
+	/** PHY type */
+	uint8_t phy;
+	/** Link speed */
+	uint8_t speed;
+	/** Link status */
+	uint8_t status;
+	/** Reserved */
+	uint8_t reserved_b[3];
+	/** Maximum frame size */
+	uint16_t mfs;
+	/** Reserved */
+	uint8_t reserved_c[6];
 } __attribute__ (( packed ));
 
 /** Notify driver of link status changes */
 #define INTELXL_ADMIN_LINK_NOTIFY 0x03
-
-/** Admin queue Get Link Status data buffer */
-struct intelxl_admin_link_buffer {
-	/** Topology conflicts */
-	uint8_t conflict;
-	/** Configuration errors */
-	uint8_t error;
-	/** Link status */
-	uint8_t status;
-	/** Reserved */
-	uint8_t reserved_a[3];
-	/** Maximum frame size */
-	uint16_t mfs;
-	/** Reserved */
-	uint8_t reserved_b[2];
-	/** Link speed */
-	uint16_t speed;
-	/** Reserved */
-	uint8_t reserved_c[20];
-} __attribute__ (( packed ));
 
 /** Link is up */
 #define INTELXL_ADMIN_LINK_UP 0x01
@@ -717,100 +556,6 @@ struct intelxl_admin_vf_promisc_buffer {
 	uint16_t flags;
 } __attribute__ (( packed ));
 
-/** Admin queue Add Transmit Queues command */
-#define INTELXL_ADMIN_ADD_TXQ 0x0c30
-
-/** Admin queue Add Transmit Queues command parameters */
-struct intelxl_admin_add_txq_params {
-	/** Number of queue groups */
-	uint8_t count;
-	/** Reserved */
-	uint8_t reserved[7];
-} __attribute__ (( packed ));
-
-/** Admin queue Add Transmit Queues data buffer */
-struct intelxl_admin_add_txq_buffer {
-	/** Parent TEID */
-	uint32_t parent;
-	/** Number of queues */
-	uint8_t count;
-	/** Reserved */
-	uint8_t reserved_a[3];
-	/** Transmit queue ID */
-	uint16_t id;
-	/** Reserved */
-	uint8_t reserved_b[2];
-	/** Queue TEID */
-	uint32_t teid;
-	/** Base address */
-	uint64_t base_port;
-	/** PF number and queue type */
-	uint16_t pf_type;
-	/** Source VSI */
-	uint16_t vsi;
-	/** Reserved */
-	uint8_t reserved_c[5];
-	/** Queue length */
-	uint16_t len;
-	/** Flags */
-	uint16_t flags;
-	/** Reserved */
-	uint8_t reserved_d[3];
-	/** Scheduler configuration */
-	struct intelxl_schedule_config config;
-} __attribute__ (( packed ));
-
-/** Transmit queue base address and port number */
-#define INTELXL_TXQ_BASE_PORT( addr, port ) \
-	( ( (addr) >> 7 ) | ( ( ( uint64_t ) (port) ) << 57 ) )
-
-/** Transmit queue PF number */
-#define INTELXL_TXQ_PF_TYPE( pf ) ( ( (pf) << 1 ) | ( 0x2 << 14 ) )
-
-/** Transmit queue length */
-#define INTELXL_TXQ_LEN( count ) ( (count) >> 1 )
-
-/** Transmit queue uses TSO */
-#define INTELXL_TXQ_FL_TSO 0x0001
-
-/** Transmit queue uses legacy mode*/
-#define INTELXL_TXQ_FL_LEGACY 0x1000
-
-/** Admin queue Disable Transmit Queues command */
-#define INTELXL_ADMIN_DISABLE_TXQ 0x0c31
-
-/** Admin queue Disable Transmit Queues command parameters */
-struct intelxl_admin_disable_txq_params {
-	/** Flags */
-	uint8_t flags;
-	/** Number of queue groups */
-	uint8_t count;
-	/** Reserved */
-	uint8_t reserved_a;
-	/** Timeout */
-	uint8_t timeout;
-	/** Reserved */
-	uint8_t reserved_b[4];
-} __attribute__ (( packed ));
-
-/** Disable queue and flush pipe */
-#define INTELXL_TXQ_FL_FLUSH 0x08
-
-/** Disable queue timeout */
-#define INTELXL_TXQ_TIMEOUT 0xc8
-
-/** Admin queue Disable Transmit Queues data buffer */
-struct intelxl_admin_disable_txq_buffer {
-	/** Parent TEID */
-	uint32_t parent;
-	/** Number of queues */
-	uint8_t count;
-	/** Reserved */
-	uint8_t reserved;
-	/** Transmit queue ID */
-	uint16_t id;
-} __attribute__ (( packed ));
-
 /** Admin queue command parameters */
 union intelxl_admin_params {
 	/** Additional data buffer command parameters */
@@ -833,18 +578,12 @@ union intelxl_admin_params {
 	struct intelxl_admin_vsi_params vsi;
 	/** Set VSI Promiscuous Modes command parameters */
 	struct intelxl_admin_promisc_params promisc;
-	/** Query Default Scheduling Tree Topology command parameters */
-	struct intelxl_admin_schedule_params sched;
 	/** Set MAC Configuration command parameters */
 	struct intelxl_admin_mac_config_params mac_config;
 	/** Restart Autonegotiation command parameters */
 	struct intelxl_admin_autoneg_params autoneg;
 	/** Get Link Status command parameters */
-	union intelxl_admin_link_params link;
-	/** Add Transmit Queue command parameters */
-	struct intelxl_admin_add_txq_params add_txq;
-	/** Disable Transmit Queue command parameters */
-	struct intelxl_admin_disable_txq_params disable_txq;
+	struct intelxl_admin_link_params link;
 } __attribute__ (( packed ));
 
 /** Admin queue data buffer */
@@ -852,15 +591,11 @@ union intelxl_admin_buffer {
 	/** Driver Version data buffer */
 	struct intelxl_admin_driver_buffer driver;
 	/** Manage MAC Address Read data buffer */
-	union intelxl_admin_mac_read_buffer mac_read;
+	struct intelxl_admin_mac_read_buffer mac_read;
 	/** Get Switch Configuration data buffer */
-	union intelxl_admin_switch_buffer sw;
+	struct intelxl_admin_switch_buffer sw;
 	/** Get VSI Parameters data buffer */
 	struct intelxl_admin_vsi_buffer vsi;
-	/** Query Default Scheduling Tree Topology data buffer */
-	union intelxl_admin_schedule_buffer sched;
-	/** Get Link Status data buffer */
-	struct intelxl_admin_link_buffer link;
 	/** VF Version data buffer */
 	struct intelxl_admin_vf_version_buffer ver;
 	/** VF Get Resources data buffer */
@@ -875,10 +610,6 @@ union intelxl_admin_buffer {
 	struct intelxl_admin_vf_promisc_buffer promisc;
 	/** VF IRQ Map data buffer */
 	struct intelxl_admin_vf_irq_map_buffer irq;
-	/** Add Transmit Queue data buffer */
-	struct intelxl_admin_add_txq_buffer add_txq;
-	/** Disable Transmit Queue data buffer */
-	struct intelxl_admin_disable_txq_buffer disable_txq;
 	/** Alignment padding */
 	uint8_t pad[INTELXL_ALIGN];
 } __attribute__ (( packed ));
@@ -1426,95 +1157,6 @@ struct intelxl_msix {
 /** MSI-X interrupt vector */
 #define INTELXL_MSIX_VECTOR 0
 
-/** API version */
-struct intelxl_api_version {
-	/** Name */
-	const char *name;
-	/** Get Switch Configuration buffer length */
-	size_t sw_buf_len;
-	/**
-	 * Set static queue configuration
-	 *
-	 * @v intelxl		Intel device
-	 */
-	void ( * queues ) ( struct intelxl_nic *intelxl );
-	/**
-	 * Get MAC address
-	 *
-	 * @v intelxl		Intel device
-	 * @v read		Response parameters
-	 * @v buf		Response data buffer
-	 * @ret mac		MAC address, or NULL on error
-	 */
-	uint8_t * ( * mac_read ) ( struct intelxl_nic *intelxl,
-				   struct intelxl_admin_mac_read_params *read,
-				   union intelxl_admin_buffer *buf );
-	/**
-	 * Get switch configuration
-	 *
-	 * @v intelxl		Intel device
-	 * @v sw		Response parameters
-	 * @v buf		Response data buffer
-	 */
-	void ( * sw ) ( struct intelxl_nic *intelxl,
-			struct intelxl_admin_switch_params *sw,
-			union intelxl_admin_buffer *buf );
-	/**
-	 * Get link status
-	 *
-	 * @v intelxl		Intel device
-	 * @v link		Response parameters
-	 * @v buf		Response data buffer
-	 * @ret status		Link status
-	 */
-	unsigned int ( * link ) ( struct intelxl_nic *intelxl,
-				  union intelxl_admin_link_params *link,
-				  union intelxl_admin_buffer *buf );
-	/**
-	 * Get maximum frame size
-	 *
-	 * @v intelxl		Intel device
-	 * @v link		Response parameters
-	 * @v buf		Response data buffer
-	 * @ret mfs		Maximum frame size
-	 */
-	unsigned int ( * mfs ) ( struct intelxl_nic *intelxl,
-				  union intelxl_admin_link_params *link,
-				  union intelxl_admin_buffer *buf );
-	/**
-	 * Create transmit ring
-	 *
-	 * @v intelxl		Intel device
-	 * @ret rc		Return status code
-	 */
-	int ( * create_tx ) ( struct intelxl_nic *intelxl );
-	/**
-	 * Destroy transmit ring
-	 *
-	 * @v intelxl		Intel device
-	 */
-	void ( * destroy_tx ) ( struct intelxl_nic *intelxl );
-	/**
-	 * Create receive ring
-	 *
-	 * @v intelxl		Intel device
-	 * @ret rc		Return status code
-	 */
-	int ( * create_rx ) ( struct intelxl_nic *intelxl );
-	/**
-	 * Destroy receive ring
-	 *
-	 * @v intelxl		Intel device
-	 */
-	void ( * destroy_rx ) ( struct intelxl_nic *intelxl );
-	/**
-	 * Dump queue contexts (for debugging)
-	 *
-	 * @v intelxl		Intel device
-	 */
-	void ( * dump ) ( struct intelxl_nic *intelxl );
-};
-
 /** An Intel 40 Gigabit network card */
 struct intelxl_nic {
 	/** Registers */
@@ -1549,8 +1191,6 @@ struct intelxl_nic {
 	struct intelxl_admin command;
 	/** Admin event queue */
 	struct intelxl_admin event;
-	/** API version */
-	struct intelxl_api_version *api;
 
 	/** Current VF opcode */
 	unsigned int vopcode;

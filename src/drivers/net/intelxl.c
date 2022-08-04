@@ -44,97 +44,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  *
  */
 
-static struct intelxl_api_version intelxl_api_v1;
-static struct intelxl_api_version intelxl_api_v2;
-
-/******************************************************************************
- *
- * Static queue configuration
- *
- ******************************************************************************
- */
-
-/**
- * Set static queue configuration
- *
- * @v intelxl		Intel device
- */
-static void intelxl_queues_v1 ( struct intelxl_nic *intelxl ) {
-	uint32_t pffunc_rid;
-	uint32_t pfgen_portnum;
-	uint32_t pflan_qalloc;
-
-	/* Get function number, port number and base queue number */
-	pffunc_rid = readl ( intelxl->regs + INTELXL_PFFUNC_RID );
-	intelxl->pf = INTELXL_PFFUNC_RID_FUNC_NUM ( pffunc_rid );
-	pfgen_portnum = readl ( intelxl->regs + INTELXL_PFGEN_PORTNUM );
-	intelxl->port = INTELXL_PFGEN_PORTNUM_PORT_NUM ( pfgen_portnum );
-	pflan_qalloc = readl ( intelxl->regs + INTELXL_PFLAN_QALLOC );
-	intelxl->base = INTELXL_PFLAN_QALLOC_FIRSTQ ( pflan_qalloc );
-	DBGC ( intelxl, "INTELXL %p PF %d using port %d queues [%#04x-%#04x]\n",
-	       intelxl, intelxl->pf, intelxl->port, intelxl->base,
-	       INTELXL_PFLAN_QALLOC_LASTQ ( pflan_qalloc ) );
-
-	/* Configure queue register addresses */
-	intelxl->tx.reg = INTELXL_QTX ( intelxl->queue );
-	intelxl->tx.tail = ( intelxl->tx.reg + INTELXL_QXX_TAIL );
-	intelxl->rx.reg = INTELXL_QRX ( intelxl->queue );
-	intelxl->rx.tail = ( intelxl->rx.reg + INTELXL_QXX_TAIL );
-
-	/* Configure interrupt causes */
-	writel ( ( INTELXL_QINT_TQCTL_NEXTQ_INDX_NONE |
-		   INTELXL_QINT_TQCTL_CAUSE_ENA ),
-		 intelxl->regs + INTELXL_QINT_TQCTL ( intelxl->queue ) );
-	writel ( ( INTELXL_QINT_RQCTL_NEXTQ_INDX ( intelxl->queue ) |
-		   INTELXL_QINT_RQCTL_NEXTQ_TYPE_TX |
-		   INTELXL_QINT_RQCTL_CAUSE_ENA ),
-		 intelxl->regs + INTELXL_QINT_RQCTL ( intelxl->queue ) );
-	writel ( ( INTELXL_PFINT_LNKLST0_FIRSTQ_INDX ( intelxl->queue ) |
-		   INTELXL_PFINT_LNKLST0_FIRSTQ_TYPE_RX ),
-		 intelxl->regs + INTELXL_PFINT_LNKLST0 );
-	writel ( INTELXL_PFINT_ICR0_ENA_ADMINQ,
-		 intelxl->regs + INTELXL_PFINT_ICR0_ENA );
-}
-
-/**
- * Set static queue configuration
- *
- * @v intelxl		Intel device
- */
-static void intelxl_queues_v2 ( struct intelxl_nic *intelxl ) {
-	uint32_t pffunc_rid;
-	uint32_t pfgen_portnum;
-
-	/* Get function number and port number */
-	pffunc_rid = readl ( intelxl->regs + INTELXL_PFFUNC_RID_V2 );
-	intelxl->pf = INTELXL_PFFUNC_RID_V2_FUNC_NUM ( pffunc_rid );
-	pfgen_portnum = readl ( intelxl->regs + INTELXL_PFGEN_PORTNUM_V2 );
-	intelxl->port = INTELXL_PFGEN_PORTNUM_V2_PORT_NUM ( pfgen_portnum );
-	DBGC ( intelxl, "INTELXL %p PF %d using port %d\n",
-	       intelxl, intelxl->pf, intelxl->port );
-
-	/* Configure queue register addresses */
-	intelxl->tx.tail = INTELXL_QTX_COMM_DBELL;
-	intelxl->rx.reg = INTELXL_QRX_CTRL ( intelxl->queue );
-	intelxl->rx.tail = INTELXL_QRX_TAIL ( intelxl->queue );
-
-	/* Configure interrupt causes */
-	writel ( ( INTELXL_QINT_TQCTL_V2_ITR_INDX_NONE |
-		   INTELXL_QINT_TQCTL_V2_CAUSE_ENA ),
-		 intelxl->regs + INTELXL_QINT_TQCTL_V2 );
-	writel ( ( INTELXL_QINT_RQCTL_V2_ITR_INDX_NONE |
-		   INTELXL_QINT_RQCTL_V2_CAUSE_ENA ),
-		 intelxl->regs + INTELXL_QINT_RQCTL_V2 );
-
-	/* Set a default value for the queue context flex extension,
-	 * since this register erroneously retains its value across at
-	 * least a PCIe FLR.
-	 */
-	writel ( ( INTELXL_QRX_FLXP_CNTXT_RXDID_IDX_LEGACY_32 |
-		   INTELXL_QRX_FLXP_CNTXT_RXDID_PRIO_MAX ),
-		 intelxl->regs + INTELXL_QRX_FLXP_CNTXT );
-}
-
 /******************************************************************************
  *
  * MSI-X interrupts
@@ -497,7 +406,6 @@ static int intelxl_admin_version ( struct intelxl_nic *intelxl ) {
 	struct intelxl_admin_descriptor *cmd;
 	struct intelxl_admin_version_params *version;
 	unsigned int api;
-	unsigned int fw;
 	int rc;
 
 	/* Populate descriptor */
@@ -508,29 +416,19 @@ static int intelxl_admin_version ( struct intelxl_nic *intelxl ) {
 	/* Issue command */
 	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
 		return rc;
+	api = le16_to_cpu ( version->api.major );
+	DBGC ( intelxl, "INTELXL %p firmware v%d.%d API v%d.%d\n",
+	       intelxl, le16_to_cpu ( version->firmware.major ),
+	       le16_to_cpu ( version->firmware.minor ),
+	       api, le16_to_cpu ( version->api.minor ) );
 
-	/* Parse API version */
-	if ( version->api.major16 == cpu_to_le16 ( INTELXL_ADMIN_API_MAJOR ) ){
-		/* Original XL710 API (nominally version 1) */
-		intelxl->api = &intelxl_api_v1;
-		api = le16_to_cpu ( version->api.major16 );
-		fw = le16_to_cpu ( version->firmware.major16 );
-	} else if ( version->api.major8 == INTELXL_ADMIN_API_MAJOR ) {
-		/* Updated E810 API (also nominally version 1) */
-		intelxl->api = &intelxl_api_v2;
-		api = version->api.major8;
-		fw = version->firmware.major8;
-	} else {
-		/* Unknown API */
+	/* Check for API compatibility */
+	if ( api > INTELXL_ADMIN_API_MAJOR ) {
 		DBGC ( intelxl, "INTELXL %p unsupported API v%d\n",
-		       intelxl, version->api.major8 );
+		       intelxl, api );
 		return -ENOTSUP;
 	}
 
-	DBGC ( intelxl, "INTELXL %p firmware v%d.%d.%d using %s API "
-	       "v%d.%d.%d\n", intelxl, fw, version->firmware.minor,
-	       version->firmware.patch, intelxl->api->name, api,
-	       version->api.minor, version->api.patch );
 	return 0;
 }
 
@@ -590,46 +488,6 @@ static int intelxl_admin_shutdown ( struct intelxl_nic *intelxl ) {
 }
 
 /**
- * Get MAC address (API version 1)
- *
- * @v intelxl		Intel device
- * @v read		Response parameters
- * @v buf		Response data buffer
- * @ret mac		MAC address, or NULL on error
- */
-static uint8_t *
-intelxl_admin_mac_read_v1 ( struct intelxl_nic *intelxl __unused,
-			    struct intelxl_admin_mac_read_params *read __unused,
-			    union intelxl_admin_buffer *buf ) {
-
-	return buf->mac_read.v1.pf;
-}
-
-/**
- * Get MAC address (API version 2)
- *
- * @v intelxl		Intel device
- * @v read		Response parameters
- * @v buf		Response data buffer
- * @ret mac		MAC address, or NULL on error
- */
-static uint8_t *
-intelxl_admin_mac_read_v2 ( struct intelxl_nic *intelxl __unused,
-			    struct intelxl_admin_mac_read_params *read,
-			    union intelxl_admin_buffer *buf ) {
-	struct intelxl_admin_mac_read_address *mac;
-	unsigned int i;
-
-	for ( i = 0 ; i < read->count ; i++ ) {
-		mac = &buf->mac_read.v2.mac[i];
-		if ( mac->type == INTELXL_ADMIN_MAC_READ_TYPE_LAN )
-			return mac->mac;
-	}
-
-	return NULL;
-}
-
-/**
  * Get MAC address
  *
  * @v netdev		Network device
@@ -650,6 +508,7 @@ static int intelxl_admin_mac_read ( struct net_device *netdev ) {
 	cmd->len = cpu_to_le16 ( sizeof ( buf->mac_read ) );
 	read = &cmd->params.mac_read;
 	buf = intelxl_admin_command_buffer ( intelxl );
+	mac = buf->mac_read.pf;
 
 	/* Issue command */
 	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
@@ -658,14 +517,6 @@ static int intelxl_admin_mac_read ( struct net_device *netdev ) {
 	/* Check that MAC address is present in response */
 	if ( ! ( read->valid & INTELXL_ADMIN_MAC_READ_VALID_LAN ) ) {
 		DBGC ( intelxl, "INTELXL %p has no MAC address\n", intelxl );
-		return -ENOENT;
-	}
-
-	/* Parse MAC address */
-	mac = intelxl->api->mac_read ( intelxl, read, buf );
-	if ( ! mac ) {
-		DBGC ( intelxl, "INTELXL %p has missing MAC address\n",
-		       intelxl );
 		return -ENOENT;
 	}
 
@@ -742,68 +593,6 @@ int intelxl_admin_clear_pxe ( struct intelxl_nic *intelxl ) {
 }
 
 /**
- * Get switch configuration (API version 1)
- *
- * @v intelxl		Intel device
- * @v sw		Response parameters
- * @v buf		Response data buffer
- */
-static void
-intelxl_admin_switch_v1 ( struct intelxl_nic *intelxl,
-			  struct intelxl_admin_switch_params *sw __unused,
-			  union intelxl_admin_buffer *buf ) {
-
-	/* Dump raw configuration */
-	DBGC2 ( intelxl, "INTELXL %p SEID %#04x:\n",
-		intelxl, le16_to_cpu ( buf->sw.v1.cfg[0].seid ) );
-	DBGC2_HDA ( intelxl, 0, &buf->sw.v1.cfg[0],
-		    sizeof ( buf->sw.v1.cfg[0] ) );
-
-	/* Ignore non-VSI elements */
-	if ( buf->sw.v1.cfg[0].type != INTELXL_ADMIN_SWITCH_V1_TYPE_VSI )
-		return;
-
-	/* Parse VSI */
-	intelxl->vsi = le16_to_cpu ( buf->sw.v1.cfg[0].seid );
-	DBGC ( intelxl, "INTELXL %p VSI %#04x uplink %#04x downlink %#04x "
-	       "conn %#02x\n", intelxl, intelxl->vsi,
-	       le16_to_cpu ( buf->sw.v1.cfg[0].uplink ),
-	       le16_to_cpu ( buf->sw.v1.cfg[0].downlink ),
-	       buf->sw.v1.cfg[0].connection );
-}
-
-/**
- * Get switch configuration (API version 2)
- *
- * @v intelxl		Intel device
- * @v sw		Response parameters
- * @v buf		Response data buffer
- */
-static void
-intelxl_admin_switch_v2 ( struct intelxl_nic *intelxl,
-			  struct intelxl_admin_switch_params *sw __unused,
-			  union intelxl_admin_buffer *buf ) {
-
-	/* Dump raw configuration */
-	DBGC2 ( intelxl, "INTELXL %p SEID %#04x:\n",
-		intelxl, le16_to_cpu ( buf->sw.v2.cfg[0].seid ) );
-	DBGC2_HDA ( intelxl, 0, &buf->sw.v2.cfg[0],
-		    sizeof ( buf->sw.v2.cfg[0] ) );
-
-	/* Ignore non-VSI elements */
-	if ( ( buf->sw.v2.cfg[0].seid & INTELXL_ADMIN_SWITCH_V2_TYPE_MASK ) !=
-	     INTELXL_ADMIN_SWITCH_V2_TYPE_VSI ) {
-		return;
-	}
-
-	/* Parse VSI */
-	intelxl->vsi = le16_to_cpu ( buf->sw.v2.cfg[0].seid );
-	DBGC ( intelxl, "INTELXL %p VSI %#04x uplink %#04x func %#04x\n",
-	       intelxl, intelxl->vsi, le16_to_cpu ( buf->sw.v2.cfg[0].uplink ),
-	       le16_to_cpu ( buf->sw.v2.cfg[0].func ) );
-}
-
-/**
  * Get switch configuration
  *
  * @v intelxl		Intel device
@@ -822,7 +611,7 @@ static int intelxl_admin_switch ( struct intelxl_nic *intelxl ) {
 		cmd = intelxl_admin_command_descriptor ( intelxl );
 		cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_SWITCH );
 		cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
-		cmd->len = cpu_to_le16 ( intelxl->api->sw_buf_len );
+		cmd->len = cpu_to_le16 ( sizeof ( buf->sw ) );
 		sw = &cmd->params.sw;
 		sw->next = next;
 		buf = intelxl_admin_command_buffer ( intelxl );
@@ -831,8 +620,20 @@ static int intelxl_admin_switch ( struct intelxl_nic *intelxl ) {
 		if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
 			return rc;
 
+		/* Dump raw configuration */
+		DBGC2 ( intelxl, "INTELXL %p SEID %#04x:\n",
+			intelxl, le16_to_cpu ( buf->sw.cfg.seid ) );
+		DBGC2_HDA ( intelxl, 0, &buf->sw.cfg, sizeof ( buf->sw.cfg ) );
+
 		/* Parse response */
-		intelxl->api->sw ( intelxl, sw, buf );
+		if ( buf->sw.cfg.type == INTELXL_ADMIN_SWITCH_TYPE_VSI ) {
+			intelxl->vsi = le16_to_cpu ( buf->sw.cfg.seid );
+			DBGC ( intelxl, "INTELXL %p VSI %#04x uplink %#04x "
+			       "downlink %#04x conn %#02x\n", intelxl,
+			       intelxl->vsi, le16_to_cpu ( buf->sw.cfg.uplink ),
+			       le16_to_cpu ( buf->sw.cfg.downlink ),
+			       buf->sw.cfg.connection );
+		}
 
 	} while ( ( next = sw->next ) );
 
@@ -1008,61 +809,21 @@ static int intelxl_admin_autoneg ( struct intelxl_nic *intelxl ) {
 }
 
 /**
- * Get link status (API version 1)
- *
- * @v intelxl		Intel device
- * @v link		Response parameters
- * @v buf		Response data buffer
- * @ret status		Link status
- */
-static unsigned int
-intelxl_admin_link_status_v1 ( struct intelxl_nic *intelxl,
-			       union intelxl_admin_link_params *link,
-			       union intelxl_admin_buffer *buf __unused ) {
-
-	DBGC ( intelxl, "INTELXL %p PHY %#02x speed %#02x status %#02x\n",
-	       intelxl, link->v1.phy, link->v1.speed, link->v1.status );
-
-	return link->v1.status;
-}
-
-/**
- * Get link status (API version 2)
- *
- * @v intelxl		Intel device
- * @v link		Response parameters
- * @v buf		Response data buffer
- * @ret status		Link status
- */
-static unsigned int
-intelxl_admin_link_status_v2 ( struct intelxl_nic *intelxl,
-			       union intelxl_admin_link_params *link __unused,
-			       union intelxl_admin_buffer *buf ) {
-
-	DBGC ( intelxl, "INTELXL %p speed %#02x status %#02x\n",
-	       intelxl, le16_to_cpu ( buf->link.speed ), buf->link.status );
-
-	return buf->link.status;
-}
-
-/**
  * Get link status
  *
  * @v netdev		Network device
  * @v link		Response parameters
- * @v buf		Response data buffer
  */
-static void intelxl_admin_link_status ( struct net_device *netdev,
-					union intelxl_admin_link_params *link,
-					union intelxl_admin_buffer *buf ) {
+static void
+intelxl_admin_link_status ( struct net_device *netdev,
+			    struct intelxl_admin_link_params *link ) {
 	struct intelxl_nic *intelxl = netdev->priv;
-	unsigned int status;
 
-	/* Parse link status */
-	status = intelxl->api->link ( intelxl, link, buf );
+	DBGC ( intelxl, "INTELXL %p PHY %#02x speed %#02x status %#02x\n",
+	       intelxl, link->phy, link->speed, link->status );
 
 	/* Update network device */
-	if ( status & INTELXL_ADMIN_LINK_UP ) {
+	if ( link->status & INTELXL_ADMIN_LINK_UP ) {
 		netdev_link_up ( netdev );
 	} else {
 		netdev_link_down ( netdev );
@@ -1070,61 +831,21 @@ static void intelxl_admin_link_status ( struct net_device *netdev,
 }
 
 /**
- * Get maximum frame size (API version 1)
- *
- * @v intelxl		Intel device
- * @v link		Response parameters
- * @v buf		Response data buffer
- * @ret mfs		Maximum frame size
- */
-static unsigned int
-intelxl_admin_link_mfs_v1 ( struct intelxl_nic *intelxl,
-			    union intelxl_admin_link_params *link,
-			    union intelxl_admin_buffer *buf __unused ) {
-
-	DBGC ( intelxl, "INTELXL %p PHY %#02x max frame size %d\n",
-	       intelxl, link->v1.phy, le16_to_cpu ( link->v1.mfs ) );
-
-	return ( le16_to_cpu ( link->v1.mfs ) );
-}
-
-/**
- * Get maximum frame size (API version 2)
- *
- * @v intelxl		Intel device
- * @v link		Response parameters
- * @v buf		Response data buffer
- * @ret mfs		Maximum frame size
- */
-static unsigned int
-intelxl_admin_link_mfs_v2 ( struct intelxl_nic *intelxl,
-			    union intelxl_admin_link_params *link __unused,
-			    union intelxl_admin_buffer *buf ) {
-
-	DBGC ( intelxl, "INTELXL %p max frame size %d\n",
-	       intelxl, le16_to_cpu ( buf->link.mfs ) );
-
-	return ( le16_to_cpu ( buf->link.mfs ) );
-}
-
-/**
  * Get maximum frame size
  *
  * @v netdev		Network device
  * @v link		Response parameters
- * @v buf		Response data buffer
  */
 static void intelxl_admin_link_mfs ( struct net_device *netdev,
-				     union intelxl_admin_link_params *link,
-				     union intelxl_admin_buffer *buf ) {
+				     struct intelxl_admin_link_params *link ) {
 	struct intelxl_nic *intelxl = netdev->priv;
 	size_t mfs;
 
-	/* Parse maximum frame size */
-	mfs = intelxl->api->mfs ( intelxl, link, buf );
-
 	/* Record maximum packet length */
+	mfs = le16_to_cpu ( link->mfs );
 	netdev->max_pkt_len = ( mfs - 4 /* CRC */ );
+	DBGC ( intelxl, "INTELXL %p PHY %#02x max frame size %d\n",
+	       intelxl, link->phy, mfs );
 }
 
 /**
@@ -1137,195 +858,24 @@ static void intelxl_admin_link_mfs ( struct net_device *netdev,
 static int
 intelxl_admin_link ( struct net_device *netdev,
 		     void ( * op ) ( struct net_device *netdev,
-				     union intelxl_admin_link_params *link,
-				     union intelxl_admin_buffer *buf ) ) {
+				     struct intelxl_admin_link_params *link ) ){
 	struct intelxl_nic *intelxl = netdev->priv;
 	struct intelxl_admin_descriptor *cmd;
-	union intelxl_admin_link_params *link;
-	union intelxl_admin_buffer *buf;
+	struct intelxl_admin_link_params *link;
 	int rc;
 
 	/* Populate descriptor */
 	cmd = intelxl_admin_command_descriptor ( intelxl );
 	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_LINK );
-	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
-	cmd->len = cpu_to_le16 ( sizeof ( buf->link ) );
 	link = &cmd->params.link;
-	link->v1.notify = INTELXL_ADMIN_LINK_NOTIFY;
-	link->v2.notify = INTELXL_ADMIN_LINK_NOTIFY;
-	buf = intelxl_admin_command_buffer ( intelxl );
+	link->notify = INTELXL_ADMIN_LINK_NOTIFY;
 
 	/* Issue command */
 	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
 		return rc;
 
 	/* Parse response */
-	op ( netdev, link, buf );
-
-	return 0;
-}
-
-/**
- * Check if scheduler node is a parent (i.e. non-leaf) node
- *
- * @v branch		Scheduler topology branch
- * @v node		Scheduler topology node
- * @ret child		Any child node, or NULL if not found
- */
-static struct intelxl_admin_schedule_node *
-intelxl_admin_schedule_is_parent ( struct intelxl_admin_schedule_branch *branch,
-				   struct intelxl_admin_schedule_node *node ) {
-	unsigned int count = le16_to_cpu ( branch->count );
-	struct intelxl_admin_schedule_node *child;
-	unsigned int i;
-
-	/* Find a child element, if any */
-	for ( i = 0 ; i < count ; i++ ) {
-		child = &branch->node[i];
-		if ( child->parent == node->teid )
-			return child;
-	}
-
-	return NULL;
-}
-
-/**
- * Query default scheduling tree topology
- *
- * @v intelxl		Intel device
- * @ret rc		Return status code
- */
-static int intelxl_admin_schedule ( struct intelxl_nic *intelxl ) {
-	struct intelxl_admin_descriptor *cmd;
-	struct intelxl_admin_schedule_params *sched;
-	union intelxl_admin_buffer *buf;
-	struct intelxl_admin_schedule_branch *branch;
-	struct intelxl_admin_schedule_node *node;
-	int i;
-	int rc;
-
-	/* Populate descriptor */
-	cmd = intelxl_admin_command_descriptor ( intelxl );
-	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_SCHEDULE );
-	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
-	cmd->len = cpu_to_le16 ( sizeof ( buf->sched ) );
-	sched = &cmd->params.sched;
-	buf = intelxl_admin_command_buffer ( intelxl );
-
-	/* Issue command */
-	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
-		return rc;
-
-	/* Sanity checks */
-	if ( ! sched->branches ) {
-		DBGC ( intelxl, "INTELXL %p topology has no branches\n",
-		       intelxl );
-		return -EINVAL;
-	}
-	branch = buf->sched.branch;
-
-	/* Identify leaf node */
-	for ( i = ( le16_to_cpu ( branch->count ) - 1 ) ; i >= 0 ; i-- ) {
-		node = &branch->node[i];
-		if ( ! intelxl_admin_schedule_is_parent ( branch, node ) ) {
-			intelxl->teid = le32_to_cpu ( node->teid );
-			DBGC2 ( intelxl, "INTELXL %p TEID %#08x type %d\n",
-				intelxl, intelxl->teid, node->config.type );
-			break;
-		}
-	}
-	if ( ! intelxl->teid ) {
-		DBGC ( intelxl, "INTELXL %p found no leaf TEID\n", intelxl );
-		return -EINVAL;
-	}
-
-	return 0;
-}
-
-/**
- * Add transmit queue
- *
- * @v intelxl		Intel device
- * @v ring		Descriptor ring
- * @ret rc		Return status code
- */
-static int intelxl_admin_add_txq ( struct intelxl_nic *intelxl,
-				   struct intelxl_ring *ring ) {
-	struct intelxl_admin_descriptor *cmd;
-	struct intelxl_admin_add_txq_params *add_txq;
-	union intelxl_admin_buffer *buf;
-	physaddr_t address;
-	unsigned int port;
-	unsigned int pf;
-	int rc;
-
-	/* Populate descriptor */
-	cmd = intelxl_admin_command_descriptor ( intelxl );
-	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_ADD_TXQ );
-	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_RD | INTELXL_ADMIN_FL_BUF );
-	cmd->len = cpu_to_le16 ( sizeof ( buf->add_txq ) );
-	add_txq = &cmd->params.add_txq;
-	add_txq->count = 1;
-	buf = intelxl_admin_command_buffer ( intelxl );
-	buf->add_txq.parent = cpu_to_le32 ( intelxl->teid );
-	buf->add_txq.count = 1;
-	address = dma ( &ring->map, ring->desc.raw );
-	port = intelxl->port;
-	buf->add_txq.base_port =
-		cpu_to_le64 ( INTELXL_TXQ_BASE_PORT ( address, port ) );
-	pf = intelxl->pf;
-	buf->add_txq.pf_type = cpu_to_le16 ( INTELXL_TXQ_PF_TYPE ( pf ) );
-	buf->add_txq.vsi = cpu_to_le16 ( intelxl->vsi );
-	buf->add_txq.len =
-		cpu_to_le16 ( INTELXL_TXQ_LEN ( INTELXL_TX_NUM_DESC ) );
-	buf->add_txq.flags =
-		cpu_to_le16 ( INTELXL_TXQ_FL_TSO | INTELXL_TXQ_FL_LEGACY );
-	buf->add_txq.config.sections = ( INTELXL_SCHEDULE_GENERIC |
-					 INTELXL_SCHEDULE_COMMIT |
-					 INTELXL_SCHEDULE_EXCESS );
-	buf->add_txq.config.commit_weight =
-		cpu_to_le16 ( INTELXL_SCHEDULE_WEIGHT );
-	buf->add_txq.config.excess_weight =
-		cpu_to_le16 ( INTELXL_SCHEDULE_WEIGHT );
-
-	/* Issue command */
-	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
-		return rc;
-	DBGC ( intelxl, "INTELXL %p added TEID %#04x\n",
-	       intelxl, le32_to_cpu ( buf->add_txq.teid ) );
-
-	return 0;
-}
-
-/**
- * Disable transmit queue
- *
- * @v intelxl		Intel device
- * @v ring		Descriptor ring
- * @ret rc		Return status code
- */
-static int intelxl_admin_disable_txq ( struct intelxl_nic *intelxl ) {
-	struct intelxl_admin_descriptor *cmd;
-	struct intelxl_admin_disable_txq_params *disable_txq;
-	union intelxl_admin_buffer *buf;
-	int rc;
-
-	/* Populate descriptor */
-	cmd = intelxl_admin_command_descriptor ( intelxl );
-	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_DISABLE_TXQ );
-	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_RD | INTELXL_ADMIN_FL_BUF );
-	cmd->len = cpu_to_le16 ( sizeof ( buf->disable_txq ) );
-	disable_txq = &cmd->params.disable_txq;
-	disable_txq->flags = INTELXL_TXQ_FL_FLUSH;
-	disable_txq->count = 1;
-	disable_txq->timeout = INTELXL_TXQ_TIMEOUT;
-	buf = intelxl_admin_command_buffer ( intelxl );
-	buf->disable_txq.parent = cpu_to_le32 ( intelxl->teid );
-	buf->disable_txq.count = 1;
-
-	/* Issue command */
-	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
-		return rc;
+	op ( netdev, link );
 
 	return 0;
 }
@@ -1914,162 +1464,6 @@ static void intelxl_destroy_rx_v1 ( struct intelxl_nic *intelxl ) {
 }
 
 /**
- * Dump queue contexts (for debugging) (API version 2)
- *
- * @v intelxl		Intel device
- */
-static void intelxl_dump_v2 ( struct intelxl_nic *intelxl ) {
-	{
-	unsigned int i;
-	unsigned int j;
-	uint32_t stat;
-	uint32_t ctx[6];
-
-	//
-
-	writel ( 1 << 19, intelxl->regs + 0x2d2dc8 );
-	for ( i = 0 ; i < 100 ; i++ ) {
-		stat = readl ( intelxl->regs + 0x2d2dcc );
-		if ( ! ( stat & 0x1 ) ) {
-			for ( j = 0 ; j < 6 ; j++ ) {
-				ctx[j] = readl ( intelxl->regs + 0x002D2D40 + ( 4 * j ) );
-			}
-			DBGC ( intelxl, "INTELXL %p TX context:\n", intelxl );
-			DBGC_HDA ( intelxl, 0, ctx, sizeof ( ctx ) );
-			return;
-		}
-	}
-	DBGC ( intelxl, "INTELXL %p timed out reading TX context\n", intelxl );
-
-	}
-
-
-	{
-	union {
-		struct intelxl_context_rx rx;
-		uint32_t raw[ sizeof ( struct intelxl_context_rx ) /
-			      sizeof ( uint32_t ) ];
-	} ctx;
-	unsigned int i;
-
-	/* Do nothing unless debug output is enabled */
-	if ( ! DBG_EXTRA )
-		return;
-
-	/* Read context registers */
-	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
-		ctx.raw[i] = cpu_to_le32 ( readl ( intelxl->regs +
-						   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
-	}
-	DBGC2 ( intelxl, "INTELXL %p RX context:\n", intelxl );
-	DBGC2_HDA ( intelxl, INTELXL_QRX_CONTEXT ( intelxl->queue, 0 ),
-		    &ctx, sizeof ( ctx ) );
-	}
-}
-
-/**
- * Create transmit ring (API version 2)
- *
- * @v intelxl		Intel device
- * @ret rc		Return status code
- */
-static int intelxl_create_tx_v2 ( struct intelxl_nic *intelxl ) {
-	struct intelxl_ring *ring = &intelxl->tx;
-	int rc;
-
-	/* Allocate descriptor ring */
-	if ( ( rc = intelxl_alloc_ring ( intelxl, ring ) ) != 0 )
-		goto err_alloc;
-
-	/* Add transmit queue */
-	if ( ( rc = intelxl_admin_add_txq ( intelxl, ring ) ) != 0 )
-		goto err_add_txq;
-
-	return 0;
-
- err_add_txq:
-	intelxl_free_ring ( intelxl, ring );
- err_alloc:
-	return rc;
-}
-
-/**
- * Destroy transmit ring (API version 2)
- *
- * @v intelxl		Intel device
- * @ret rc		Return status code
- */
-static void intelxl_destroy_tx_v2 ( struct intelxl_nic *intelxl ) {
-	struct intelxl_ring *ring = &intelxl->tx;
-	int rc;
-
-	/* Disable transmit queue */
-	if ( ( rc = intelxl_admin_disable_txq ( intelxl ) ) != 0 ) {
-		/* Leak memory; there's nothing else we can do */
-		return;
-	}
-
-	/* Free descriptor ring */
-	intelxl_free_ring ( intelxl, ring );
-}
-
-/**
- * Create receive ring (API version 2)
- *
- * @v intelxl		Intel device
- * @ret rc		Return status code
- */
-static int intelxl_create_rx_v2 ( struct intelxl_nic *intelxl ) {
-	struct intelxl_ring *ring = &intelxl->rx;
-	union {
-		struct intelxl_context_rx rx;
-		uint32_t raw[ sizeof ( struct intelxl_context_rx ) /
-			      sizeof ( uint32_t ) ];
-	} ctx;
-	physaddr_t address;
-	uint64_t base_count;
-	unsigned int i;
-	int rc;
-
-	/* Initialise context */
-	memset ( &ctx, 0, sizeof ( ctx ) );
-	address = dma ( &ring->map, ring->desc.raw );
-	base_count = INTELXL_CTX_RX_BASE_COUNT ( address, INTELXL_RX_NUM_DESC );
-	ctx.rx.base_count = cpu_to_le64 ( base_count );
-	ctx.rx.len = cpu_to_le16 ( INTELXL_CTX_RX_LEN ( intelxl->mfs ) );
-	ctx.rx.flags = ( INTELXL_CTX_RX_FL_DSIZE | INTELXL_CTX_RX_FL_CRCSTRIP );
-	ctx.rx.mfs = cpu_to_le16 ( INTELXL_CTX_RX_MFS ( intelxl->mfs ) );
-
-	/* Write context registers */
-	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
-		writel ( le32_to_cpu ( ctx.raw[i] ),
-			 ( intelxl->regs +
-			   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
-	}
-
-	/* Enable ring */
-	if ( ( rc = intelxl_enable_ring ( intelxl, ring ) ) != 0 )
-		goto err_enable;
-
-	return 0;
-
- err_enable:
-	return rc;
-}
-
-/**
- * Destroy receive ring (API version 2)
- *
- * @v intelxl		Intel device
- */
-static void intelxl_destroy_rx_v2 ( struct intelxl_nic *intelxl ) {
-	struct intelxl_ring *ring = &intelxl->rx;
-
-	//
-	( void ) ring;
-}
-
-/**
  * Refill receive descriptor ring
  *
  * @v intelxl		Intel device
@@ -2163,27 +1557,31 @@ static int intelxl_open ( struct net_device *netdev ) {
 		goto err_mac_config;
 
 	/* Create receive descriptor ring */
-	if ( ( rc = intelxl->api->create_rx ( intelxl ) ) != 0 )
+	if ( ( rc = intelxl_create_ring ( intelxl, &intelxl->rx ) ) != 0 )
 		goto err_create_rx;
 
 	/* Create transmit descriptor ring */
-	if ( ( rc = intelxl->api->create_tx ( intelxl ) ) != 0 )
+	if ( ( rc = intelxl_create_ring ( intelxl, &intelxl->tx ) ) != 0 )
 		goto err_create_tx;
 
 	/* Fill receive ring */
 	intelxl_refill_rx ( intelxl );
 
 	/* Restart autonegotiation */
-	if ( 0 ) intelxl_admin_autoneg ( intelxl );
+	intelxl_admin_autoneg ( intelxl );
 
 	/* Update link state */
 	intelxl_admin_link ( netdev, intelxl_admin_link_status );
 
 	return 0;
 
-	intelxl->api->destroy_tx ( intelxl );
+	writel ( ( INTELXL_GLLAN_TXPRE_QDIS_SET_QDIS |
+		   INTELXL_GLLAN_TXPRE_QDIS_QINDX ( queue ) ),
+		 ( intelxl->regs + INTELXL_GLLAN_TXPRE_QDIS ( queue ) ) );
+	udelay ( INTELXL_QUEUE_PRE_DISABLE_DELAY_US );
+	intelxl_destroy_ring ( intelxl, &intelxl->tx );
  err_create_tx:
-	intelxl->api->destroy_rx ( intelxl );
+	intelxl_destroy_ring ( intelxl, &intelxl->rx );
  err_create_rx:
  err_mac_config:
  err_mac_write:
@@ -2197,16 +1595,26 @@ static int intelxl_open ( struct net_device *netdev ) {
  */
 static void intelxl_close ( struct net_device *netdev ) {
 	struct intelxl_nic *intelxl = netdev->priv;
+	unsigned int queue;
 
 	/* Dump contexts (for debugging) */
-	if ( DBG_EXTRA )
-		intelxl->api->dump ( intelxl );
+	intelxl_context_dump ( intelxl, INTELXL_PFCM_LANCTXCTL_TYPE_TX,
+			       sizeof ( struct intelxl_context_tx ) );
+	intelxl_context_dump ( intelxl, INTELXL_PFCM_LANCTXCTL_TYPE_RX,
+			       sizeof ( struct intelxl_context_rx ) );
+
+	/* Pre-disable transmit queue */
+	queue = ( intelxl->base + intelxl->queue );
+	writel ( ( INTELXL_GLLAN_TXPRE_QDIS_SET_QDIS |
+		   INTELXL_GLLAN_TXPRE_QDIS_QINDX ( queue ) ),
+		 ( intelxl->regs + INTELXL_GLLAN_TXPRE_QDIS ( queue ) ) );
+	udelay ( INTELXL_QUEUE_PRE_DISABLE_DELAY_US );
 
 	/* Destroy transmit descriptor ring */
-	intelxl->api->destroy_tx ( intelxl );
+	intelxl_destroy_ring ( intelxl, &intelxl->tx );
 
 	/* Destroy receive descriptor ring */
-	intelxl->api->destroy_rx ( intelxl );
+	intelxl_destroy_ring ( intelxl, &intelxl->rx );
 
 	/* Discard any unused receive buffers */
 	intelxl_empty_rx ( intelxl );
@@ -2387,38 +1795,6 @@ static struct net_device_operations intelxl_operations = {
  ******************************************************************************
  */
 
-/** Original XL710 API version */
-static struct intelxl_api_version intelxl_api_v1 = {
-	.name = "XL710",
-	.sw_buf_len = sizeof ( struct intelxl_admin_switch_config_v1 ),
-	.queues = intelxl_queues_v1,
-	.mac_read = intelxl_admin_mac_read_v1,
-	.sw = intelxl_admin_switch_v1,
-	.link = intelxl_admin_link_status_v1,
-	.mfs = intelxl_admin_link_mfs_v1,
-	.create_tx = intelxl_create_tx_v1,
-	.destroy_tx = intelxl_destroy_tx_v1,
-	.create_rx = intelxl_create_rx_v1,
-	.destroy_rx = intelxl_destroy_rx_v1,
-	.dump = intelxl_dump_v1,
-};
-
-/** Updated E810 API version */
-static struct intelxl_api_version intelxl_api_v2 = {
-	.name = "E810",
-	.sw_buf_len = sizeof ( struct intelxl_admin_switch_config_v2 ),
-	.queues = intelxl_queues_v2,
-	.mac_read = intelxl_admin_mac_read_v2,
-	.sw = intelxl_admin_switch_v2,
-	.link = intelxl_admin_link_status_v2,
-	.mfs = intelxl_admin_link_mfs_v2,
-	.create_tx = intelxl_create_tx_v2,
-	.destroy_tx = intelxl_destroy_tx_v2,
-	.create_rx = intelxl_create_rx_v2,
-	.destroy_rx = intelxl_destroy_rx_v2,
-	.dump = intelxl_dump_v2,
-};
-
 /**
  * Probe PCI device
  *
@@ -2428,6 +1804,9 @@ static struct intelxl_api_version intelxl_api_v2 = {
 static int intelxl_probe ( struct pci_device *pci ) {
 	struct net_device *netdev;
 	struct intelxl_nic *intelxl;
+	uint32_t pffunc_rid;
+	uint32_t pfgen_portnum;
+	uint32_t pflan_qalloc;
 	int rc;
 
 	/* Allocate and initialise net device */
@@ -2441,7 +1820,7 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	pci_set_drvdata ( pci, netdev );
 	netdev->dev = &pci->dev;
 	memset ( intelxl, 0, sizeof ( *intelxl ) );
-	intelxl->intr = INTELXL_GLINT_DYN_CTL;
+	intelxl->intr = INTELXL_PFINT_DYN_CTL0;
 	intelxl_init_admin ( &intelxl->command, INTELXL_ADMIN_CMD,
 			     &intelxl_admin_offsets );
 	intelxl_init_admin ( &intelxl->event, INTELXL_ADMIN_EVT,
@@ -2511,10 +1890,6 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	if ( ( rc = intelxl_admin_promisc ( intelxl ) ) != 0 )
 		goto err_admin_promisc;
 
-	/* Query scheduler topology */
-	if ( ( rc = intelxl_admin_schedule ( intelxl ) ) != 0 )
-		goto err_admin_schedule;
-
 	/* Get MAC address */
 	if ( ( rc = intelxl_admin_mac_read ( netdev ) ) != 0 )
 		goto err_admin_mac_read;
@@ -2524,8 +1899,36 @@ static int intelxl_probe ( struct pci_device *pci ) {
 					 intelxl_admin_link_mfs ) ) != 0 )
 		goto err_admin_link_mfs;
 
-	/* Set static queue configuration */
-	intelxl->api->queues ( intelxl );
+	/* Get function number, port number and base queue number */
+	pffunc_rid = readl ( intelxl->regs + INTELXL_PFFUNC_RID );
+	intelxl->pf = INTELXL_PFFUNC_RID_FUNC_NUM ( pffunc_rid );
+	pfgen_portnum = readl ( intelxl->regs + INTELXL_PFGEN_PORTNUM );
+	intelxl->port = INTELXL_PFGEN_PORTNUM_PORT_NUM ( pfgen_portnum );
+	pflan_qalloc = readl ( intelxl->regs + INTELXL_PFLAN_QALLOC );
+	intelxl->base = INTELXL_PFLAN_QALLOC_FIRSTQ ( pflan_qalloc );
+	DBGC ( intelxl, "INTELXL %p PF %d using port %d queues [%#04x-%#04x]\n",
+	       intelxl, intelxl->pf, intelxl->port, intelxl->base,
+	       INTELXL_PFLAN_QALLOC_LASTQ ( pflan_qalloc ) );
+
+	/* Configure queue register addresses */
+	intelxl->tx.reg = INTELXL_QTX ( intelxl->queue );
+	intelxl->tx.tail = ( intelxl->tx.reg + INTELXL_QXX_TAIL );
+	intelxl->rx.reg = INTELXL_QRX ( intelxl->queue );
+	intelxl->rx.tail = ( intelxl->rx.reg + INTELXL_QXX_TAIL );
+
+	/* Configure interrupt causes */
+	writel ( ( INTELXL_QINT_TQCTL_NEXTQ_INDX_NONE |
+		   INTELXL_QINT_TQCTL_CAUSE_ENA ),
+		 intelxl->regs + INTELXL_QINT_TQCTL ( intelxl->queue ) );
+	writel ( ( INTELXL_QINT_RQCTL_NEXTQ_INDX ( intelxl->queue ) |
+		   INTELXL_QINT_RQCTL_NEXTQ_TYPE_TX |
+		   INTELXL_QINT_RQCTL_CAUSE_ENA ),
+		 intelxl->regs + INTELXL_QINT_RQCTL ( intelxl->queue ) );
+	writel ( ( INTELXL_PFINT_LNKLST0_FIRSTQ_INDX ( intelxl->queue ) |
+		   INTELXL_PFINT_LNKLST0_FIRSTQ_TYPE_RX ),
+		 intelxl->regs + INTELXL_PFINT_LNKLST0 );
+	writel ( INTELXL_PFINT_ICR0_ENA_ADMINQ,
+		 intelxl->regs + INTELXL_PFINT_ICR0_ENA );
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
@@ -2540,7 +1943,6 @@ static int intelxl_probe ( struct pci_device *pci ) {
  err_register_netdev:
  err_admin_link_mfs:
  err_admin_mac_read:
- err_admin_schedule:
  err_admin_promisc:
  err_admin_vsi:
  err_admin_switch:

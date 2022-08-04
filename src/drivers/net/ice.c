@@ -126,8 +126,9 @@ static int ice_admin_version ( struct intelxl_nic *intelxl ) {
 static int ice_admin_mac_read ( struct net_device *netdev ) {
 	struct intelxl_nic *intelxl = netdev->priv;
 	struct intelxl_admin_descriptor *cmd;
-	struct intelxl_admin_mac_read_params *read;
+	struct ice_admin_mac_read_params *read;
 	struct ice_admin_mac_read_address *mac;
+	union ice_admin_params *params;
 	union ice_admin_buffer *buf;
 	unsigned int i;
 	int rc;
@@ -137,7 +138,8 @@ static int ice_admin_mac_read ( struct net_device *netdev ) {
 	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_MAC_READ );
 	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
 	cmd->len = cpu_to_le16 ( sizeof ( buf->mac_read ) );
-	read = &cmd->params.mac_read;
+	params = ice_admin_command_parameters ( cmd );
+	read = &params->mac_read;
 	buf = ice_admin_command_buffer ( intelxl );
 
 	/* Issue command */
@@ -349,7 +351,7 @@ static void ice_admin_link_mfs ( struct net_device *netdev,
 	/* Record maximum packet length */
 	mfs = le16_to_cpu ( buf->link.mfs );
 	netdev->max_pkt_len = ( mfs - 4 /* CRC */ );
-	DBGC ( intelxl, "ICE %p MFS %zd\n", intelxl, mfs );
+	DBGC ( intelxl, "ICE %p max frame size %zd\n", intelxl, mfs );
 }
 
 /**
@@ -479,6 +481,246 @@ static int ice_admin_disable_txq ( struct intelxl_nic *intelxl ) {
 
 /******************************************************************************
  *
+ * Network device interface
+ *
+ ******************************************************************************
+ */
+
+/**
+ * Dump queue contexts (for debugging) (API version 2)
+ *
+ * @v intelxl		Intel device
+ */
+static void ice_dump ( struct intelxl_nic *intelxl ) {
+	{
+	unsigned int i;
+	unsigned int j;
+	uint32_t stat;
+	uint32_t ctx[6];
+
+	//
+
+	writel ( 1 << 19, intelxl->regs + 0x2d2dc8 );
+	for ( i = 0 ; i < 100 ; i++ ) {
+		stat = readl ( intelxl->regs + 0x2d2dcc );
+		if ( ! ( stat & 0x1 ) ) {
+			for ( j = 0 ; j < 6 ; j++ ) {
+				ctx[j] = readl ( intelxl->regs + 0x002D2D40 + ( 4 * j ) );
+			}
+			DBGC ( intelxl, "INTELXL %p TX context:\n", intelxl );
+			DBGC_HDA ( intelxl, 0, ctx, sizeof ( ctx ) );
+			return;
+		}
+	}
+	DBGC ( intelxl, "INTELXL %p timed out reading TX context\n", intelxl );
+
+	}
+
+
+	{
+	union {
+		struct intelxl_context_rx rx;
+		uint32_t raw[ sizeof ( struct intelxl_context_rx ) /
+			      sizeof ( uint32_t ) ];
+	} ctx;
+	unsigned int i;
+
+	/* Do nothing unless debug output is enabled */
+	if ( ! DBG_EXTRA )
+		return;
+
+	/* Read context registers */
+	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
+		ctx.raw[i] = cpu_to_le32 ( readl ( intelxl->regs +
+						   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
+	}
+	DBGC2 ( intelxl, "INTELXL %p RX context:\n", intelxl );
+	DBGC2_HDA ( intelxl, INTELXL_QRX_CONTEXT ( intelxl->queue, 0 ),
+		    &ctx, sizeof ( ctx ) );
+	}
+}
+
+/**
+ * Create transmit ring
+ *
+ * @v intelxl		Intel device
+ * @ret rc		Return status code
+ */
+static int ice_create_tx ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->tx;
+	int rc;
+
+	/* Allocate descriptor ring */
+	if ( ( rc = intelxl_alloc_ring ( intelxl, ring ) ) != 0 )
+		goto err_alloc;
+
+	/* Add transmit queue */
+	if ( ( rc = ice_admin_add_txq ( intelxl, ring ) ) != 0 )
+		goto err_add_txq;
+
+	return 0;
+
+ err_add_txq:
+	intelxl_free_ring ( intelxl, ring );
+ err_alloc:
+	return rc;
+}
+
+/**
+ * Destroy transmit ring
+ *
+ * @v intelxl		Intel device
+ * @ret rc		Return status code
+ */
+static void ice_destroy_tx ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->tx;
+	int rc;
+
+	/* Disable transmit queue */
+	if ( ( rc = ice_admin_disable_txq ( intelxl ) ) != 0 ) {
+		/* Leak memory; there's nothing else we can do */
+		return;
+	}
+
+	/* Free descriptor ring */
+	intelxl_free_ring ( intelxl, ring );
+}
+
+/**
+ * Create receive ring
+ *
+ * @v intelxl		Intel device
+ * @ret rc		Return status code
+ */
+static int ice_create_rx ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->rx;
+	union {
+		struct intelxl_context_rx rx;
+		uint32_t raw[ sizeof ( struct intelxl_context_rx ) /
+			      sizeof ( uint32_t ) ];
+	} ctx;
+	physaddr_t address;
+	uint64_t base_count;
+	unsigned int i;
+	int rc;
+
+	/* Initialise context */
+	memset ( &ctx, 0, sizeof ( ctx ) );
+	address = dma ( &ring->map, ring->desc.raw );
+	base_count = INTELXL_CTX_RX_BASE_COUNT ( address, INTELXL_RX_NUM_DESC );
+	ctx.rx.base_count = cpu_to_le64 ( base_count );
+	ctx.rx.len = cpu_to_le16 ( INTELXL_CTX_RX_LEN ( intelxl->mfs ) );
+	ctx.rx.flags = ( INTELXL_CTX_RX_FL_DSIZE | INTELXL_CTX_RX_FL_CRCSTRIP );
+	ctx.rx.mfs = cpu_to_le16 ( INTELXL_CTX_RX_MFS ( intelxl->mfs ) );
+
+	/* Write context registers */
+	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
+		writel ( le32_to_cpu ( ctx.raw[i] ),
+			 ( intelxl->regs +
+			   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
+	}
+
+	/* Enable ring */
+	if ( ( rc = intelxl_enable_ring ( intelxl, ring ) ) != 0 )
+		goto err_enable;
+
+	return 0;
+
+ err_enable:
+	return rc;
+}
+
+/**
+ * Destroy receive ring
+ *
+ * @v intelxl		Intel device
+ */
+static void intelxl_destroy_rx_v2 ( struct intelxl_nic *intelxl ) {
+	struct intelxl_ring *ring = &intelxl->rx;
+
+	//
+	( void ) ring;
+}
+
+/**
+ * Open network device
+ *
+ * @v netdev		Network device
+ * @ret rc		Return status code
+ */
+static int ice_open ( struct net_device *netdev ) {
+	struct intelxl_nic *intelxl = netdev->priv;
+	int rc;
+
+	/* Calculate maximum frame size */
+	intelxl->mfs = ( ( ETH_HLEN + netdev->mtu + 4 /* CRC */ +
+			   INTELXL_ALIGN - 1 ) & ~( INTELXL_ALIGN - 1 ) );
+
+	/* Set MAC address */
+	if ( ( rc = intelxl_admin_mac_write ( netdev ) ) != 0 )
+		goto err_mac_write;
+
+	/* Set maximum frame size */
+	if ( ( rc = intelxl_admin_mac_config ( intelxl ) ) != 0 )
+		goto err_mac_config;
+
+	/* Create receive descriptor ring */
+	if ( ( rc = intelxl_create_ring ( intelxl, &intelxl->rx ) ) != 0 )
+		goto err_create_rx;
+
+	/* Create transmit descriptor ring */
+	if ( ( rc = ice_create_tx ( intelxl, &intelxl->tx ) ) != 0 )
+		goto err_create_tx;
+
+	/* Restart autonegotiation */
+	intelxl_admin_autoneg ( intelxl );
+
+	/* Update link state */
+	ice_admin_link ( netdev, ice_admin_link_status );
+
+	return 0;
+
+	ice_destroy_tx ( intelxl, &intelxl->tx );
+ err_create_tx:
+	intelxl_destroy_ring ( intelxl, &intelxl->rx );
+ err_create_rx:
+ err_mac_config:
+ err_mac_write:
+	return rc;
+}
+
+/**
+ * Close network device
+ *
+ * @v netdev		Network device
+ */
+static void ice_close ( struct net_device *netdev ) {
+	struct intelxl_nic *intelxl = netdev->priv;
+
+	/* Dump contexts (for debugging) */
+	if ( DBG_EXTRA )
+		ice_dump ( intelxl );
+
+	/* Destroy transmit descriptor ring */
+	ice_destroy_tx ( intelxl, &intelxl->tx );
+
+	/* Destroy receive descriptor ring */
+	intelxl_destroy_ring ( intelxl, &intelxl->rx );
+
+	/* Discard any unused receive buffers */
+	intelxl_empty_rx ( intelxl );
+}
+
+/** Network device operations */
+static struct net_device_operations ice_operations = {
+	.open		= ice_open,
+	.close		= ice_close,
+	.transmit	= intelxl_transmit,
+	.poll		= intelxl_poll,
+};
+
+/******************************************************************************
+ *
  * PCI interface
  *
  ******************************************************************************
@@ -515,8 +757,9 @@ static int ice_probe ( struct pci_device *pci ) {
 			     &intelxl_admin_offsets );
 	ice_init_ring ( &intelxl->tx, INTELXL_TX_NUM_DESC,
 			sizeof ( intelxl->tx.desc.tx[0] ) );
-	ice_init_ring ( &intelxl->rx, INTELXL_RX_NUM_DESC,
-			sizeof ( intelxl->rx.desc.rx[0] ) );
+	intelxl_init_ring ( &intelxl->rx, INTELXL_RX_NUM_DESC,
+			    sizeof ( intelxl->rx.desc.rx[0] ),
+			    .... );
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );

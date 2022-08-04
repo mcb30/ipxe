@@ -45,6 +45,18 @@ struct ice_admin_version_params {
 	struct ice_admin_version api;
 } __attribute__ (( packed ));
 
+/** Admin queue Manage MAC Address Read command parameters */
+struct ice_admin_mac_read_params {
+	/** Valid addresses */
+	uint8_t valid;
+	/** Reserved */
+	uint8_t reserved_a[3];
+	/** Number of addresses in response */
+	uint8_t count;
+	/** Reserved */
+	uint8_t reserved_b[11];
+} __attribute__ (( packed ));
+
 /** MAC Address description */
 struct ice_admin_mac_read_address {
 	/** Port number */
@@ -297,6 +309,8 @@ union ice_admin_params {
 	struct intelxl_admin_buffer_params buffer;
 	/** Get Version command parameters */
 	struct ice_admin_version_params version;
+	/** Manage MAC Address Read command parameters */
+	struct ice_admin_mac_read_params mac_read;
 	/** Query Default Scheduling Tree Topology command parameters */
 	struct ice_admin_schedule_params sched;
 	/** Get Link Status command parameters */
