@@ -87,8 +87,8 @@ ice_admin_command_buffer ( struct intelxl_nic *intelxl ) {
  */
 static int ice_admin_version ( struct intelxl_nic *intelxl ) {
 	struct intelxl_admin_descriptor *cmd;
-	union ice_admin_params *params;
 	struct ice_admin_version_params *version;
+	union ice_admin_params *params;
 	unsigned int api;
 	int rc;
 
@@ -115,6 +115,68 @@ static int ice_admin_version ( struct intelxl_nic *intelxl ) {
 	}
 
 	return 0;
+}
+
+/**
+ * Get MAC address
+ *
+ * @v netdev		Network device
+ * @ret rc		Return status code
+ */
+static int ice_admin_mac_read ( struct net_device *netdev ) {
+	struct intelxl_nic *intelxl = netdev->priv;
+	struct intelxl_admin_descriptor *cmd;
+	struct intelxl_admin_mac_read_params *read;
+	struct ice_admin_mac_read_address *mac;
+	union ice_admin_buffer *buf;
+	unsigned int i;
+	int rc;
+
+	/* Populate descriptor */
+	cmd = intelxl_admin_command_descriptor ( intelxl );
+	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_MAC_READ );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
+	cmd->len = cpu_to_le16 ( sizeof ( buf->mac_read ) );
+	read = &cmd->params.mac_read;
+	buf = ice_admin_command_buffer ( intelxl );
+
+	/* Issue command */
+	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
+		return rc;
+
+	/* Check that MAC address is present in response */
+	if ( ! ( read->valid & INTELXL_ADMIN_MAC_READ_VALID_LAN ) ) {
+		DBGC ( intelxl, "ICE %p has no MAC address\n", intelxl );
+		return -ENOENT;
+	}
+
+	/* Identify MAC address */
+	for ( i = 0 ; i < read->count ; i++ ) {
+
+		/* Check for a LAN MAC address */
+		mac = &buf->mac_read.mac[i];
+		if ( mac->type != ICE_ADMIN_MAC_READ_TYPE_LAN )
+			continue;
+
+		/* Check that address is valid */
+		if ( ! is_valid_ether_addr ( mac->mac ) ) {
+			DBGC ( intelxl, "ICE %p has invalid MAC address "
+			       "(%s)\n", intelxl, eth_ntoa ( mac->mac ) );
+			return -EINVAL;
+		}
+
+		/* Copy MAC address */
+		DBGC ( intelxl, "ICE %p has MAC address %s\n",
+		       intelxl, eth_ntoa ( mac->mac ) );
+		memcpy ( netdev->hw_addr, mac->mac, ETH_ALEN );
+
+		return 0;
+	}
+
+	/* Missing LAN MAC address */
+	DBGC ( intelxl, "ICE %p has no LAN MAC address\n",
+	       intelxl );
+	return -ENOENT;
 }
 
 /**
@@ -157,8 +219,8 @@ static int ice_admin_switch ( struct intelxl_nic *intelxl ) {
 		type = ( seid & ICE_ADMIN_SWITCH_TYPE_MASK );
 		if ( type == ICE_ADMIN_SWITCH_TYPE_VSI ) {
 			intelxl->vsi = ( seid & ~ICE_ADMIN_SWITCH_TYPE_MASK );
-			DBGC ( intelxl, "INTELXL %p VSI %#04x uplink %#04x "
-			       "func %#04x\n", intelxl, intelxl->vsi,
+			DBGC ( intelxl, "ICE %p VSI %#04x uplink %#04x func "
+			       "%#04x\n", intelxl, intelxl->vsi,
 			       le16_to_cpu ( buf->sw.cfg[0].uplink ),
 			       le16_to_cpu ( buf->sw.cfg[0].func ) );
 		}
@@ -206,11 +268,11 @@ ice_admin_schedule_is_parent ( struct ice_admin_schedule_branch *branch,
  */
 static int ice_admin_schedule ( struct intelxl_nic *intelxl ) {
 	struct intelxl_admin_descriptor *cmd;
-	union ice_admin_params *params;
 	struct ice_admin_schedule_params *sched;
-	union ice_admin_buffer *buf;
 	struct ice_admin_schedule_branch *branch;
 	struct ice_admin_schedule_node *node;
+	union ice_admin_params *params;
+	union ice_admin_buffer *buf;
 	int i;
 	int rc;
 
@@ -252,10 +314,168 @@ static int ice_admin_schedule ( struct intelxl_nic *intelxl ) {
 	return 0;
 }
 
+/**
+ * Get link status
+ *
+ * @v netdev		Network device
+ * @v buf		Admin queue event data buffer
+ */
+static void ice_admin_link_status ( struct net_device *netdev,
+				    union ice_admin_buffer *buf ) {
+	struct intelxl_nic *intelxl = netdev->priv;
 
+	DBGC ( intelxl, "ICE %p speed %#02x status %#02x\n",
+	       intelxl, le16_to_cpu ( buf->link.speed ), buf->link.status );
 
+	/* Update network device */
+	if ( buf->link.status & INTELXL_ADMIN_LINK_UP ) {
+		netdev_link_up ( netdev );
+	} else {
+		netdev_link_down ( netdev );
+	}
+}
 
+/**
+ * Get maximum frame size
+ *
+ * @v netdev		Network device
+ * @v buf		Admin queue event data buffer
+ */
+static void ice_admin_link_mfs ( struct net_device *netdev,
+				 union ice_admin_buffer *buf ) {
+	struct intelxl_nic *intelxl = netdev->priv;
+	size_t mfs;
 
+	/* Record maximum packet length */
+	mfs = le16_to_cpu ( buf->link.mfs );
+	netdev->max_pkt_len = ( mfs - 4 /* CRC */ );
+	DBGC ( intelxl, "ICE %p MFS %zd\n", intelxl, mfs );
+}
+
+/**
+ * Get link status or maximum frame size
+ *
+ * @v netdev		Network device
+ * @v op		Operation to perform
+ * @ret rc		Return status code
+ */
+static int ice_admin_link ( struct net_device *netdev,
+			    void ( * op ) ( struct net_device *netdev,
+					    union ice_admin_buffer *buf ) ) {
+	struct intelxl_nic *intelxl = netdev->priv;
+	struct intelxl_admin_descriptor *cmd;
+	struct ice_admin_link_params *link;
+	union ice_admin_params *params;
+	union ice_admin_buffer *buf;
+	int rc;
+
+	/* Populate descriptor */
+	cmd = intelxl_admin_command_descriptor ( intelxl );
+	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_LINK );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
+	cmd->len = cpu_to_le16 ( sizeof ( buf->link ) );
+	params = ice_admin_command_parameters ( cmd );
+	link = &params->link;
+	link->notify = INTELXL_ADMIN_LINK_NOTIFY;
+	buf = ice_admin_command_buffer ( intelxl );
+
+	/* Issue command */
+	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
+		return rc;
+
+	/* Parse response */
+	op ( netdev, buf );
+
+	return 0;
+}
+
+/**
+ * Add transmit queue
+ *
+ * @v intelxl		Intel device
+ * @v ring		Descriptor ring
+ * @ret rc		Return status code
+ */
+static int ice_admin_add_txq ( struct intelxl_nic *intelxl,
+			       struct intelxl_ring *ring ) {
+	struct intelxl_admin_descriptor *cmd;
+	struct ice_admin_add_txq_params *add_txq;
+	union ice_admin_params *params;
+	union ice_admin_buffer *buf;
+	physaddr_t address;
+	unsigned int port;
+	unsigned int pf;
+	int rc;
+
+	/* Populate descriptor */
+	cmd = intelxl_admin_command_descriptor ( intelxl );
+	cmd->opcode = cpu_to_le16 ( ICE_ADMIN_ADD_TXQ );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_RD | INTELXL_ADMIN_FL_BUF );
+	cmd->len = cpu_to_le16 ( sizeof ( buf->add_txq ) );
+	params = ice_admin_command_parameters ( cmd );
+	add_txq = &params->add_txq;
+	add_txq->count = 1;
+	buf = ice_admin_command_buffer ( intelxl );
+	buf->add_txq.parent = cpu_to_le32 ( intelxl->teid );
+	buf->add_txq.count = 1;
+	address = dma ( &ring->map, ring->desc.raw );
+	port = intelxl->port;
+	buf->add_txq.base_port =
+		cpu_to_le64 ( ICE_TXQ_BASE_PORT ( address, port ) );
+	pf = intelxl->pf;
+	buf->add_txq.pf_type = cpu_to_le16 ( ICE_TXQ_PF_TYPE ( pf ) );
+	buf->add_txq.vsi = cpu_to_le16 ( intelxl->vsi );
+	buf->add_txq.len = cpu_to_le16 ( ICE_TXQ_LEN ( INTELXL_TX_NUM_DESC ) );
+	buf->add_txq.flags = cpu_to_le16 ( ICE_TXQ_FL_TSO | ICE_TXQ_FL_LEGACY );
+	buf->add_txq.config.sections = ( ICE_SCHEDULE_GENERIC |
+					 ICE_SCHEDULE_COMMIT |
+					 ICE_SCHEDULE_EXCESS );
+	buf->add_txq.config.commit_weight = cpu_to_le16 ( ICE_SCHEDULE_WEIGHT );
+	buf->add_txq.config.excess_weight = cpu_to_le16 ( ICE_SCHEDULE_WEIGHT );
+
+	/* Issue command */
+	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
+		return rc;
+	DBGC ( intelxl, "ICE %p added TEID %#04x\n",
+	       intelxl, le32_to_cpu ( buf->add_txq.teid ) );
+
+	return 0;
+}
+
+/**
+ * Disable transmit queue
+ *
+ * @v intelxl		Intel device
+ * @v ring		Descriptor ring
+ * @ret rc		Return status code
+ */
+static int ice_admin_disable_txq ( struct intelxl_nic *intelxl ) {
+	struct intelxl_admin_descriptor *cmd;
+	struct ice_admin_disable_txq_params *disable_txq;
+	union ice_admin_params *params;
+	union ice_admin_buffer *buf;
+	int rc;
+
+	/* Populate descriptor */
+	cmd = intelxl_admin_command_descriptor ( intelxl );
+	cmd->opcode = cpu_to_le16 ( ICE_ADMIN_DISABLE_TXQ );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_RD | INTELXL_ADMIN_FL_BUF );
+	cmd->len = cpu_to_le16 ( sizeof ( buf->disable_txq ) );
+	params = ice_admin_command_parameters ( cmd );
+	disable_txq = &params->disable_txq;
+	disable_txq->flags = ICE_TXQ_FL_FLUSH;
+	disable_txq->count = 1;
+	disable_txq->timeout = ICE_TXQ_TIMEOUT;
+	buf = ice_admin_command_buffer ( intelxl );
+	buf->disable_txq.parent = cpu_to_le32 ( intelxl->teid );
+	buf->disable_txq.count = 1;
+
+	/* Issue command */
+	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
+		return rc;
+
+	return 0;
+}
 
 /******************************************************************************
  *
@@ -351,13 +571,11 @@ static int ice_probe ( struct pci_device *pci ) {
 		goto err_admin_schedule;
 
 	/* Get MAC address */
-	if ( ( rc = intelxl_admin_mac_read ( netdev,
-					     ice_admin_mac_read_lan ) ) != 0 )
+	if ( ( rc = ice_admin_mac_read ( netdev ) ) != 0 )
 		goto err_admin_mac_read;
 
 	/* Get maximum frame size */
-	if ( ( rc = intelxl_admin_link ( netdev,
-					 intelxl_admin_link_mfs ) ) != 0 )
+	if ( ( rc = ice_admin_link ( netdev, ice_admin_link_mfs ) ) != 0 )
 		goto err_admin_link_mfs;
 
 	/* Get function and port number */
@@ -392,7 +610,7 @@ static int ice_probe ( struct pci_device *pci ) {
 		goto err_register_netdev;
 
 	/* Set initial link state */
-	intelxl_admin_link ( netdev, intelxl_admin_link_status );
+	ice_admin_link ( netdev, ice_admin_link_status );
 
 	return 0;
 
@@ -490,3 +708,5 @@ struct pci_driver ice_driver __pci_driver = {
 // - removed all _v2
 // - DBG() using ICE not INTELXL
 // - intelxl_admin_switch using uint32_t next in struct and func
+// - link state check via function pointer (incl NULL check)
+// - may as well handle VF event the same way

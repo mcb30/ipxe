@@ -647,7 +647,7 @@ static int intelxl_admin_mac_read ( struct net_device *netdev ) {
 	cmd = intelxl_admin_command_descriptor ( intelxl );
 	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_MAC_READ );
 	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
-	cmd->len = cpu_to_le16 ( sizeof ( buf->driver ) );
+	cmd->len = cpu_to_le16 ( sizeof ( buf->mac_read ) );
 	read = &cmd->params.mac_read;
 	buf = intelxl_admin_command_buffer ( intelxl );
 

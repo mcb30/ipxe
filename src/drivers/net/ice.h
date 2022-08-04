@@ -45,6 +45,25 @@ struct ice_admin_version_params {
 	struct ice_admin_version api;
 } __attribute__ (( packed ));
 
+/** MAC Address description */
+struct ice_admin_mac_read_address {
+	/** Port number */
+	uint8_t port;
+	/** Address type */
+	uint8_t type;
+	/** MAC address */
+	uint8_t mac[ETH_ALEN];
+} __attribute__ (( packed ));
+
+/** LAN MAC address type */
+#define ICE_ADMIN_MAC_READ_TYPE_LAN 0
+
+/** Admin queue Manage MAC Address Read data buffer */
+struct ice_admin_mac_read_buffer {
+	/** MAC addresses */
+	struct ice_admin_mac_read_address mac[4];
+} __attribute__ (( packed ));
+
 /** Switching element configuration */
 struct ice_admin_switch_config {
 	/** Switching element ID and flags */
@@ -146,6 +165,132 @@ union ice_admin_schedule_buffer {
 	uint8_t pad[INTELXL_ALIGN];
 } __attribute__ (( packed ));
 
+/** Admin queue Get Link Status command parameters */
+struct ice_admin_link_params {
+	/** Logical port number */
+	uint8_t port;
+	/** Reserved */
+	uint8_t reserved_a;
+	/** Link status notification */
+	uint8_t notify;
+	/** Reserved */
+	uint8_t reserved_b[13];
+} __attribute__ (( packed ));
+
+/** Admin queue Get Link Status data buffer */
+struct ice_admin_link_buffer {
+	/** Topology conflicts */
+	uint8_t conflict;
+	/** Configuration errors */
+	uint8_t error;
+	/** Link status */
+	uint8_t status;
+	/** Reserved */
+	uint8_t reserved_a[3];
+	/** Maximum frame size */
+	uint16_t mfs;
+	/** Reserved */
+	uint8_t reserved_b[2];
+	/** Link speed */
+	uint16_t speed;
+	/** Reserved */
+	uint8_t reserved_c[20];
+} __attribute__ (( packed ));
+
+/** Admin queue Add Transmit Queues command */
+#define ICE_ADMIN_ADD_TXQ 0x0c30
+
+/** Admin queue Add Transmit Queues command parameters */
+struct ice_admin_add_txq_params {
+	/** Number of queue groups */
+	uint8_t count;
+	/** Reserved */
+	uint8_t reserved[7];
+} __attribute__ (( packed ));
+
+/** Admin queue Add Transmit Queues data buffer */
+struct ice_admin_add_txq_buffer {
+	/** Parent TEID */
+	uint32_t parent;
+	/** Number of queues */
+	uint8_t count;
+	/** Reserved */
+	uint8_t reserved_a[3];
+	/** Transmit queue ID */
+	uint16_t id;
+	/** Reserved */
+	uint8_t reserved_b[2];
+	/** Queue TEID */
+	uint32_t teid;
+	/** Base address */
+	uint64_t base_port;
+	/** PF number and queue type */
+	uint16_t pf_type;
+	/** Source VSI */
+	uint16_t vsi;
+	/** Reserved */
+	uint8_t reserved_c[5];
+	/** Queue length */
+	uint16_t len;
+	/** Flags */
+	uint16_t flags;
+	/** Reserved */
+	uint8_t reserved_d[3];
+	/** Scheduler configuration */
+	struct ice_schedule_config config;
+} __attribute__ (( packed ));
+
+/** Transmit queue base address and port number */
+#define ICE_TXQ_BASE_PORT( addr, port ) \
+	( ( (addr) >> 7 ) | ( ( ( uint64_t ) (port) ) << 57 ) )
+
+/** Transmit queue PF number */
+#define ICE_TXQ_PF_TYPE( pf ) ( ( (pf) << 1 ) | ( 0x2 << 14 ) )
+
+/** Transmit queue length */
+#define ICE_TXQ_LEN( count ) ( (count) >> 1 )
+
+/** Transmit queue uses TSO */
+#define ICE_TXQ_FL_TSO 0x0001
+
+/** Transmit queue uses legacy mode*/
+#define ICE_TXQ_FL_LEGACY 0x1000
+
+/** Admin queue Disable Transmit Queues command */
+#define ICE_ADMIN_DISABLE_TXQ 0x0c31
+
+/** Admin queue Disable Transmit Queues command parameters */
+struct ice_admin_disable_txq_params {
+	/** Flags */
+	uint8_t flags;
+	/** Number of queue groups */
+	uint8_t count;
+	/** Reserved */
+	uint8_t reserved_a;
+	/** Timeout */
+	uint8_t timeout;
+	/** Reserved */
+	uint8_t reserved_b[4];
+} __attribute__ (( packed ));
+
+/** Disable queue and flush pipe */
+#define ICE_TXQ_FL_FLUSH 0x08
+
+/** Disable queue timeout */
+#define ICE_TXQ_TIMEOUT 0xc8
+
+/** Admin queue Disable Transmit Queues data buffer */
+struct ice_admin_disable_txq_buffer {
+	/** Parent TEID */
+	uint32_t parent;
+	/** Number of queues */
+	uint8_t count;
+	/** Reserved */
+	uint8_t reserved;
+	/** Transmit queue ID */
+	uint16_t id;
+} __attribute__ (( packed ));
+
 /** Admin queue command parameters */
 union ice_admin_params {
 	/** Additional data buffer command parameters */
@@ -154,14 +299,28 @@ union ice_admin_params {
 	struct ice_admin_version_params version;
 	/** Query Default Scheduling Tree Topology command parameters */
 	struct ice_admin_schedule_params sched;
+	/** Get Link Status command parameters */
+	struct ice_admin_link_params link;
+	/** Add Transmit Queue command parameters */
+	struct ice_admin_add_txq_params add_txq;
+	/** Disable Transmit Queue command parameters */
+	struct ice_admin_disable_txq_params disable_txq;
 } __attribute__ (( packed ));
 
 /** Admin queue data buffer */
 union ice_admin_buffer {
+	/** Manage MAC Address Read data buffer */
+	struct ice_admin_mac_read_buffer mac_read;
 	/** Get Switch Configuration data buffer */
 	struct ice_admin_switch_buffer sw;
 	/** Query Default Scheduling Tree Topology data buffer */
 	union ice_admin_schedule_buffer sched;
+	/** Get Link Status data buffer */
+	struct ice_admin_link_buffer link;
+	/** Add Transmit Queue data buffer */
+	struct ice_admin_add_txq_buffer add_txq;
+	/** Disable Transmit Queue data buffer */
+	struct ice_admin_disable_txq_buffer disable_txq;
 	/** Alignment padding */
 	uint8_t pad[INTELXL_ALIGN];
 } __attribute__ (( packed ));
