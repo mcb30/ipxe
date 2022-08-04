@@ -177,6 +177,16 @@ union ice_admin_schedule_buffer {
 	uint8_t pad[INTELXL_ALIGN];
 } __attribute__ (( packed ));
 
+/** Admin queue Restart Autonegotiation command parameters */
+struct ice_admin_autoneg_params {
+	/** Reserved */
+	uint8_t reserved_a[2];
+	/** Flags */
+	uint8_t flags;
+	/** Reserved */
+	uint8_t reserved_b[13];
+} __attribute__ (( packed ));
+
 /** Admin queue Get Link Status command parameters */
 struct ice_admin_link_params {
 	/** Logical port number */
@@ -313,6 +323,8 @@ union ice_admin_params {
 	struct ice_admin_mac_read_params mac_read;
 	/** Query Default Scheduling Tree Topology command parameters */
 	struct ice_admin_schedule_params sched;
+	/** Restart Autonegotiation command parameters */
+	struct ice_admin_autoneg_params autoneg;
 	/** Get Link Status command parameters */
 	struct ice_admin_link_params link;
 	/** Add Transmit Queue command parameters */
@@ -368,19 +380,6 @@ union ice_admin_buffer {
 	( (x) << 8 )					/**< Priority */
 #define ICE_QRX_FLXP_CNTXT_RXDID_PRIO_MAX \
 	ICE_QRX_FLXP_CNTXT_RXDID_PRIO ( 7 )		/**< Maximum priority */
-
-/**
- * Initialise descriptor ring
- *
- * @v ring		Descriptor ring
- * @v count		Number of descriptors
- * @v len		Length of a single descriptor
- */
-static inline __attribute__ (( always_inline)) void
-ice_init_ring ( struct intelxl_ring *ring, unsigned int count, size_t len ) {
-
-	ring->len = ( count * len );
-}
 
 /******************************************************************************
  *

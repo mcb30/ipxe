@@ -202,7 +202,7 @@ static int ice_admin_switch ( struct intelxl_nic *intelxl ) {
 		cmd = intelxl_admin_command_descriptor ( intelxl );
 		cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_SWITCH );
 		cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF );
-		cmd->len = cpu_to_le16 ( intelxl->api->sw_buf_len );
+		cmd->len = cpu_to_le16 ( sizeof ( buf->sw ) );
 		sw = &cmd->params.sw;
 		sw->next = next;
 		buf = ice_admin_command_buffer ( intelxl );
@@ -312,6 +312,33 @@ static int ice_admin_schedule ( struct intelxl_nic *intelxl ) {
 		DBGC ( intelxl, "ICE %p found no leaf TEID\n", intelxl );
 		return -EINVAL;
 	}
+
+	return 0;
+}
+
+/**
+ * Restart autonegotiation
+ *
+ * @v intelxl		Intel device
+ * @ret rc		Return status code
+ */
+static int ice_admin_autoneg ( struct intelxl_nic *intelxl ) {
+	struct intelxl_admin_descriptor *cmd;
+	struct ice_admin_autoneg_params *autoneg;
+	union ice_admin_params *params;
+	int rc;
+
+	/* Populate descriptor */
+	cmd = intelxl_admin_command_descriptor ( intelxl );
+	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_AUTONEG );
+	params = ice_admin_command_parameters ( cmd );
+	autoneg = &params->autoneg;
+	autoneg->flags = ( INTELXL_ADMIN_AUTONEG_FL_RESTART |
+			   INTELXL_ADMIN_AUTONEG_FL_ENABLE );
+
+	/* Issue command */
+	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
+		return rc;
 
 	return 0;
 }
@@ -532,22 +559,23 @@ static void ice_dump ( struct intelxl_nic *intelxl ) {
 	/* Read context registers */
 	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
 		ctx.raw[i] = cpu_to_le32 ( readl ( intelxl->regs +
-						   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
+						   ICE_QRX_CONTEXT ( i ) ) );
 	}
 	DBGC2 ( intelxl, "INTELXL %p RX context:\n", intelxl );
-	DBGC2_HDA ( intelxl, INTELXL_QRX_CONTEXT ( intelxl->queue, 0 ),
+	DBGC2_HDA ( intelxl, ICE_QRX_CONTEXT ( 0 ),
 		    &ctx, sizeof ( ctx ) );
 	}
 }
 
 /**
- * Create transmit ring
+ * Create transmit queue
  *
  * @v intelxl		Intel device
+ * @v ring		Descriptor ring
  * @ret rc		Return status code
  */
-static int ice_create_tx ( struct intelxl_nic *intelxl ) {
-	struct intelxl_ring *ring = &intelxl->tx;
+static int ice_create_tx ( struct intelxl_nic *intelxl,
+			   struct intelxl_ring *ring ) {
 	int rc;
 
 	/* Allocate descriptor ring */
@@ -567,13 +595,14 @@ static int ice_create_tx ( struct intelxl_nic *intelxl ) {
 }
 
 /**
- * Destroy transmit ring
+ * Destroy transmit queue
  *
  * @v intelxl		Intel device
+ * @v ring		Descriptor ring
  * @ret rc		Return status code
  */
-static void ice_destroy_tx ( struct intelxl_nic *intelxl ) {
-	struct intelxl_ring *ring = &intelxl->tx;
+static void ice_destroy_tx ( struct intelxl_nic *intelxl,
+			     struct intelxl_ring *ring ) {
 	int rc;
 
 	/* Disable transmit queue */
@@ -587,26 +616,24 @@ static void ice_destroy_tx ( struct intelxl_nic *intelxl ) {
 }
 
 /**
- * Create receive ring
+ * Program receive queue context
  *
  * @v intelxl		Intel device
+ * @v address		Descriptor ring base address
  * @ret rc		Return status code
  */
-static int ice_create_rx ( struct intelxl_nic *intelxl ) {
-	struct intelxl_ring *ring = &intelxl->rx;
+static int ice_context_rx ( struct intelxl_nic *intelxl,
+			    physaddr_t address ) {
 	union {
 		struct intelxl_context_rx rx;
 		uint32_t raw[ sizeof ( struct intelxl_context_rx ) /
 			      sizeof ( uint32_t ) ];
 	} ctx;
-	physaddr_t address;
 	uint64_t base_count;
 	unsigned int i;
-	int rc;
 
 	/* Initialise context */
 	memset ( &ctx, 0, sizeof ( ctx ) );
-	address = dma ( &ring->map, ring->desc.raw );
 	base_count = INTELXL_CTX_RX_BASE_COUNT ( address, INTELXL_RX_NUM_DESC );
 	ctx.rx.base_count = cpu_to_le64 ( base_count );
 	ctx.rx.len = cpu_to_le16 ( INTELXL_CTX_RX_LEN ( intelxl->mfs ) );
@@ -616,30 +643,10 @@ static int ice_create_rx ( struct intelxl_nic *intelxl ) {
 	/* Write context registers */
 	for ( i = 0 ; i < ( sizeof ( ctx ) / sizeof ( ctx.raw[0] ) ) ; i++ ) {
 		writel ( le32_to_cpu ( ctx.raw[i] ),
-			 ( intelxl->regs +
-			   INTELXL_QRX_CONTEXT ( intelxl->queue, i ) ) );
+			 ( intelxl->regs + ICE_QRX_CONTEXT ( i ) ) );
 	}
 
-	/* Enable ring */
-	if ( ( rc = intelxl_enable_ring ( intelxl, ring ) ) != 0 )
-		goto err_enable;
-
 	return 0;
-
- err_enable:
-	return rc;
-}
-
-/**
- * Destroy receive ring
- *
- * @v intelxl		Intel device
- */
-static void intelxl_destroy_rx_v2 ( struct intelxl_nic *intelxl ) {
-	struct intelxl_ring *ring = &intelxl->rx;
-
-	//
-	( void ) ring;
 }
 
 /**
@@ -673,7 +680,7 @@ static int ice_open ( struct net_device *netdev ) {
 		goto err_create_tx;
 
 	/* Restart autonegotiation */
-	intelxl_admin_autoneg ( intelxl );
+	ice_admin_autoneg ( intelxl );
 
 	/* Update link state */
 	ice_admin_link ( netdev, ice_admin_link_status );
@@ -755,11 +762,11 @@ static int ice_probe ( struct pci_device *pci ) {
 			     &intelxl_admin_offsets );
 	intelxl_init_admin ( &intelxl->event, INTELXL_ADMIN_EVT,
 			     &intelxl_admin_offsets );
-	ice_init_ring ( &intelxl->tx, INTELXL_TX_NUM_DESC,
-			sizeof ( intelxl->tx.desc.tx[0] ) );
+	intelxl_init_ring ( &intelxl->tx, INTELXL_TX_NUM_DESC,
+			    sizeof ( intelxl->tx.desc.tx[0] ), NULL );
 	intelxl_init_ring ( &intelxl->rx, INTELXL_RX_NUM_DESC,
 			    sizeof ( intelxl->rx.desc.rx[0] ),
-			    .... );
+			    ice_context_rx );
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );

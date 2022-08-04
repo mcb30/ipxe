@@ -159,19 +159,6 @@ struct intelxl_admin_mac_read_params {
 /** LAN MAC address is valid */
 #define INTELXL_ADMIN_MAC_READ_VALID_LAN 0x10
 
-/** MAC Address description */
-struct intelxl_admin_mac_read_address {
-	/** Port number */
-	uint8_t port;
-	/** Address type */
-	uint8_t type;
-	/** MAC address */
-	uint8_t mac[ETH_ALEN];
-} __attribute__ (( packed ));
-
-/** LAN MAC address type */
-#define INTELXL_ADMIN_MAC_READ_TYPE_LAN 0
-
 /** Admin queue Manage MAC Address Read data buffer */
 struct intelxl_admin_mac_read_buffer {
 	/** Physical function MAC address */
@@ -861,30 +848,6 @@ struct intelxl_context_rx {
 /** Queue Tail Pointer Register (offset) */
 #define INTELXL_QXX_TAIL 0x8000
 
-/** Global Receive Queue Control register */
-#define INTELXL_QRX_CTRL(x) ( 0x120000 + ( 0x4 * (x) ) )
-
-/** Receive Queue Context register */
-#define INTELXL_QRX_CONTEXT(x, i) \
-	( 0x280000 + ( 0x4 * (x) ) + ( 0x2000 * (i) ) )
-
-/** Receive Queue Tail register */
-#define INTELXL_QRX_TAIL(x) ( 0x290000 + ( 0x4 * (x) ) )
-
-/** Transmit Comm Scheduler Queue Doorbell register */
-#define INTELXL_QTX_COMM_DBELL 0x2c0000
-
-/** Queue Context Flex Extension register */
-#define INTELXL_QRX_FLXP_CNTXT 0x480000
-#define INTELXL_QRX_FLXP_CNTXT_RXDID_IDX(x) \
-	( (x) << 0 )					/**< RX profile */
-#define INTELXL_QRX_FLXP_CNTXT_RXDID_IDX_LEGACY_32 \
-	INTELXL_QRX_FLXP_CNTXT_RXDID_IDX ( 1 )		/**< 32-byte legacy */
-#define INTELXL_QRX_FLXP_CNTXT_RXDID_PRIO(x) \
-	( (x) << 8 )					/**< Priority */
-#define INTELXL_QRX_FLXP_CNTXT_RXDID_PRIO_MAX \
-	INTELXL_QRX_FLXP_CNTXT_RXDID_PRIO ( 7 )		/**< Maximum priority */
-
 /** Transmit data descriptor */
 struct intelxl_tx_data_descriptor {
 	/** Buffer address */
@@ -1008,6 +971,12 @@ struct intelxl_ring {
 	unsigned int tail;
 	/** Length (in bytes) */
 	size_t len;
+	/** Program queue context
+	 *
+	 * @v intelxl		Intel device
+	 * @v address		Descriptor ring base address
+	 */
+	int ( * context ) ( struct intelxl_nic *intelxl, physaddr_t address );
 };
 
 /**
@@ -1016,12 +985,15 @@ struct intelxl_ring {
  * @v ring		Descriptor ring
  * @v count		Number of descriptors
  * @v len		Length of a single descriptor
+ * @v context		Method to program queue context
  */
 static inline __attribute__ (( always_inline)) void
-intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count,
-		    size_t len ) {
+intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count, size_t len,
+		    int ( * context ) ( struct intelxl_nic *intelxl,
+					physaddr_t address ) ) {
 
 	ring->len = ( count * len );
+	ring->context = context;
 }
 
 /** Number of transmit descriptors
@@ -1105,11 +1077,6 @@ intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count,
 #define INTELXL_PFFUNC_RID_FUNC_NUM(x) \
 	( ( (x) >> 0 ) & 0x7 )				/**< Function number */
 
-/** Function Requester ID Information Register (v2) */
-#define INTELXL_PFFUNC_RID_V2 0x09e880
-#define INTELXL_PFFUNC_RID_V2_FUNC_NUM(x) \
-	( ( (x) >> 0 ) & 0x7 )				/**< Function number */
-
 /** PF Queue Allocation Register */
 #define INTELXL_PFLAN_QALLOC 0x1c0400
 #define INTELXL_PFLAN_QALLOC_FIRSTQ(x) \
@@ -1121,28 +1088,6 @@ intelxl_init_ring ( struct intelxl_ring *ring, unsigned int count,
 #define INTELXL_PFGEN_PORTNUM 0x1c0480
 #define INTELXL_PFGEN_PORTNUM_PORT_NUM(x) \
 	( ( (x) >> 0 ) & 0x3 )				/**< Port number */
-
-/** PF LAN Port Number Register (v2) */
-#define INTELXL_PFGEN_PORTNUM_V2 0x1d2400
-#define INTELXL_PFGEN_PORTNUM_V2_PORT_NUM(x) \
-	( ( (x) >> 0 ) & 0x7 )				/**< Port number */
-
-/** Transmit Queue Interrupt Cause Control Register */
-#define INTELXL_QINT_TQCTL_V2 0x140000
-#define INTELXL_QINT_TQCTL_V2_ITR_INDX(x) ( (x) << 11 )	/**< Throttling */
-#define INTELXL_QINT_TQCTL_V2_ITR_INDX_NONE \
-	INTELXL_QINT_TQCTL_V2_ITR_INDX ( 0x3 )		/**< No throttling */
-#define INTELXL_QINT_TQCTL_V2_CAUSE_ENA	0x40000000UL	/**< Enable */
-
-/** Receive Queue Interrupt Cause Control Register */
-#define INTELXL_QINT_RQCTL_V2 0x150000
-#define INTELXL_QINT_RQCTL_V2_ITR_INDX(x) ( (x) << 11 )	/**< Throttling */
-#define INTELXL_QINT_RQCTL_V2_ITR_INDX_NONE \
-	INTELXL_QINT_RQCTL_V2_ITR_INDX ( 0x3 )		/**< No throttling */
-#define INTELXL_QINT_RQCTL_V2_CAUSE_ENA	0x40000000UL	/**< Enable */
-
-/** Global Interrupt Dynamic Control Register */
-#define INTELXL_GLINT_DYN_CTL 0x160000
 
 /** MSI-X interrupt */
 struct intelxl_msix {
@@ -1220,7 +1165,9 @@ intelxl_admin_command_descriptor ( struct intelxl_nic *intelxl );
 extern union intelxl_admin_buffer *
 intelxl_admin_command_buffer ( struct intelxl_nic *intelxl );
 extern int intelxl_admin_command ( struct intelxl_nic *intelxl );
+extern int intelxl_admin_mac_write ( struct net_device *netdev );
 extern int intelxl_admin_clear_pxe ( struct intelxl_nic *intelxl );
+extern int intelxl_admin_mac_config ( struct intelxl_nic *intelxl );
 extern void intelxl_poll_admin ( struct net_device *netdev );
 extern int intelxl_open_admin ( struct intelxl_nic *intelxl );
 extern void intelxl_reopen_admin ( struct intelxl_nic *intelxl );
@@ -1229,6 +1176,10 @@ extern int intelxl_alloc_ring ( struct intelxl_nic *intelxl,
 				struct intelxl_ring *ring );
 extern void intelxl_free_ring ( struct intelxl_nic *intelxl,
 				struct intelxl_ring *ring );
+extern int intelxl_create_ring ( struct intelxl_nic *intelxl,
+				 struct intelxl_ring *ring );
+extern void intelxl_destroy_ring ( struct intelxl_nic *intelxl,
+				   struct intelxl_ring *ring );
 extern void intelxl_empty_rx ( struct intelxl_nic *intelxl );
 extern int intelxl_transmit ( struct net_device *netdev,
 			      struct io_buffer *iobuf );
