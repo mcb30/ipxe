@@ -1153,6 +1153,15 @@ struct intelxl_nic {
 	struct intelxl_ring rx;
 	/** Receive I/O buffers */
 	struct io_buffer *rx_iobuf[INTELXL_RX_NUM_DESC];
+
+	/** Handle link status event */
+	void ( * link ) ( struct net_device *netdev,
+			  struct intelxl_admin_descriptor *evt,
+			  union intelxl_admin_buffer *buf );
+	/** Handle virtual function event */
+	void ( * vf ) ( struct net_device *netdev,
+			struct intelxl_admin_descriptor *evt,
+			union intelxl_admin_buffer *buf );
 };
 
 extern const struct intelxl_admin_offsets intelxl_admin_offsets;

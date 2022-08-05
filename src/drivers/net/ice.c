@@ -466,6 +466,25 @@ static int ice_admin_link ( struct net_device *netdev,
 }
 
 /**
+ * Handle link status event
+ *
+ * @v netdev		Network device
+ * @v evt		Event descriptor
+ * @v buf		Data buffer
+ */
+static void
+ice_admin_event_link ( struct net_device *netdev,
+		       struct intelxl_admin_descriptor *evt __unused,
+		       union intelxl_admin_buffer *buf ) {
+
+	//
+
+	/* Update link status */
+	ice_admin_link_status ( netdev,
+				container_of ( &buf->pad, union ice_admin_buffer, pad ) );
+}
+
+/**
  * Add transmit queue
  *
  * @v intelxl		Intel device
@@ -805,6 +824,7 @@ static int ice_probe ( struct pci_device *pci ) {
 	netdev->dev = &pci->dev;
 	memset ( intelxl, 0, sizeof ( *intelxl ) );
 	intelxl->intr = ICE_GLINT_DYN_CTL;
+	intelxl->link = ice_admin_event_link;
 	intelxl_init_admin ( &intelxl->command, INTELXL_ADMIN_CMD,
 			     &intelxl_admin_offsets );
 	intelxl_init_admin ( &intelxl->event, INTELXL_ADMIN_EVT,

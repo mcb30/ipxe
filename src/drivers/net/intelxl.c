@@ -692,53 +692,6 @@ static int intelxl_admin_promisc ( struct intelxl_nic *intelxl ) {
 	uint16_t flags;
 	int rc;
 
-	//
-	union intelxl_admin_buffer *buf;
-	static uint8_t wtf[32] = {
-		0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
-		0x40, 0x00, 0x02, 0x00, 0x00, 0x00, 0x10, 0x00,
-		0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02, 0x00,
-		0x00, 0x00, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00
-	};
-	cmd = intelxl_admin_command_descriptor ( intelxl );
-	cmd->opcode = cpu_to_le16 ( 0x02a0 );
-	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF | INTELXL_ADMIN_FL_RD );
-	cmd->len = cpu_to_le16 ( sizeof ( wtf ) );
-	cmd->params.buffer.reserved[0] = 1;
-	buf = intelxl_admin_command_buffer ( intelxl );
-	memcpy ( buf, wtf, sizeof ( wtf ) );
-
-
-	/* Issue command */
-	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
-		return rc;
-
-
-	//
-	static uint8_t wtf2[32] = {
-		0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
-		0x40, 0x00, 0x02, 0x00, 0x00, 0x00, 0x10, 0x00,
-		0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
-		0x00, 0x00, 0x00, 0x00, 0x81, 0x00, 0x00, 0x00
-	};
-	cmd = intelxl_admin_command_descriptor ( intelxl );
-	cmd->opcode = cpu_to_le16 ( 0x02a0 );
-	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF | INTELXL_ADMIN_FL_RD );
-	cmd->len = cpu_to_le16 ( sizeof ( wtf2 ) );
-	cmd->params.buffer.reserved[0] = 1;
-	buf = intelxl_admin_command_buffer ( intelxl );
-	memcpy ( buf, wtf2, sizeof ( wtf2 ) );
-
-
-	/* Issue command */
-	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
-		return rc;
-
-
-
-	//
-	return 0;
-
 	/* Populate descriptor */
 	cmd = intelxl_admin_command_descriptor ( intelxl );
 	cmd->opcode = cpu_to_le16 ( INTELXL_ADMIN_PROMISC );
@@ -881,18 +834,19 @@ intelxl_admin_link ( struct net_device *netdev,
 }
 
 /**
- * Handle virtual function event (when VF driver is not present)
+ * Handle link status event
  *
  * @v netdev		Network device
- * @v evt		Admin queue event descriptor
- * @v buf		Admin queue event data buffer
+ * @v evt		Event descriptor
+ * @v buf		Data buffer
  */
-__weak void
-intelxlvf_admin_event ( struct net_device *netdev __unused,
-			struct intelxl_admin_descriptor *evt __unused,
-			union intelxl_admin_buffer *buf __unused ) {
+static void
+intelxl_admin_event_link ( struct net_device *netdev,
+			   struct intelxl_admin_descriptor *evt,
+			   union intelxl_admin_buffer *buf __unused ) {
 
-	/* Nothing to do */
+	/* Update link status */
+	intelxl_admin_link_status ( netdev, &evt->params.link );
 }
 
 /**
@@ -923,6 +877,9 @@ void intelxl_poll_admin ( struct net_device *netdev ) {
 	struct intelxl_admin *admin = &intelxl->event;
 	struct intelxl_admin_descriptor *evt;
 	union intelxl_admin_buffer *buf;
+	void ( * handle ) ( struct net_device *netdev,
+			    struct intelxl_admin_descriptor *evt,
+			    union intelxl_admin_buffer *buf );
 
 	/* Check for events */
 	while ( 1 ) {
@@ -946,17 +903,21 @@ void intelxl_poll_admin ( struct net_device *netdev ) {
 		/* Handle event */
 		switch ( evt->opcode ) {
 		case cpu_to_le16 ( INTELXL_ADMIN_LINK ):
-			intelxl_admin_link ( netdev,
-					     intelxl_admin_link_status );
+			handle = intelxl->link;
 			break;
 		case cpu_to_le16 ( INTELXL_ADMIN_SEND_TO_VF ):
-			intelxlvf_admin_event ( netdev, evt, buf );
+			handle = intelxl->vf;
 			break;
 		default:
+			handle = NULL;
+			break;
+		}
+		if ( handle ) {
+			handle ( netdev, evt, buf );
+		} else {
 			DBGC ( intelxl, "INTELXL %p admin event %#x "
 			       "unrecognised opcode %#04x\n", intelxl,
 			       admin->index, le16_to_cpu ( evt->opcode ) );
-			break;
 		}
 
 		/* Reset descriptor and refill queue */
@@ -1782,6 +1743,7 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	netdev->dev = &pci->dev;
 	memset ( intelxl, 0, sizeof ( *intelxl ) );
 	intelxl->intr = INTELXL_PFINT_DYN_CTL0;
+	intelxl->link = intelxl_admin_event_link;
 	intelxl_init_admin ( &intelxl->command, INTELXL_ADMIN_CMD,
 			     &intelxl_admin_offsets );
 	intelxl_init_admin ( &intelxl->event, INTELXL_ADMIN_EVT,

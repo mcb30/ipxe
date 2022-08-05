@@ -626,6 +626,7 @@ static int intelxlvf_probe ( struct pci_device *pci ) {
 	netdev->dev = &pci->dev;
 	memset ( intelxl, 0, sizeof ( *intelxl ) );
 	intelxl->intr = INTELXLVF_VFINT_DYN_CTLN ( INTELXLVF_MSIX_VECTOR );
+	intelxl->vf = intelxlvf_admin_event;
 	intelxl_init_admin ( &intelxl->command, INTELXLVF_ADMIN,
 			     &intelxlvf_admin_command_offsets );
 	intelxl_init_admin ( &intelxl->event, INTELXLVF_ADMIN,
