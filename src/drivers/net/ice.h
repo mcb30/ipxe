@@ -9,6 +9,7 @@
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
+#include <ipxe/if_ether.h>
 #include "intelxl.h"
 
 /** BAR size */
@@ -98,6 +99,51 @@ struct ice_admin_switch_buffer {
 	struct ice_admin_switch_config cfg[1];
 };
 
+/** Admin queue Add Switch Rules command */
+#define ICE_ADMIN_ADD_RULES 0x02a0
+
+/** Admin queue Add Switch Rules command parameters */
+struct ice_admin_rules_params {
+	/** Number of rules */
+	uint16_t count;
+	/** Reserved */
+	uint8_t reserved[6];
+} __attribute__ (( packed ));
+
+/** Admin queue Add Switch Rules data buffer */
+struct ice_admin_rules_buffer {
+	/** Type */
+	uint16_t type;
+	/** Return status */
+	uint16_t status;
+	/** Receipt ID */
+	uint16_t recipe;
+	/** Source port */
+	uint16_t port;
+	/** Action */
+	uint32_t action;
+	/** Lookup table index */
+	uint16_t index;
+	/** Header length */
+	uint16_t len;
+	/** Header data */
+	union {
+		/** Ethernet header */
+		struct ethhdr eth;
+		/** Raw data */
+		uint8_t raw[16];
+	} __attribute__ (( packed )) hdr;
+} __attribute__ (( packed ));
+
+/** Switch rule promiscuous recipe ID */
+#define ICE_ADMIN_RULES_RECIPE_PROMISC 0x0003
+
+/** Switch rule action valid */
+#define ICE_ADMIN_RULES_ACTION_VALID 0x00020000UL
+
+/** Switch rule VSI number */
+#define ICE_ADMIN_RULES_ACTION_VSI(x) ( (x) << 4 )
+
 /** Admin queue Query Default Scheduling Tree Topology command */
 #define ICE_ADMIN_SCHEDULE 0x0400
 
@@ -174,7 +220,7 @@ union ice_admin_schedule_buffer {
 	/** Branches */
 	struct ice_admin_schedule_branch branch[0];
 	/** Padding */
-	uint8_t pad[INTELXL_ALIGN];
+	uint8_t pad[INTELXL_ADMIN_BUFFER_SIZE];
 } __attribute__ (( packed ));
 
 /** Admin queue Restart Autonegotiation command parameters */
@@ -321,6 +367,8 @@ union ice_admin_params {
 	struct ice_admin_version_params version;
 	/** Manage MAC Address Read command parameters */
 	struct ice_admin_mac_read_params mac_read;
+	/** Add Switch Rules command parameters */
+	struct ice_admin_rules_params rules;
 	/** Query Default Scheduling Tree Topology command parameters */
 	struct ice_admin_schedule_params sched;
 	/** Restart Autonegotiation command parameters */
@@ -339,6 +387,8 @@ union ice_admin_buffer {
 	struct ice_admin_mac_read_buffer mac_read;
 	/** Get Switch Configuration data buffer */
 	struct ice_admin_switch_buffer sw;
+	/** Add Switch Rules data buffer */
+	struct ice_admin_rules_buffer rules;
 	/** Query Default Scheduling Tree Topology data buffer */
 	union ice_admin_schedule_buffer sched;
 	/** Get Link Status data buffer */
@@ -347,8 +397,8 @@ union ice_admin_buffer {
 	struct ice_admin_add_txq_buffer add_txq;
 	/** Disable Transmit Queue data buffer */
 	struct ice_admin_disable_txq_buffer disable_txq;
-	/** Alignment padding */
-	uint8_t pad[INTELXL_ALIGN];
+	/** Maximum buffer size */
+	uint8_t pad[INTELXL_ADMIN_BUFFER_SIZE];
 } __attribute__ (( packed ));
 
 /******************************************************************************

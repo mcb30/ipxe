@@ -44,6 +44,14 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  *
  */
 
+/**
+ * Magic MAC address
+ *
+ * Used as the source address and promiscuous unicast destination
+ * address in the "add switch rules" command.
+ */
+static uint8_t ice_magic_mac[ETH_HLEN] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
 /******************************************************************************
  *
  * Admin queue
@@ -234,6 +242,45 @@ static int ice_admin_switch ( struct intelxl_nic *intelxl ) {
 		DBGC ( intelxl, "ICE %p has no VSI\n", intelxl );
 		return -ENOENT;
 	}
+
+	return 0;
+}
+
+/**
+ * Add switch rules
+ *
+ * @v intelxl		Intel device
+ * @v mac		MAC address
+ * @ret rc		Return status code
+ */
+static int ice_admin_rules ( struct intelxl_nic *intelxl, uint8_t *mac ) {
+	struct intelxl_admin_descriptor *cmd;
+	struct ice_admin_rules_params *rules;
+	union ice_admin_params *params;
+	union ice_admin_buffer *buf;
+	int rc;
+
+	/* Populate descriptor */
+	cmd = intelxl_admin_command_descriptor ( intelxl );
+	cmd->opcode = cpu_to_le16 ( ICE_ADMIN_ADD_RULES );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_BUF | INTELXL_ADMIN_FL_RD );
+	cmd->len = cpu_to_le16 ( sizeof ( buf->rules ) );
+	params = ice_admin_command_parameters ( cmd );
+	rules = &params->rules;
+	rules->count = cpu_to_le16 ( 1 );
+	buf = ice_admin_command_buffer ( intelxl );
+	buf->rules.recipe = cpu_to_le16 ( ICE_ADMIN_RULES_RECIPE_PROMISC );
+	buf->rules.action =
+		cpu_to_le32 ( ICE_ADMIN_RULES_ACTION_VALID |
+			      ICE_ADMIN_RULES_ACTION_VSI ( intelxl->vsi ) );
+	buf->rules.len = cpu_to_le16 ( sizeof ( buf->rules.hdr ) );
+	memcpy ( buf->rules.hdr.eth.h_dest, mac, ETH_ALEN );
+	memcpy ( buf->rules.hdr.eth.h_source, ice_magic_mac, ETH_ALEN );
+	buf->rules.hdr.eth.h_protocol = htons ( ETH_P_8021Q );
+
+	/* Issue command */
+	if ( ( rc = intelxl_admin_command ( intelxl ) ) != 0 )
+		return rc;
 
 	return 0;
 }
@@ -534,12 +581,12 @@ static void ice_dump ( struct intelxl_nic *intelxl ) {
 			for ( j = 0 ; j < 6 ; j++ ) {
 				ctx[j] = readl ( intelxl->regs + 0x002D2D40 + ( 4 * j ) );
 			}
-			DBGC ( intelxl, "INTELXL %p TX context:\n", intelxl );
+			DBGC ( intelxl, "ICE %p TX context:\n", intelxl );
 			DBGC_HDA ( intelxl, 0, ctx, sizeof ( ctx ) );
 			return;
 		}
 	}
-	DBGC ( intelxl, "INTELXL %p timed out reading TX context\n", intelxl );
+	DBGC ( intelxl, "ICE %p timed out reading TX context\n", intelxl );
 
 	}
 
@@ -561,7 +608,7 @@ static void ice_dump ( struct intelxl_nic *intelxl ) {
 		ctx.raw[i] = cpu_to_le32 ( readl ( intelxl->regs +
 						   ICE_QRX_CONTEXT ( i ) ) );
 	}
-	DBGC2 ( intelxl, "INTELXL %p RX context:\n", intelxl );
+	DBGC2 ( intelxl, "ICE %p RX context:\n", intelxl );
 	DBGC2_HDA ( intelxl, ICE_QRX_CONTEXT ( 0 ),
 		    &ctx, sizeof ( ctx ) );
 	}
@@ -816,6 +863,14 @@ static int ice_probe ( struct pci_device *pci ) {
 	if ( ( rc = ice_admin_switch ( intelxl ) ) != 0 )
 		goto err_admin_switch;
 
+	/* Add broadcast address */
+	if ( ( rc = ice_admin_rules ( intelxl, eth_broadcast ) ) != 0 )
+		goto err_admin_rules_broadcast;
+
+	/* Add promiscuous unicast address */
+	if ( ( rc = ice_admin_rules ( intelxl, ice_magic_mac ) ) != 0 )
+		goto err_admin_rules_magic;
+
 	/* Query scheduler topology */
 	if ( ( rc = ice_admin_schedule ( intelxl ) ) != 0 )
 		goto err_admin_schedule;
@@ -869,6 +924,8 @@ static int ice_probe ( struct pci_device *pci ) {
  err_admin_link_mfs:
  err_admin_mac_read:
  err_admin_schedule:
+ err_admin_rules_magic:
+ err_admin_rules_broadcast:
  err_admin_switch:
  err_admin_clear_pxe:
  err_admin_version:
@@ -960,3 +1017,4 @@ struct pci_driver ice_driver __pci_driver = {
 // - intelxl_admin_switch using uint32_t next in struct and func
 // - link state check via function pointer (incl NULL check)
 // - may as well handle VF event the same way
+// - intelxlvf definitions split out and using separate cmd/buf unions

@@ -17,7 +17,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 struct intelxl_nic;
 
 /** BAR size */
-#define INTELXL_BAR_SIZE 0x400000
+#define INTELXL_BAR_SIZE 0x200000
 
 /** Alignment
  *
@@ -573,6 +573,9 @@ union intelxl_admin_params {
 	struct intelxl_admin_link_params link;
 } __attribute__ (( packed ));
 
+/** Maximum size of a data buffer */
+#define INTELXL_ADMIN_BUFFER_SIZE 0x1000
+
 /** Admin queue data buffer */
 union intelxl_admin_buffer {
 	/** Driver Version data buffer */
@@ -597,8 +600,8 @@ union intelxl_admin_buffer {
 	struct intelxl_admin_vf_promisc_buffer promisc;
 	/** VF IRQ Map data buffer */
 	struct intelxl_admin_vf_irq_map_buffer irq;
-	/** Alignment padding */
-	uint8_t pad[INTELXL_ALIGN];
+	/** Maximum buffer size */
+	uint8_t pad[INTELXL_ADMIN_BUFFER_SIZE];
 } __attribute__ (( packed ));
 
 /** Admin queue descriptor */
