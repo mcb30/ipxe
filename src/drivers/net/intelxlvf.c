@@ -377,7 +377,12 @@ static int intelxlvf_admin_get_resources ( struct net_device *netdev ) {
 	/* Populate descriptor */
 	cmd = intelxlvf_admin_command_descriptor ( intelxl );
 	cmd->vopcode = cpu_to_le32 ( INTELXLVF_ADMIN_GET_RESOURCES );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_RD | INTELXL_ADMIN_FL_BUF );
+	//
+	cmd->len = cpu_to_le16 ( 4 );
 	buf = intelxlvf_admin_command_buffer ( intelxl );
+	//
+	buf->ver.major = cpu_to_le32 ( 0x00010049 );
 
 	/* Issue command */
 	if ( ( rc = intelxlvf_admin_command ( netdev ) ) != 0 )
@@ -616,6 +621,24 @@ static int intelxlvf_open ( struct net_device *netdev ) {
 	if ( ( rc = intelxlvf_admin_promisc ( netdev ) ) != 0 )
 		goto err_promisc;
 
+	//
+	if ( 0 ) {
+	struct intelxlvf_admin_descriptor *cmd;
+	union intelxlvf_admin_buffer *buf;
+	unsigned int count = 64;
+
+	/* Populate descriptor */
+	cmd = intelxlvf_admin_command_descriptor ( intelxl );
+	cmd->vopcode = cpu_to_le32 ( 24 );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_RD | INTELXL_ADMIN_FL_BUF );
+	cmd->len = cpu_to_le16 ( 4 + count );
+	buf = intelxlvf_admin_command_buffer ( intelxl );
+	buf->promisc.vsi = cpu_to_le16 ( intelxl->vsi );
+	buf->promisc.flags = cpu_to_le16 ( count );
+	if ( ( rc = intelxlvf_admin_command ( netdev ) ) != 0 )
+		goto err_promisc;
+	}
+
 	/* Reset statistics counters (if debugging) */
 	if ( DBG_LOG )
 		intelxlvf_admin_stats ( netdev );
@@ -760,6 +783,27 @@ static int intelxlvf_probe ( struct pci_device *pci ) {
 	/* Get MAC address */
 	if ( ( rc = intelxlvf_admin_get_resources ( netdev ) ) != 0 )
 		goto err_get_resources;
+
+	if ( 1 ) {
+	struct intelxlvf_admin_descriptor *cmd;
+	union intelxlvf_admin_buffer *buf;
+
+	/* Populate descriptor */
+	cmd = intelxlvf_admin_command_descriptor ( intelxl );
+	cmd->vopcode = cpu_to_le32 ( 29 );
+	cmd->flags = cpu_to_le16 ( INTELXL_ADMIN_FL_RD | INTELXL_ADMIN_FL_BUF );
+	cmd->len = cpu_to_le16 ( 2 );
+	buf = intelxlvf_admin_command_buffer ( intelxl );
+	buf->promisc.vsi = cpu_to_le16 ( 1 );
+	if ( ( rc = intelxlvf_admin_command ( netdev ) ) != 0 ) {
+		//goto err_get_resources;
+		intelxl_reopen_admin ( intelxl );
+	}
+	}
+
+	if ( ( rc = intelxlvf_admin_get_resources ( netdev ) ) != 0 )
+		goto err_get_resources;
+
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )

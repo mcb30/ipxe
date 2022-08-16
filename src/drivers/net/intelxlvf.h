@@ -91,7 +91,7 @@ struct intelxlvf_admin_version_buffer {
 #define INTELXLVF_ADMIN_API_MAJOR 1
 
 /** Admin queue VF API minor version */
-#define INTELXLVF_ADMIN_API_MINOR 0
+#define INTELXLVF_ADMIN_API_MINOR 1
 
 /** Admin Queue VF Reset opcode */
 #define INTELXLVF_ADMIN_RESET 0x00000002
