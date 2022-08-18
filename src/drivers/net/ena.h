@@ -127,10 +127,51 @@ struct ena_device_attributes {
 	uint32_t mtu;
 } __attribute__ (( packed ));
 
+/** Host attributes */
+#define ENA_HOST_ATTRIBUTES 28
+
+/** Host attributes */
+struct ena_host_attributes {
+	/** Host info base address */
+	uint64_t info;
+	/** Debug area base address */
+	uint64_t debug;
+	/** Debug area size */
+	uint32_t debug_len;
+} __attribute__ (( packed ));
+
+/** Host information */
+struct ena_host_info {
+	/** Operating system type */
+	uint32_t type;
+	/** Product name */
+	char name[128];
+	/** Reserved */
+	uint8_t reserved_a[4];
+	/** Product version string */
+	char version[32];
+	/** Reserved */
+	uint8_t reserved_b[16];
+	/** ENA specification version */
+	uint16_t spec;
+	/** PCI bus:dev.fn address */
+	uint16_t busdevfn;
+	/** Reserved */
+	uint8_t reserved_c[8];
+} __attribute__ (( packed ));
+
+/** iPXE operating system type */
+#define ENA_HOST_INFO_TYPE_IPXE 5
+
+/** ENA specification version */
+#define ENA_HOST_INFO_SPEC_2_0 0x0200
+
 /** Feature */
 union ena_feature {
 	/** Device attributes */
 	struct ena_device_attributes device;
+	/** Host attributes */
+	struct ena_host_attributes host;
 };
 
 /** Submission queue direction */
@@ -292,6 +333,27 @@ struct ena_get_feature_rsp {
 	union ena_feature feature;
 } __attribute__ (( packed ));
 
+/** Set feature */
+#define ENA_SET_FEATURE 9
+
+/** Set feature request */
+struct ena_set_feature_req {
+	/** Header */
+	struct ena_aq_header header;
+	/** Length */
+	uint32_t len;
+	/** Address */
+	uint64_t address;
+	/** Flags */
+	uint8_t flags;
+	/** Feature identifier */
+	uint8_t id;
+	/** Reserved */
+	uint8_t reserved[2];
+	/** Feature */
+	union ena_feature feature;
+} __attribute__ (( packed ));
+
 /** Get statistics */
 #define ENA_GET_STATS 11
 
@@ -352,6 +414,8 @@ union ena_aq_req {
 	struct ena_destroy_cq_req destroy_cq;
 	/** Get feature */
 	struct ena_get_feature_req get_feature;
+	/** Set feature */
+	struct ena_set_feature_req set_feature;
 	/** Get statistics */
 	struct ena_get_stats_req get_stats;
 	/** Padding */
@@ -573,6 +637,8 @@ struct ena_qp {
 struct ena_nic {
 	/** Registers */
 	void *regs;
+	/** Host info */
+	struct ena_host_info *info;
 	/** Admin queue */
 	struct ena_aq aq;
 	/** Admin completion queue */
