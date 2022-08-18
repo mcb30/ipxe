@@ -25,7 +25,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define ENA_ACQ_COUNT 2
 
 /** Number of transmit queue entries */
-#define ENA_TX_COUNT 16
+#define ENA_TX_COUNT 0x400 // 16
 
 /** Number of receive queue entries */
 #define ENA_RX_COUNT 16
@@ -603,11 +603,11 @@ struct ena_cq {
 	/** Entry size (in 32-bit words) */
 	uint8_t size;
 	/** Requested number of entries */
-	uint8_t requested;
+	uint16_t requested;
 	/** Actual number of entries */
-	uint8_t actual;
+	uint16_t actual;
 	/** Actual number of entries minus one */
-	uint8_t mask;
+	uint16_t mask;
 };
 
 /**

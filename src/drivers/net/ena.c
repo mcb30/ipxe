@@ -1003,12 +1003,17 @@ static int ena_probe ( struct pci_device *pci ) {
 	ena->info = info;
 	memset ( info, 0, PAGE_SIZE );
 	info->type = cpu_to_le32 ( ENA_HOST_INFO_TYPE_IPXE );
+	//
+	if ( 0 ) {
 	snprintf ( info->name, sizeof ( info->name ), "%s",
 		   ( product_name[0] ? product_name : product_short_name ) );
 	snprintf ( info->version, sizeof ( info->version ), "%s",
 		   product_version );
 	info->spec = cpu_to_le16 ( ENA_HOST_INFO_SPEC_2_0 );
 	info->busdevfn = cpu_to_le16 ( pci->busdevfn );
+	}
+	//
+	DBGC_HDA ( ena, virt_to_phys ( info ), info, sizeof ( *info ) );
 
 	/* Create admin queues */
 	if ( ( rc = ena_create_admin ( ena ) ) != 0 )

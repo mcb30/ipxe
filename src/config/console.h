@@ -34,7 +34,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  *
  */
 
-//#define	CONSOLE_SERIAL		/* Serial port console */
+#define	CONSOLE_SERIAL		/* Serial port console */
 //#define	CONSOLE_FRAMEBUFFER	/* Graphical framebuffer console */
 //#define	CONSOLE_SYSLOG		/* Syslog console */
 //#define	CONSOLE_SYSLOGS		/* Encrypted syslog console */
