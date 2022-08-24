@@ -25,7 +25,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define ENA_ACQ_COUNT 2
 
 /** Number of transmit queue entries */
-#define ENA_TX_COUNT 0x400 // 16
+#define ENA_TX_COUNT 16
 
 /** Number of receive queue entries */
 #define ENA_RX_COUNT 16
@@ -144,24 +144,59 @@ struct ena_host_attributes {
 struct ena_host_info {
 	/** Operating system type */
 	uint32_t type;
-	/** Product name */
-	char name[128];
-	/** Reserved */
-	uint8_t reserved_a[4];
-	/** Product version string */
-	char version[32];
-	/** Reserved */
-	uint8_t reserved_b[16];
+	/** Operating system distribution (string) */
+	char dist_str[128];
+	/** Operating system distribution (numeric) */
+	uint32_t dist;
+	/** Kernel version (string) */
+	char kernel_str[32];
+	/** Kernel version (numeric) */
+	uint32_t kernel;
+	/** Driver version */
+	uint32_t version;
+	/** Linux network device features */
+	uint64_t linux;
 	/** ENA specification version */
 	uint16_t spec;
 	/** PCI bus:dev.fn address */
 	uint16_t busdevfn;
+	/** Number of CPUs */
+	uint16_t cpus;
 	/** Reserved */
-	uint8_t reserved_c[8];
+	uint8_t reserved_a[2];
+	/** Supported features */
+	uint32_t features;
 } __attribute__ (( packed ));
 
-/** iPXE operating system type */
-#define ENA_HOST_INFO_TYPE_IPXE 5
+/** Linux operating system type
+ *
+ * There is a defined "iPXE" operating system type (with value 5).
+ * However, some very broken versions of the ENA firmware will refuse
+ * to allow a completion queue to be created if the "iPXE" type is
+ * used.
+ */
+#define ENA_HOST_INFO_TYPE_LINUX 1
+
+/** Driver version
+ *
+ * The driver version field is nominally used to report a version
+ * number outside of the VM for consumption by humans (and potentially
+ * by automated monitoring tools that could e.g. check for outdated
+ * versions with known security flaws).
+ *
+ * However, at some point in the development of the ENA firmware, some
+ * unknown person at AWS thought it would be sensible to apply a
+ * machine interpretation to this field and adjust the behaviour of
+ * the firmware based on its value, thereby creating a maintenance and
+ * debugging nightmare for all existing and future drivers.
+ *
+ * Hint to engineers: if you ever find yourself writing code of the
+ * form "if (version == SOME_MAGIC_NUMBER)" then something has gone
+ * very, very wrong.  This *always* indicates that something is
+ * broken, either in your own code or in the code with which you are
+ * forced to interact.
+ */
+#define ENA_HOST_INFO_VERSION_WTF 0x00000002UL
 
 /** ENA specification version */
 #define ENA_HOST_INFO_SPEC_2_0 0x0200
@@ -270,6 +305,14 @@ struct ena_create_cq_req {
 	/** Base address */
 	uint64_t address;
 } __attribute__ (( packed ));
+
+/** Empty MSI-X vector
+ *
+ * Some versions of the ENA firmware will complain if the MSI-X vector
+ * fields is left empty even when the queue configuration specifies
+ * that interrupts are not used.
+ */
+#define ENA_MSIX_NONE 0xffffffffUL
 
 /** Create completion queue response */
 struct ena_create_cq_rsp {
@@ -603,11 +646,11 @@ struct ena_cq {
 	/** Entry size (in 32-bit words) */
 	uint8_t size;
 	/** Requested number of entries */
-	uint16_t requested;
+	uint8_t requested;
 	/** Actual number of entries */
-	uint16_t actual;
+	uint8_t actual;
 	/** Actual number of entries minus one */
-	uint16_t mask;
+	uint8_t mask;
 };
 
 /**

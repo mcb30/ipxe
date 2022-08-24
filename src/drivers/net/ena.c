@@ -461,6 +461,7 @@ static int ena_create_cq ( struct ena_nic *ena, struct ena_cq *cq ) {
 	req->header.opcode = ENA_CREATE_CQ;
 	req->create_cq.size = cq->size;
 	req->create_cq.count = cpu_to_le16 ( cq->requested );
+	req->create_cq.vector = cpu_to_le32 ( ENA_MSIX_NONE );
 	req->create_cq.address = cpu_to_le64 ( virt_to_bus ( cq->cqe.raw ) );
 
 	/* Issue request */
@@ -1002,18 +1003,16 @@ static int ena_probe ( struct pci_device *pci ) {
 		goto err_info;
 	ena->info = info;
 	memset ( info, 0, PAGE_SIZE );
-	info->type = cpu_to_le32 ( ENA_HOST_INFO_TYPE_IPXE );
-	//
-	if ( 0 ) {
-	snprintf ( info->name, sizeof ( info->name ), "%s",
+	info->type = cpu_to_le32 ( ENA_HOST_INFO_TYPE_LINUX );
+	snprintf ( info->dist_str, sizeof ( info->dist_str ), "%s",
 		   ( product_name[0] ? product_name : product_short_name ) );
-	snprintf ( info->version, sizeof ( info->version ), "%s",
+	snprintf ( info->kernel_str, sizeof ( info->kernel_str ), "%s",
 		   product_version );
+	info->version = cpu_to_le32 ( ENA_HOST_INFO_VERSION_WTF );
 	info->spec = cpu_to_le16 ( ENA_HOST_INFO_SPEC_2_0 );
 	info->busdevfn = cpu_to_le16 ( pci->busdevfn );
-	}
-	//
-	DBGC_HDA ( ena, virt_to_phys ( info ), info, sizeof ( *info ) );
+	DBGC2 ( ena, "ENA %p host info:\n", ena );
+	DBGC2_HDA ( ena, virt_to_phys ( info ), info, sizeof ( *info ) );
 
 	/* Create admin queues */
 	if ( ( rc = ena_create_admin ( ena ) ) != 0 )
