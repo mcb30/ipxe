@@ -59,6 +59,77 @@ static const char * ena_direction ( unsigned int direction ) {
 	}
 }
 
+
+
+///////
+
+
+/**
+ * Enable MSI-X dummy interrupt
+ *
+ * @v ena		Intel device
+ * @v pci		PCI device
+ * @v vector		MSI-X vector
+ * @ret rc		Return status code
+ */
+int ena_msix_enable ( struct ena_nic *ena,
+			  struct pci_device *pci, unsigned int vector ) {
+	int rc;
+
+	/* Map dummy target location */
+	if ( ( rc = dma_map ( ena->dma, &ena->msix.map,
+			      virt_to_phys ( &ena->msix.msg ),
+			      sizeof ( ena->msix.msg ), DMA_RX ) ) != 0 ) {
+		DBGC ( ena, "ENA %p could not map MSI-X target: %s\n",
+		       ena, strerror ( rc ) );
+		goto err_map;
+	}
+
+	/* Enable MSI-X capability */
+	if ( ( rc = pci_msix_enable ( pci, &ena->msix.cap ) ) != 0 ) {
+		DBGC ( ena, "ENA %p could not enable MSI-X: %s\n",
+		       ena, strerror ( rc ) );
+		goto err_enable;
+	}
+
+	/* Configure interrupt to write to dummy location */
+	pci_msix_map ( &ena->msix.cap, vector,
+		       dma ( &ena->msix.map, &ena->msix.msg ), 0 );
+
+	/* Enable dummy interrupt */
+	pci_msix_unmask ( &ena->msix.cap, vector );
+
+	return 0;
+
+	pci_msix_disable ( pci, &ena->msix.cap );
+ err_enable:
+	dma_unmap ( &ena->msix.map );
+ err_map:
+	return rc;
+}
+
+/**
+ * Disable MSI-X dummy interrupt
+ *
+ * @v ena		Intel device
+ * @v pci		PCI device
+ * @v vector		MSI-X vector
+ */
+void ena_msix_disable ( struct ena_nic *ena,
+			    struct pci_device *pci, unsigned int vector ) {
+
+	/* Disable dummy interrupts */
+	pci_msix_mask ( &ena->msix.cap, vector );
+
+	/* Disable MSI-X capability */
+	pci_msix_disable ( pci, &ena->msix.cap );
+
+	/* Unmap dummy target location */
+	dma_unmap ( &ena->msix.map );
+}
+
+
+
 /******************************************************************************
  *
  * Device reset
@@ -448,6 +519,11 @@ static int ena_create_cq ( struct ena_nic *ena, struct ena_cq *cq ) {
 	union ena_acq_rsp *rsp;
 	int rc;
 
+	//
+	DBGC ( ena, "*** before create_cq()\n" );
+	pci_msix_dump ( &ena->msix.cap, 1 );
+	pci_msix_dump ( &ena->msix.cap, 2 );
+
 	/* Allocate completion queue entries */
 	cq->cqe.raw = malloc_phys ( cq->len, ENA_ALIGN );
 	if ( ! cq->cqe.raw ) {
@@ -462,6 +538,10 @@ static int ena_create_cq ( struct ena_nic *ena, struct ena_cq *cq ) {
 	req->create_cq.size = cq->size;
 	req->create_cq.count = cpu_to_le16 ( cq->requested );
 	req->create_cq.vector = cpu_to_le32 ( ENA_MSIX_NONE );
+	//
+	//req->create_cq.intr = 0x20;
+	req->create_cq.vector = cpu_to_le32 ( 1 );
+
 	req->create_cq.address = cpu_to_le64 ( virt_to_bus ( cq->cqe.raw ) );
 
 	/* Issue request */
@@ -482,9 +562,16 @@ static int ena_create_cq ( struct ena_nic *ena, struct ena_cq *cq ) {
 	cq->cons = 0;
 	cq->phase = ENA_CQE_PHASE;
 
-	DBGC ( ena, "ENA %p CQ%d at [%08lx,%08lx) db +%04x\n",
+	//
+	//cq->fuckyou = le32_to_cpu ( rsp->create_cq.intr );
+
+	DBGC ( ena, "ENA %p CQ%d at [%08lx,%08lx) db +%04x intr +%04x\n",
 	       ena, cq->id, virt_to_phys ( cq->cqe.raw ),
-	       ( virt_to_phys ( cq->cqe.raw ) + cq->len ), cq->doorbell );
+	       ( virt_to_phys ( cq->cqe.raw ) + cq->len ), cq->doorbell,
+	       cq->fuckyou );
+	//
+	if ( cq->fuckyou )
+		writel ( 0x40000000UL, ena->regs + cq->fuckyou );
 	return 0;
 
  err_admin:
@@ -592,6 +679,8 @@ static int ena_get_device_attributes ( struct net_device *netdev ) {
 	feature = &rsp->get_feature.feature;
 	memcpy ( netdev->hw_addr, feature->device.mac, ETH_ALEN );
 	netdev->max_pkt_len = le32_to_cpu ( feature->device.mtu );
+	//
+	netdev->max_pkt_len = 4096;
 	netdev->mtu = ( netdev->max_pkt_len - ETH_HLEN );
 
 	DBGC ( ena, "ENA %p MAC %s MTU %zd\n",
@@ -695,6 +784,8 @@ static void ena_refill_rx ( struct net_device *netdev ) {
 			/* Wait for next refill */
 			break;
 		}
+		//
+		memset ( iobuf->data, 0xee, len );
 
 		/* Get next submission queue entry */
 		index = ( ena->rx.sq.prod % ENA_RX_COUNT );
@@ -706,6 +797,10 @@ static void ena_refill_rx ( struct net_device *netdev ) {
 		sqe->id = cpu_to_le16 ( ena->rx.sq.prod );
 		sqe->address = cpu_to_le64 ( address );
 		wmb();
+
+		//
+		mdelay(10);
+
 		sqe->flags = ( ENA_SQE_FIRST | ENA_SQE_LAST | ENA_SQE_CPL |
 			       ena->rx.sq.phase );
 
@@ -875,6 +970,9 @@ static void ena_poll_tx ( struct net_device *netdev ) {
 		/* Complete transmit */
 		netdev_tx_complete_next ( netdev );
 	}
+
+	if ( ena->tx.cq.fuckyou )
+		writel ( 0x40000000UL, ena->regs + ena->tx.cq.fuckyou );
 }
 
 /**
@@ -889,8 +987,26 @@ static void ena_poll_rx ( struct net_device *netdev ) {
 	unsigned int index;
 	size_t len;
 
+	//
+	mb();
+	unsigned int i;
+	for ( i = 0 ; i < ENA_RX_COUNT ; i++ ) {
+		uint16_t *wtf;
+		iobuf = ena->rx_iobuf[i];
+		if ( ! iobuf )
+			continue;
+		wtf = iobuf->data;
+		if ( *wtf != 0xeeee ) {
+			DBGC ( ena, "*** detected packet in RX %d\n", i );
+			DBGC_HDA ( ena, virt_to_phys ( wtf ), wtf, 128 );
+		}
+	}
+
 	/* Check for received packets */
 	while ( ena->rx.cq.cons != ena->rx.sq.prod ) {
+
+		//
+		rmb();
 
 		/* Get next completion queue entry */
 		index = ( ena->rx.cq.cons % ENA_RX_COUNT );
@@ -899,6 +1015,9 @@ static void ena_poll_rx ( struct net_device *netdev ) {
 		/* Stop if completion queue entry is empty */
 		if ( ( cqe->flags ^ ena->rx.cq.phase ) & ENA_CQE_PHASE )
 			return;
+
+		//
+		rmb();
 
 		/* Increment consumer counter */
 		ena->rx.cq.cons++;
@@ -911,11 +1030,32 @@ static void ena_poll_rx ( struct net_device *netdev ) {
 		len = le16_to_cpu ( cqe->len );
 		iob_put ( iobuf, len );
 
+		//
+		DBGC ( ena, "*** waiting for DMA\n" );
+		unsigned int i;
+		for ( i = 0 ; i < 1000 ; i++ ) {
+			uint16_t *data = iobuf->data;
+			readl ( ena->regs + ENA_STAT );
+			mdelay ( 1 );
+			mb();
+			if ( *data != 0xeeee )
+				break;
+		}
+
 		/* Hand off to network stack */
 		DBGC2 ( ena, "ENA %p RX %d complete (length %zd)\n",
 			ena, le16_to_cpu ( cqe->id ), len );
+		DBGC2_HDA ( ena, 0, cqe, sizeof ( *cqe ) );
+
+		//
+		DBGC2_HDA ( ena, virt_to_phys ( iobuf->data ),
+			    iobuf->data, iob_len ( iobuf ) );
+
 		netdev_rx ( netdev, iobuf );
 	}
+
+	if ( ena->rx.cq.fuckyou )
+		writel ( 0x40000000UL, ena->regs + ena->rx.cq.fuckyou );
 }
 
 /**
@@ -924,6 +1064,11 @@ static void ena_poll_rx ( struct net_device *netdev ) {
  * @v netdev		Network device
  */
 static void ena_poll ( struct net_device *netdev ) {
+	struct ena_nic *ena = netdev->priv;
+
+	//
+	pci_msix_dump ( &ena->msix.cap, 1 );
+	pci_msix_dump ( &ena->msix.cap, 2 );
 
 	/* Poll for transmit completions */
 	ena_poll_tx ( netdev );
@@ -993,6 +1138,11 @@ static int ena_probe ( struct pci_device *pci ) {
 		goto err_ioremap;
 	}
 
+	//
+	ena->dma = &pci->dma;
+	//dma_set_mask_64bit ( ena->dma );
+	//netdev->dma = ena->dma;
+
 	/* Reset the NIC */
 	if ( ( rc = ena_reset ( ena ) ) != 0 )
 		goto err_reset;
@@ -1011,8 +1161,13 @@ static int ena_probe ( struct pci_device *pci ) {
 	info->version = cpu_to_le32 ( ENA_HOST_INFO_VERSION_WTF );
 	info->spec = cpu_to_le16 ( ENA_HOST_INFO_SPEC_2_0 );
 	info->busdevfn = cpu_to_le16 ( pci->busdevfn );
+	info->cpus = cpu_to_le16 ( 1 );
 	DBGC2 ( ena, "ENA %p host info:\n", ena );
 	DBGC2_HDA ( ena, virt_to_phys ( info ), info, sizeof ( *info ) );
+
+	/* Enable MSI-X dummy interrupt */
+	if ( ( rc = ena_msix_enable ( ena, pci, 1 ) ) != 0 )
+		goto err_create_admin; //
 
 	/* Create admin queues */
 	if ( ( rc = ena_create_admin ( ena ) ) != 0 )

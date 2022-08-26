@@ -28,7 +28,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define ENA_TX_COUNT 16
 
 /** Number of receive queue entries */
-#define ENA_RX_COUNT 16
+#define ENA_RX_COUNT 64
 
 /** Base address low register offset */
 #define ENA_BASE_LO 0x0
@@ -651,6 +651,9 @@ struct ena_cq {
 	uint8_t actual;
 	/** Actual number of entries minus one */
 	uint8_t mask;
+
+	//
+	unsigned int fuckyou;
 };
 
 /**
@@ -676,6 +679,21 @@ struct ena_qp {
 	struct ena_cq cq;
 };
 
+///
+
+#include <ipxe/pcimsix.h>
+
+/** MSI-X interrupt */
+struct ena_msix {
+	/** PCI capability */
+	struct pci_msix cap;
+	/** MSI-X dummy interrupt target */
+	uint32_t msg;
+	/** DMA mapping for dummy interrupt target */
+	struct dma_mapping map;
+};
+
+
 /** An ENA network card */
 struct ena_nic {
 	/** Registers */
@@ -692,6 +710,12 @@ struct ena_nic {
 	struct ena_qp rx;
 	/** Receive I/O buffers */
 	struct io_buffer *rx_iobuf[ENA_RX_COUNT];
+
+	//
+		/** DMA device */
+	struct dma_device *dma;
+
+	struct ena_msix msix;
 };
 
 #endif /* _ENA_H */

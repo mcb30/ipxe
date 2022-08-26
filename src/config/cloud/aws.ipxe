@@ -10,7 +10,7 @@ echo DHCP attempt ${attempt}
 dhcp --timeout 5000 && goto dhcp_ok ||
 ifstat ||
 inc attempt
-iseq ${attempt} 10 || goto dhcp_retry
+iseq ${attempt} 3 || goto dhcp_retry
 
 :dhcp_fail
 echo DHCP failed - rebooting
