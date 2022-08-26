@@ -28,7 +28,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define ENA_TX_COUNT 16
 
 /** Number of receive queue entries */
-#define ENA_RX_COUNT 16
+#define ENA_RX_COUNT 32
 
 /** Base address low register offset */
 #define ENA_BASE_LO 0x0
