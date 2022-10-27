@@ -46,6 +46,28 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 /******************************************************************************
  *
+ * Device reset
+ *
+ ******************************************************************************
+ */
+
+/**
+ * Reset hardware
+ *
+ * @v intelxl		Intel device
+ */
+static void intelxl_reset ( struct intelxl_nic *intelxl ) {
+	uint32_t pfgen_ctrl;
+
+	/* Perform a global software reset */
+	pfgen_ctrl = readl ( intelxl->regs + INTELXL_PFGEN_CTRL );
+	writel ( ( pfgen_ctrl | INTELXL_PFGEN_CTRL_PFSWR ),
+		 intelxl->regs + INTELXL_PFGEN_CTRL );
+	mdelay ( INTELXL_RESET_DELAY_MS );
+}
+
+/******************************************************************************
+ *
  * MSI-X interrupts
  *
  ******************************************************************************
@@ -1729,17 +1751,8 @@ static int intelxl_probe ( struct pci_device *pci ) {
 	dma_set_mask_64bit ( intelxl->dma );
 	netdev->dma = intelxl->dma;
 
-	/* Locate PCI Express capability */
-	intelxl->exp = pci_find_capability ( pci, PCI_CAP_ID_EXP );
-	if ( ! intelxl->exp ) {
-		DBGC ( intelxl, "INTELXL %p missing PCIe capability\n",
-		       intelxl );
-		rc = -ENXIO;
-		goto err_exp;
-	}
-
-	/* Reset the function via PCIe FLR */
-	pci_reset ( pci, intelxl->exp );
+	/* Reset the NIC */
+	intelxl_reset ( intelxl );
 
 	/* Get function number, port number and base queue number */
 	pffunc_rid = readl ( intelxl->regs + INTELXL_PFFUNC_RID );
@@ -1831,8 +1844,7 @@ static int intelxl_probe ( struct pci_device *pci ) {
  err_open_admin:
 	intelxl_msix_disable ( intelxl, pci, INTELXL_MSIX_VECTOR );
  err_msix:
-	pci_reset ( pci, intelxl->exp );
- err_exp:
+	intelxl_reset ( intelxl );
 	iounmap ( intelxl->regs );
  err_ioremap:
 	netdev_nullify ( netdev );
@@ -1860,7 +1872,7 @@ static void intelxl_remove ( struct pci_device *pci ) {
 	intelxl_msix_disable ( intelxl, pci, INTELXL_MSIX_VECTOR );
 
 	/* Reset the NIC */
-	pci_reset ( pci, intelxl->exp );
+	intelxl_reset ( intelxl );
 
 	/* Free network device */
 	iounmap ( intelxl->regs );
