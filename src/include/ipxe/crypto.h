@@ -298,6 +298,9 @@ static inline int pubkey_match ( struct pubkey_algorithm *pubkey,
 			       public_key_len );
 }
 
+extern int cipher_verify ( struct cipher_algorithm *cipher, void *ctx,
+			   const void *auth, size_t len );
+
 extern void digest_null_init ( void *ctx );
 extern void digest_null_update ( void *ctx, const void *src, size_t len );
 extern void digest_null_final ( void *ctx, void *out );

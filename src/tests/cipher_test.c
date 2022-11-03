@@ -84,10 +84,30 @@ static void cipher_crypt_okx ( struct cipher_test *test,
 	/* Compare against expected plaintext/ciphertext */
 	okx ( memcmp ( dst, expected, len ) == 0, file, line );
 
-	/* Check authentication tag */
+	/* Check generation of authentication tag */
 	okx ( cipher->authsize == test->auth_len, file, line );
 	cipher_auth ( cipher, ctx, auth );
 	okx ( memcmp ( auth, test->auth, test->auth_len ) == 0, file, line );
+
+	/* Check verification of authentication tag */
+	okx ( cipher_verify ( cipher, ctx, test->auth, test->auth_len ) == 0,
+	      file, line );
+
+	/* Check verification of truncated authentication tag */
+	okx ( cipher_verify ( cipher, ctx, test->auth,
+			      ( test->auth_len / 2 ) ) == 0, file, line );
+
+	/* Check failure of incorrect authentication tag */
+	memcpy ( auth, test->auth, test->auth_len );
+	if ( test->auth_len ) {
+		auth[0] ^= 0xeb;
+		okx ( cipher_verify ( cipher, ctx, auth,
+				      test->auth_len ) != 0, file, line );
+	}
+
+	/* Check failure of overlength authentication tag */
+	okx ( cipher_verify ( cipher, ctx, test->auth,
+			      ( test->auth_len + 1 ) ) != 0, file, line );
 }
 
 /**
