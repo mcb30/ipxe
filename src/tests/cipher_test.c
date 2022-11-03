@@ -45,18 +45,25 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define PROFILE_COUNT 16
 
 /**
- * Report a cipher encryption test result
+ * Report a cipher encryption/decryption test result
  *
  * @v test		Cipher test
+ * @v op		Cipher operation
+ * @v src		Source data
+ * @v expected		Expected destination data
  * @v file		Test code file
  * @v line		Test code line
  */
-void cipher_encrypt_okx ( struct cipher_test *test, const char *file,
-			  unsigned int line ) {
+static void cipher_crypt_okx ( struct cipher_test *test,
+			       void ( * op ) ( struct cipher_algorithm *cipher,
+					       void *ctx, const void *src,
+					       void *dst, size_t len ),
+			       const void *src, const void *expected,
+			       const char *file, unsigned int line ) {
 	struct cipher_algorithm *cipher = test->cipher;
 	size_t len = test->len;
 	uint8_t ctx[cipher->ctxsize];
-	uint8_t ciphertext[len];
+	uint8_t dst[len];
 	uint8_t auth[cipher->authsize];
 
 	/* Initialise cipher */
@@ -67,20 +74,34 @@ void cipher_encrypt_okx ( struct cipher_test *test, const char *file,
 	/* Process additional data, if applicable */
 	if ( test->additional_len ) {
 		okx ( is_auth_cipher ( cipher ), file, line );
-		cipher_encrypt ( cipher, ctx, test->additional, NULL,
-				 test->additional_len );
+		op ( cipher, ctx, test->additional, NULL,
+		     test->additional_len );
 	}
 
-	/* Perform encryption */
-	cipher_encrypt ( cipher, ctx, test->plaintext, ciphertext, len );
+	/* Perform encryption/decryption */
+	op ( cipher, ctx, src, dst, len );
 
-	/* Compare against expected ciphertext */
-	okx ( memcmp ( ciphertext, test->ciphertext, len ) == 0, file, line );
+	/* Compare against expected plaintext/ciphertext */
+	okx ( memcmp ( dst, expected, len ) == 0, file, line );
 
 	/* Check authentication tag */
 	okx ( cipher->authsize == test->auth_len, file, line );
 	cipher_auth ( cipher, ctx, auth );
 	okx ( memcmp ( auth, test->auth, test->auth_len ) == 0, file, line );
+}
+
+/**
+ * Report a cipher encryption/decryption test result
+ *
+ * @v test		Cipher test
+ * @v file		Test code file
+ * @v line		Test code line
+ */
+void cipher_encrypt_okx ( struct cipher_test *test, const char *file,
+			  unsigned int line ) {
+
+	cipher_crypt_okx ( test, cipher_encrypt, test->plaintext,
+			   test->ciphertext, file, line );
 }
 
 /**
@@ -92,34 +113,9 @@ void cipher_encrypt_okx ( struct cipher_test *test, const char *file,
  */
 void cipher_decrypt_okx ( struct cipher_test *test, const char *file,
 			  unsigned int line ) {
-	struct cipher_algorithm *cipher = test->cipher;
-	size_t len = test->len;
-	uint8_t ctx[cipher->ctxsize];
-	uint8_t plaintext[len];
-	uint8_t auth[cipher->authsize];
 
-	/* Initialise cipher */
-	okx ( cipher_setkey ( cipher, ctx, test->key, test->key_len ) == 0,
-	      file, line );
-	cipher_setiv ( cipher, ctx, test->iv, test->iv_len );
-
-	/* Process additional data, if applicable */
-	if ( test->additional_len ) {
-		okx ( is_auth_cipher ( cipher ), file, line );
-		cipher_decrypt ( cipher, ctx, test->additional, NULL,
-				 test->additional_len );
-	}
-
-	/* Perform decryption */
-	cipher_decrypt ( cipher, ctx, test->ciphertext, plaintext, len );
-
-	/* Compare against expected plaintext */
-	okx ( memcmp ( plaintext, test->plaintext, len ) == 0, file, line );
-
-	/* Check authentication tag */
-	okx ( cipher->authsize == test->auth_len, file, line );
-	cipher_auth ( cipher, ctx, auth );
-	okx ( memcmp ( auth, test->auth, test->auth_len ) == 0, file, line );
+	cipher_crypt_okx ( test, cipher_decrypt, test->ciphertext,
+			   test->plaintext, file, line );
 }
 
 /**
