@@ -190,6 +190,14 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #define EINFO_EPROTO_VERSION						\
 	__einfo_uniqify ( EINFO_EPROTO, 0x01,				\
 			  "Illegal protocol version upgrade" )
+#define EPROTO_IV __einfo_error ( EINFO_EPROTO_IV )
+#define EINFO_EPROTO_IV							\
+	__einfo_uniqify ( EINFO_EPROTO, 0x02,				\
+			  "Invalid initialisation vector" )
+#define EPROTO_AUTH __einfo_error ( EINFO_EPROTO_AUTH )
+#define EINFO_EPROTO_AUTH						\
+	__einfo_uniqify ( EINFO_EPROTO, 0x03,				\
+			  "Invalid authentication tag" )
 
 /** List of TLS session */
 static LIST_HEAD ( tls_sessions );
@@ -2854,14 +2862,45 @@ static int tls_new_ciphertext ( struct tls_connection *tls,
 				struct list_head *rx_data ) {
 	struct tls_header plaintext_tlshdr;
 	struct tls_cipherspec *cipherspec = &tls->rx_cipherspec;
-	struct cipher_algorithm *cipher = cipherspec->suite->cipher;
-	struct digest_algorithm *digest = cipherspec->suite->digest;
+	struct tls_cipher_suite *suite = cipherspec->suite;
+	struct cipher_algorithm *cipher = suite->cipher;
+	struct digest_algorithm *digest = suite->digest;
+	struct {
+		uint8_t fixed[suite->fixed_iv_len];
+		uint8_t record[suite->record_iv_len];
+	} __attribute__ (( packed )) iv;
 	uint8_t ctx[ hmac_ctxsize ( digest ) ];
 	uint8_t verify_mac[digest->digestsize];
 	struct io_buffer *iobuf;
+	void *auth;
 	void *mac;
 	size_t len = 0;
 	int rc;
+
+	/* Extract initialisation vector */
+	iobuf = list_first_entry ( rx_data, struct io_buffer, list );
+	if ( iob_len ( iobuf ) < sizeof ( iv.record ) ) {
+		DBGC ( tls, "TLS %p received underlength IV\n", tls );
+		DBGC_HD ( tls, iobuf->data, iob_len ( iobuf ) );
+		return -EPROTO_IV;
+	}
+	memcpy ( iv.fixed, cipherspec->fixed_iv, sizeof ( iv.fixed ) );
+	memcpy ( iv.record, iobuf->data, sizeof ( iv.record ) );
+	iob_pull ( iobuf, sizeof ( iv.record ) );
+
+	/* Set initialisation vector */
+	cipher_setiv ( cipher, cipherspec->cipher_ctx, &iv, sizeof ( iv ) );
+
+	/* Extract authentication tag */
+	iobuf = list_last_entry ( rx_data, struct io_buffer, list );
+	if ( iob_len ( iobuf ) < cipher->authsize ) {
+		DBGC ( tls, "TLS %p received underlength IV\n", tls );
+		DBGC_HD ( tls, iobuf->data, iob_len ( iobuf ) );
+		return -EPROTO_AUTH;
+	}
+	iob_unput ( iobuf, cipher->authsize );
+	auth = iobuf->tail;
+
 
 	/* Decrypt the received data */
 	list_for_each_entry ( iobuf, &tls->rx_data, list ) {
