@@ -2517,14 +2517,14 @@ static int tls_new_record ( struct tls_connection *tls, unsigned int type,
  *
  * @v cipherspec	Cipher specification
  * @v ctx		Context
- * @v auth		Authentication data
+ * @v authhdr		Authentication header
  */
 static void tls_hmac_init ( struct tls_cipherspec *cipherspec, void *ctx,
-			    struct tls_auth_data *auth ) {
+			    struct tls_auth_header *authhdr ) {
 	struct digest_algorithm *digest = cipherspec->suite->digest;
 
 	hmac_init ( digest, ctx, cipherspec->mac_secret, digest->digestsize );
-	hmac_update ( digest, ctx, auth, sizeof ( *auth ) );
+	hmac_update ( digest, ctx, authhdr, sizeof ( *authhdr ) );
 }
 
 /**
@@ -2560,103 +2560,20 @@ static void tls_hmac_final ( struct tls_cipherspec *cipherspec, void *ctx,
  * Calculate HMAC
  *
  * @v cipherspec	Cipher specification
- * @v auth		Authentication data
+ * @v authhdr		Authentication header
  * @v data		Data
  * @v len		Length of data
  * @v mac		HMAC to fill in
  */
 static void tls_hmac ( struct tls_cipherspec *cipherspec,
-		       struct tls_auth_data *auth,
+		       struct tls_auth_header *authhdr,
 		       const void *data, size_t len, void *hmac ) {
 	struct digest_algorithm *digest = cipherspec->suite->digest;
 	uint8_t ctx[ hmac_ctxsize ( digest ) ];
 
-	tls_hmac_init ( cipherspec, ctx, auth );
+	tls_hmac_init ( cipherspec, ctx, authhdr );
 	tls_hmac_update ( cipherspec, ctx, data, len );
 	tls_hmac_final ( cipherspec, ctx, hmac );
-}
-
-/**
- * Allocate and assemble stream-ciphered record from data and MAC portions
- *
- * @v tls		TLS connection
- * @ret data		Data
- * @ret len		Length of data
- * @ret digest		MAC digest
- * @ret plaintext_len	Length of plaintext record
- * @ret plaintext	Allocated plaintext record
- */
-static void * __malloc
-tls_assemble_stream ( struct tls_connection *tls, const void *data, size_t len,
-		      void *digest, size_t *plaintext_len ) {
-	size_t mac_len = tls->tx_cipherspec.suite->digest->digestsize;
-	void *plaintext;
-	void *content;
-	void *mac;
-
-	/* Calculate stream-ciphered struct length */
-	*plaintext_len = ( len + mac_len );
-
-	/* Allocate stream-ciphered struct */
-	plaintext = malloc ( *plaintext_len );
-	if ( ! plaintext )
-		return NULL;
-	content = plaintext;
-	mac = ( content + len );
-
-	/* Fill in stream-ciphered struct */
-	memcpy ( content, data, len );
-	memcpy ( mac, digest, mac_len );
-
-	return plaintext;
-}
-
-/**
- * Allocate and assemble block-ciphered record from data and MAC portions
- *
- * @v tls		TLS connection
- * @ret data		Data
- * @ret len		Length of data
- * @ret digest		MAC digest
- * @ret plaintext_len	Length of plaintext record
- * @ret plaintext	Allocated plaintext record
- */
-static void * tls_assemble_block ( struct tls_connection *tls,
-				   const void *data, size_t len,
-				   void *digest, size_t *plaintext_len ) {
-	size_t blocksize = tls->tx_cipherspec.suite->cipher->blocksize;
-	size_t mac_len = tls->tx_cipherspec.suite->digest->digestsize;
-	size_t iv_len = blocksize;
-	size_t padding_len;
-	void *plaintext;
-	void *iv;
-	void *content;
-	void *mac;
-	void *padding;
-
-	/* Sanity check */
-	assert ( iv_len == tls->tx_cipherspec.suite->record_iv_len );
-
-	/* Calculate block-ciphered struct length */
-	padding_len = ( ( blocksize - 1 ) & -( iv_len + len + mac_len + 1 ) );
-	*plaintext_len = ( iv_len + len + mac_len + padding_len + 1 );
-
-	/* Allocate block-ciphered struct */
-	plaintext = malloc ( *plaintext_len );
-	if ( ! plaintext )
-		return NULL;
-	iv = plaintext;
-	content = ( iv + iv_len );
-	mac = ( content + len );
-	padding = ( mac + mac_len );
-
-	/* Fill in block-ciphered struct */
-	tls_generate_random ( tls, iv, iv_len );
-	memcpy ( content, data, len );
-	memcpy ( mac, digest, mac_len );
-	memset ( padding, padding_len, ( padding_len + 1 ) );
-
-	return plaintext;
 }
 
 /**
@@ -2671,46 +2588,78 @@ static void * tls_assemble_block ( struct tls_connection *tls,
 static int tls_send_plaintext ( struct tls_connection *tls, unsigned int type,
 				const void *data, size_t len ) {
 	struct tls_cipherspec *cipherspec = &tls->tx_cipherspec;
-	struct cipher_algorithm *cipher = cipherspec->suite->cipher;
-	struct tls_auth_data auth;
+	struct tls_cipher_suite *suite = cipherspec->suite;
+	struct cipher_algorithm *cipher = suite->cipher;
+	struct {
+		uint8_t fixed[suite->fixed_iv_len];
+		uint8_t record[suite->record_iv_len];
+	} __attribute__ (( packed )) iv;
+	struct tls_auth_header authhdr;
 	struct tls_header *tlshdr;
 	void *plaintext = NULL;
-	size_t plaintext_len;
+	size_t plaintext_len = len;
 	struct io_buffer *ciphertext = NULL;
 	size_t ciphertext_len;
-	size_t mac_len = cipherspec->suite->digest->digestsize;
-	uint8_t mac[mac_len];
+	size_t padding_len;
+	void *tmp;
 	int rc;
 
+	/* Construct initialisation vector */
+	memcpy ( iv.fixed, cipherspec->fixed_iv, sizeof ( iv.fixed ) );
+	tls_generate_random ( tls, iv.record, sizeof ( iv.record ) );
+
 	/* Construct authentication data */
-	auth.seq = cpu_to_be64 ( tls->tx_seq );
-	auth.header.type = type;
-	auth.header.version = htons ( tls->version );
-	auth.header.length = htons ( len );
+	authhdr.seq = cpu_to_be64 ( tls->tx_seq );
+	authhdr.header.type = type;
+	authhdr.header.version = htons ( tls->version );
+	authhdr.header.length = htons ( len );
 
-	/* Calculate MAC */
-	tls_hmac ( cipherspec, &auth, data, len, mac );
-
-	/* Allocate and assemble plaintext struct */
-	if ( is_stream_cipher ( cipher ) ) {
-		plaintext = tls_assemble_stream ( tls, data, len, mac,
-						  &plaintext_len );
+	/* Calculate padding length */
+	plaintext_len += suite->mac_len;
+	if ( is_block_cipher ( cipher ) ) {
+		padding_len = ( ( ( cipher->blocksize - 1 ) &
+				  -( plaintext_len + 1 ) ) + 1 );
 	} else {
-		plaintext = tls_assemble_block ( tls, data, len, mac,
-						 &plaintext_len );
+		padding_len = 0;
 	}
+	plaintext_len += padding_len;
+
+	/* Allocate plaintext */
+	plaintext = malloc ( plaintext_len );
 	if ( ! plaintext ) {
+		rc = -ENOMEM;
 		DBGC ( tls, "TLS %p could not allocate %zd bytes for "
 		       "plaintext\n", tls, plaintext_len );
 		rc = -ENOMEM_TX_PLAINTEXT;
 		goto done;
 	}
 
+	/* Assemble plaintext */
+	tmp = plaintext;
+	memcpy ( tmp, data, len );
+	tmp += len;
+	if ( suite->mac_len ) {
+		tls_hmac ( cipherspec, &authhdr, data, len, tmp );
+		tmp += suite->mac_len;
+	}
+	memset ( tmp, ( padding_len - 1 ), padding_len );
+	tmp += padding_len;
+	assert ( tmp == ( plaintext + plaintext_len ) );
 	DBGC2 ( tls, "Sending plaintext data:\n" );
 	DBGC2_HD ( tls, plaintext, plaintext_len );
 
+	/* Set initialisation vector */
+	cipher_setiv ( cipher, cipherspec->cipher_ctx, &iv, sizeof ( iv ) );
+
+	/* Process authentication data, if applicable */
+	if ( is_auth_cipher ( cipher ) ) {
+		cipher_encrypt ( cipher, cipherspec->cipher_ctx, &authhdr,
+				 NULL, sizeof ( authhdr ) );
+	}
+
 	/* Allocate ciphertext */
-	ciphertext_len = ( sizeof ( *tlshdr ) + plaintext_len );
+	ciphertext_len = ( sizeof ( *tlshdr ) + sizeof ( iv.record ) +
+			   plaintext_len + cipher->authsize );
 	ciphertext = xfer_alloc_iob ( &tls->cipherstream, ciphertext_len );
 	if ( ! ciphertext ) {
 		DBGC ( tls, "TLS %p could not allocate %zd bytes for "
@@ -2723,9 +2672,16 @@ static int tls_send_plaintext ( struct tls_connection *tls, unsigned int type,
 	tlshdr = iob_put ( ciphertext, sizeof ( *tlshdr ) );
 	tlshdr->type = type;
 	tlshdr->version = htons ( tls->version );
-	tlshdr->length = htons ( plaintext_len );
+	tlshdr->length = htons ( ciphertext_len - sizeof ( *tlshdr ) );
+	memcpy ( iob_put ( ciphertext, sizeof ( iv.record ) ), iv.record,
+		 sizeof ( iv.record ) );
 	cipher_encrypt ( cipher, cipherspec->cipher_ctx, plaintext,
 			 iob_put ( ciphertext, plaintext_len ), plaintext_len );
+	if ( is_auth_cipher ( cipher ) ) {
+		cipher_auth ( cipher, cipherspec->cipher_ctx,
+			      iob_put ( ciphertext, cipher->authsize ) );
+	}
+	assert ( iob_len ( ciphertext ) == ciphertext_len );
 
 	/* Free plaintext as soon as possible to conserve memory */
 	free ( plaintext );
@@ -2803,7 +2759,7 @@ static int tls_new_ciphertext ( struct tls_connection *tls,
 		uint8_t fixed[suite->fixed_iv_len];
 		uint8_t record[suite->record_iv_len];
 	} __attribute__ (( packed )) iv;
-	struct tls_auth_data auth;
+	struct tls_auth_header authhdr;
 	uint8_t ctx[ hmac_ctxsize ( digest ) ];
 	uint8_t verify[cipher->authsize + suite->mac_len];
 	struct io_buffer *first;
@@ -2836,17 +2792,19 @@ static int tls_new_ciphertext ( struct tls_connection *tls,
 	iob_unput ( last, cipher->authsize );
 	len -= cipher->authsize;
 
+	/* Construct authentication data */
+	authhdr.seq = cpu_to_be64 ( tls->rx_seq );
+	authhdr.header.type = tlshdr->type;
+	authhdr.header.version = tlshdr->version;
+	authhdr.header.length = htons ( len );
+
 	/* Set initialisation vector */
 	cipher_setiv ( cipher, cipherspec->cipher_ctx, &iv, sizeof ( iv ) );
 
-	/* Construct and process authentication data */
-	auth.seq = cpu_to_be64 ( tls->rx_seq );
-	auth.header.type = tlshdr->type;
-	auth.header.version = tlshdr->version;
-	auth.header.length = htons ( len );
+	/* Process authentication data, if applicable */
 	if ( is_auth_cipher ( cipher ) ) {
-		cipher_decrypt ( cipher, cipherspec->cipher_ctx, &auth, NULL,
-				 sizeof ( auth ) );
+		cipher_decrypt ( cipher, cipherspec->cipher_ctx, &authhdr,
+				 NULL, sizeof ( authhdr ) );
 	}
 
 	/* Decrypt the received data */
@@ -2888,8 +2846,8 @@ static int tls_new_ciphertext ( struct tls_connection *tls,
 	if ( is_auth_cipher ( cipher ) ) {
 		cipher_auth ( cipher, cipherspec->cipher_ctx, &verify );
 	} else {
-		auth.header.length = htons ( len );
-		tls_hmac_init ( cipherspec, ctx, &auth );
+		authhdr.header.length = htons ( len );
+		tls_hmac_init ( cipherspec, ctx, &authhdr );
 		list_for_each_entry ( iobuf, rx_data, list ) {
 			tls_hmac_update ( cipherspec, ctx, iobuf->data,
 					  iob_len ( iobuf ) );
