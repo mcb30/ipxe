@@ -14,6 +14,10 @@ struct device;
 
 extern int efi_locate_device ( EFI_HANDLE device, EFI_GUID *protocol,
 			       EFI_HANDLE *parent, unsigned int skip );
+extern int efi_service_create ( EFI_HANDLE parent, EFI_GUID *binding,
+				EFI_HANDLE *child );
+extern int efi_service_destroy ( EFI_HANDLE parent, EFI_GUID *binding,
+				 EFI_HANDLE child );
 extern int efi_child_add ( EFI_HANDLE parent, EFI_HANDLE child );
 extern void efi_child_del ( EFI_HANDLE parent, EFI_HANDLE child );
 extern void efi_device_info ( EFI_HANDLE device, const char *prefix,

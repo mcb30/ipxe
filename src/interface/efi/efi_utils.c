@@ -26,6 +26,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/efi/efi_path.h>
 #include <ipxe/efi/efi_pci.h>
 #include <ipxe/efi/efi_utils.h>
+#include <ipxe/efi/Protocol/ServiceBinding.h>
 
 /** @file
  *
@@ -109,6 +110,104 @@ int efi_locate_device ( EFI_HANDLE device, EFI_GUID *protocol,
 	bs->CloseProtocol ( device, &efi_device_path_protocol_guid,
 			    efi_image_handle, device );
  err_open_device_path:
+	return rc;
+}
+
+/**
+ * Create service binding child handle
+ *
+ * @v parent		Parent handle
+ * @v binding		Service binding protocol GUID
+ * @v child		Child handle on which to install child
+ * @ret rc		Return status code
+ */
+int efi_service_create ( EFI_HANDLE parent, EFI_GUID *binding,
+			 EFI_HANDLE *child ) {
+	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
+	union {
+		EFI_SERVICE_BINDING_PROTOCOL *sb;
+		void *interface;
+	} u;
+	EFI_STATUS efirc;
+	int rc;
+
+	/* Open service binding protocol */
+	if ( ( efirc = bs->OpenProtocol ( parent, binding, &u.interface,
+					  efi_image_handle, parent,
+					  EFI_OPEN_PROTOCOL_GET_PROTOCOL ))!=0){
+		rc = -EEFI ( efirc );
+		DBGC ( parent, "EFIDEV %s cannot open %s binding: %s\n",
+		       efi_handle_name ( parent ), efi_guid_ntoa ( binding ),
+		       strerror ( rc ) );
+		goto err_open;
+	}
+
+	/* Create child handle */
+	if ( ( efirc = u.sb->CreateChild ( u.sb, child ) ) != 0 ) {
+		rc = -EEFI ( efirc );
+		DBGC ( parent, "EFIDEV %s could not create %s child: %s\n",
+		       efi_handle_name ( parent ), efi_guid_ntoa ( binding ),
+		       strerror ( rc ) );
+		goto err_create;
+	}
+
+	/* Success */
+	rc = 0;
+	DBGC ( parent, "EFIDEV %s created %s child ",
+	       efi_handle_name ( parent ), efi_guid_ntoa ( binding ) );
+	DBGC ( parent, "%s\n", efi_handle_name ( *child ) );
+
+ err_create:
+	bs->CloseProtocol ( parent, binding, efi_image_handle, parent );
+ err_open:
+	return rc;
+}
+
+/**
+ * Destroy service binding child handle
+ *
+ * @v parent		Parent handle
+ * @v binding		Service binding protocol GUID
+ * @v child		Child handle
+ * @ret rc		Return status code
+ */
+int efi_service_destroy ( EFI_HANDLE parent, EFI_GUID *binding,
+			  EFI_HANDLE child ) {
+	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
+	union {
+		EFI_SERVICE_BINDING_PROTOCOL *sb;
+		void *interface;
+	} u;
+	EFI_STATUS efirc;
+	int rc;
+
+	/* Open service binding protocol */
+	if ( ( efirc = bs->OpenProtocol ( parent, binding, &u.interface,
+					  efi_image_handle, parent,
+					  EFI_OPEN_PROTOCOL_GET_PROTOCOL ))!=0){
+		rc = -EEFI ( efirc );
+		DBGC ( parent, "EFIDEV %s cannot open %s binding: %s\n",
+		       efi_handle_name ( parent ), efi_guid_ntoa ( binding ),
+		       strerror ( rc ) );
+		goto err_open;
+	}
+
+	/* Destroy child handle */
+	if ( ( efirc = u.sb->DestroyChild ( u.sb, child ) ) != 0 ) {
+		rc = -EEFI ( efirc );
+		DBGC ( parent, "EFIDEV %s could not destroy %s child ",
+		       efi_handle_name ( parent ), efi_guid_ntoa ( binding ) );
+		DBGC ( parent, "%s: %s\n",
+		       efi_handle_name ( child ), strerror ( rc ) );
+		goto err_destroy;
+	}
+
+	/* Success */
+	rc = 0;
+
+ err_destroy:
+	bs->CloseProtocol ( parent, binding, efi_image_handle, parent );
+ err_open:
 	return rc;
 }
 
