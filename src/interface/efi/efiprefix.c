@@ -88,7 +88,7 @@ static void efi_init_application ( void ) {
 	efi_cachedhcp_record ( device, devpath );
 
 	/* Load autoexec script, if any */
-	efi_autoexec_load ( device, filepath );
+	efi_autoexec_load ( device, devpath, filepath );
 }
 
 /** EFI application initialisation function */

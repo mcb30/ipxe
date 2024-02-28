@@ -30,7 +30,10 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/init.h>
 #include <ipxe/in.h>
 #include <ipxe/efi/efi.h>
+#include <ipxe/efi/efi_path.h>
+#include <ipxe/efi/efi_utils.h>
 #include <ipxe/efi/efi_autoexec.h>
+#include <ipxe/efi/Protocol/Http.h>
 #include <ipxe/efi/Protocol/PxeBaseCode.h>
 #include <ipxe/efi/Protocol/SimpleFileSystem.h>
 #include <ipxe/efi/Guid/FileInfo.h>
@@ -218,6 +221,77 @@ static int efi_autoexec_filesystem ( EFI_HANDLE device,
 }
 
 /**
+ * Load autoexec script from HTTP server
+ *
+ * @v device		Device handle
+ * @v path		Device path
+ * @ret rc		Return status code
+ */
+static int efi_autoexec_http ( EFI_HANDLE device,
+			       EFI_DEVICE_PATH_PROTOCOL *path ) {
+	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
+	union {
+		void *interface;
+		EFI_HTTP_IO_PROTOCOL *httpio;
+	} u;
+	EFI_HANDLE httpsb;
+	EFI_HANDLE httpio;
+	EFI_STATUS efirc;
+	int rc;
+
+	//
+	struct {
+		EFI_DEVICE_PATH_PROTOCOL hdr;
+		CHAR8 uri[50];
+		EFI_DEVICE_PATH_PROTOCOL end;
+	} __attribute__ (( packed )) xxx = {
+		.hdr = {
+			.Type = MESSAGING_DEVICE_PATH,
+			.SubType = MSG_URI_DP,
+			.Length[0] = sizeof ( xxx.hdr ) + sizeof ( xxx.uri ),
+		},
+		.uri = "http://pudding.tuntap/images/efi/x64/autoexec.ipxe",
+		.end = {
+			.Type = END_DEVICE_PATH_TYPE,
+			.SubType = END_ENTIRE_DEVICE_PATH_SUBTYPE,
+			.Length[0] = 4,
+		},
+	};
+
+	/* Locate HTTP service binding protocol */
+	if ( ( rc = efi_locate_device ( device,
+					&efi_http_service_binding_protocol_guid,
+					&httpsb, 0 ) ) != 0 ) {
+		DBGC ( device, "EFI %s has no HTTP service binding: %s\n",
+		       efi_handle_name ( device ), strerror ( rc ) );
+		goto err_locate_sb;
+	}
+
+	/* Create HTTP I/O child handle */
+	if ( ( rc = efi_service_create ( httpsb,
+					 &efi_http_service_binding_protocol_guid,
+
+	/* Open HTTP service binding protocol */
+	if ( ( rc = bs->OpenProtocol ( httpsb,
+				       &efi_http_service_binding_protocol_guid,
+				       &u.
+
+
+
+#if 0
+
+	EFI_DEVICE_PATH_PROTOCOL *next;
+
+	/* Identify URI device path */
+	for ( ; ( next = efi_path_next ( path ) ) ; path = next ) {
+		if ( ( path->Type == MESSAGING_DEVICE_PATH ) &&
+		     ( path->SubType == MSG_URI_DP ) ) {
+		}
+	}
+
+#endif
+
+/**
  * Load autoexec script from TFTP server
  *
  * @v device		Device handle
@@ -390,11 +464,13 @@ static int efi_autoexec_tftp ( EFI_HANDLE device ) {
  * Load autoexec script
  *
  * @v device		Device handle
- * @v path		Image path within device handle
+ * @v devpath		Device handle's device path
+ * @v filepath		Image path within device handle
  * @ret rc		Return status code
  */
 int efi_autoexec_load ( EFI_HANDLE device,
-			EFI_DEVICE_PATH_PROTOCOL *path ) {
+			EFI_DEVICE_PATH_PROTOCOL *devpath,
+			EFI_DEVICE_PATH_PROTOCOL *filepath ) {
 	int rc;
 
 	/* Sanity check */
@@ -402,11 +478,15 @@ int efi_autoexec_load ( EFI_HANDLE device,
 	assert ( efi_autoexec_len == 0 );
 
 	/* Try loading from file system loaded image directory, if supported */
-	if ( ( rc = efi_autoexec_filesystem ( device, path ) ) == 0 )
+	if ( ( rc = efi_autoexec_filesystem ( device, filepath ) ) == 0 )
 		return 0;
 
 	/* Try loading from file system root directory, if supported */
 	if ( ( rc = efi_autoexec_filesystem ( device, NULL ) ) == 0 )
+		return 0;
+
+	/* Try loading via HTTP, if supported */
+	if ( ( rc = efi_autoexec_http ( device, devpath ) ) == 0 )
 		return 0;
 
 	/* Try loading via TFTP, if supported */
