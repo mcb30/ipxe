@@ -33,7 +33,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/efi/efi_path.h>
 #include <ipxe/efi/efi_utils.h>
 #include <ipxe/efi/efi_autoexec.h>
-#include <ipxe/efi/Protocol/Http.h>
 #include <ipxe/efi/Protocol/PxeBaseCode.h>
 #include <ipxe/efi/Protocol/SimpleFileSystem.h>
 #include <ipxe/efi/Guid/FileInfo.h>
@@ -50,11 +49,49 @@ static wchar_t efi_autoexec_wname[] = L"autoexec.ipxe";
 /** Autoexec script image name */
 static char efi_autoexec_name[] = "autoexec.ipxe";
 
+/** Autoexec script relative URI */
+static struct uri efi_autoexec_uri = { .epath = "autoexec.ipxe" };
+
 /** Autoexec script (if any) */
 static void *efi_autoexec;
 
 /** Autoexec script length */
 static size_t efi_autoexec_len;
+
+/**
+ * Resize autoexec script
+ *
+ * @v xferbuf		Data transfer buffer
+ * @v len		New length (or zero to free buffer)
+ * @ret rc		Return status code
+ */
+static int efi_autoexec_resize ( size_t len ) {
+	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
+	void *data = NULL;
+	size_t copy_len;
+	EFI_STATUS efirc;
+
+	/* Allocate new buffer if necessary */
+	if ( ( len > 0 ) &&
+	     ( ( efirc = bs->AllocatePool ( EfiBootServicesData, len,
+					    &data ) ) != 0 ) ) {
+		rc = -EEFI ( efirc );
+		return rc;
+	}
+
+	/* Copy data from old to new buffer */
+	copy_len =  ( ( len < efi_autoexec_len) ? len : efi_autoexec_len );
+	memcpy ( data, efi_autoexec, copy_len );
+
+	/* Free old buffer */
+	bs->FreePool ( efi_autoexec );
+
+	/* Record new buffer */
+	efi_autoexec = data;
+	efi_autoexec_len = len;
+
+	return 0;
+}
 
 /**
  * Load autoexec script from path within filesystem
@@ -79,7 +116,6 @@ static int efi_autoexec_filesystem ( EFI_HANDLE device,
 	EFI_FILE_PROTOCOL *root;
 	EFI_FILE_PROTOCOL *file;
 	UINTN size;
-	VOID *data;
 	unsigned int dirlen;
 	size_t len;
 	CHAR16 *wname;
@@ -118,14 +154,16 @@ static int efi_autoexec_filesystem ( EFI_HANDLE device,
 	}
 
 	/* Allocate filename */
-	len = ( ( dirlen * sizeof ( wname[0] ) ) + sizeof ( efi_autoexec_wname ) );
+	len = ( ( dirlen * sizeof ( wname[0] ) ) +
+		sizeof ( efi_autoexec_wname ) );
 	wname = malloc ( len );
 	if ( ! wname ) {
 		rc = -ENOMEM;
 		goto err_wname;
 	}
 	memcpy ( wname, filepath->PathName, ( dirlen * sizeof ( wname[0] ) ) );
-	memcpy ( &wname[dirlen], efi_autoexec_wname, sizeof ( efi_autoexec_wname ) );
+	memcpy ( &wname[dirlen], efi_autoexec_wname,
+		 sizeof ( efi_autoexec_wname ) );
 
 	/* Open simple file system protocol */
 	if ( ( efirc = bs->OpenProtocol ( device,
@@ -176,34 +214,28 @@ static int efi_autoexec_filesystem ( EFI_HANDLE device,
 	}
 
 	/* Allocate temporary copy */
-	if ( ( efirc = bs->AllocatePool ( EfiBootServicesData, size,
-					  &data ) ) != 0 ) {
-		rc = -EEFI ( efirc );
+	if ( ( rc = efi_autoexec_resize ( size ) ) != 0 ) {
 		DBGC ( device, "EFI %s could not allocate %ls: %s\n",
 		       efi_handle_name ( device ), wname, strerror ( rc ) );
 		goto err_alloc;
 	}
 
 	/* Read file */
-	if ( ( efirc = file->Read ( file, &size, data ) ) != 0 ) {
+	if ( ( efirc = file->Read ( file, &size, efi_autoexec ) ) != 0 ) {
 		rc = -EEFI ( efirc );
 		DBGC ( device, "EFI %s could not read %ls: %s\n",
 		       efi_handle_name ( device ), wname, strerror ( rc ) );
 		goto err_read;
 	}
 
-	/* Record autoexec script */
-	efi_autoexec = data;
-	efi_autoexec_len = size;
-	data = NULL;
-	DBGC ( device, "EFI %s found %ls\n", efi_handle_name ( device ), wname );
-
 	/* Success */
 	rc = 0;
+	DBGC ( device, "EFI %s found %ls\n",
+	       efi_handle_name ( device ), wname );
 
  err_read:
-	if ( data )
-		bs->FreePool ( data );
+	if ( rc != 0 )
+		efi_autoexec_resize ( 0 );
  err_alloc:
  err_empty:
  err_getinfo:
@@ -230,66 +262,85 @@ static int efi_autoexec_filesystem ( EFI_HANDLE device,
 static int efi_autoexec_http ( EFI_HANDLE device,
 			       EFI_DEVICE_PATH_PROTOCOL *path ) {
 	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
-	union {
-		void *interface;
-		EFI_HTTP_IO_PROTOCOL *httpio;
-	} u;
+	EFI_GUID *protocol = &efi_http_service_binding_protocol_guid;
+	EFI_DEVICE_PATH_PROTOCOL *next;
 	EFI_HANDLE httpsb;
-	EFI_HANDLE httpio;
+	sa_family_t sa_family;
+	struct uri *base;
+	struct uri *uri;
 	EFI_STATUS efirc;
 	int rc;
 
-	//
-	struct {
-		EFI_DEVICE_PATH_PROTOCOL hdr;
-		CHAR8 uri[50];
-		EFI_DEVICE_PATH_PROTOCOL end;
-	} __attribute__ (( packed )) xxx = {
-		.hdr = {
-			.Type = MESSAGING_DEVICE_PATH,
-			.SubType = MSG_URI_DP,
-			.Length[0] = sizeof ( xxx.hdr ) + sizeof ( xxx.uri ),
-		},
-		.uri = "http://pudding.tuntap/images/efi/x64/autoexec.ipxe",
-		.end = {
-			.Type = END_DEVICE_PATH_TYPE,
-			.SubType = END_ENTIRE_DEVICE_PATH_SUBTYPE,
-			.Length[0] = 4,
-		},
-	};
-
-	/* Locate HTTP service binding protocol */
-	if ( ( rc = efi_locate_device ( device,
-					&efi_http_service_binding_protocol_guid,
-					&httpsb, 0 ) ) != 0 ) {
-		DBGC ( device, "EFI %s has no HTTP service binding: %s\n",
-		       efi_handle_name ( device ), strerror ( rc ) );
-		goto err_locate_sb;
-	}
-
-	/* Create HTTP I/O child handle */
-	if ( ( rc = efi_service_create ( httpsb,
-					 &efi_http_service_binding_protocol_guid,
-
-	/* Open HTTP service binding protocol */
-	if ( ( rc = bs->OpenProtocol ( httpsb,
-				       &efi_http_service_binding_protocol_guid,
-				       &u.
-
-
-
-#if 0
-
-	EFI_DEVICE_PATH_PROTOCOL *next;
-
-	/* Identify URI device path */
+	/* Parse device path */
+	sa_family = AF_UNSPEC;
+	base = NULL;
 	for ( ; ( next = efi_path_next ( path ) ) ; path = next ) {
-		if ( ( path->Type == MESSAGING_DEVICE_PATH ) &&
-		     ( path->SubType == MSG_URI_DP ) ) {
+		if ( path->Type == MESSAGING_DEVICE_PATH ) {
+			switch ( path->SubType ) {
+			case MSG_IPv4_DP:
+				sa_family = AF_INET;
+				break;
+			case MSG_IPv6_DP:
+				sa_family = AF_INET6;
+				break;
+			case MSG_URI_DP:
+				base = efi_path_uri ( path );
+				break;
+			}
 		}
 	}
+	if ( sa_family == AF_UNSPEC ) {
+		DBGC ( device, "EFI %s has no IPv4/IPv6 path\n",
+		       efi_handle_name ( device ) );
+		rc = -ENOTTY;
+		goto err_no_family;
+	}
+	if ( ! base ) {
+		DBGC ( device, "EFI %s has no URI path\n",
+		       efi_handle_name ( device ) );
+		rc = -ENOTTY;
+		goto err_no_uri;
+	}
 
-#endif
+	/* Resolve download URI */
+	uri = resolve_uri ( base, efi_autoexec_uri );
+	if ( ! uri ) {
+		rc = -ENOMEM;
+		goto err_resolve;
+	}
+
+	/* Locate parent HTTP service binding protocol handle */
+	if ( ( rc = efi_locate_device ( device, protocol, &httpsb, 0 ) ) != 0){
+		DBGC ( device, "EFI %s has no HTTP service binding: %s\n",
+		       efi_handle_name ( device ), strerror ( rc ) );
+		goto err_locate;
+	}
+
+	/* Create HTTP I/O protocol child handle */
+	if ( ( rc = efi_service_create ( httpsb, protocol, &child ) ) != 0 ) {
+		DBGC ( device, "EFI %s could not create HTTP I/O: %s\n",
+		       efi_handle_name ( device ), strerror ( rc ) );
+		goto err_create;
+	}
+
+	/* Download via HTTP I/O protocol */
+	if ( ( rc = efi_http_download ( httpsb, uri, sa_family,
+					) ) != 0 ) {
+		DBGC ( device, "EFI %s could not download: %s\n",
+		       efi_handle_name ( device ), strerror ( rc ) );
+		goto err_download;
+	}
+
+	efi_service_destroy ( httpsb, protocol, child );
+ err_create:
+ err_locate:
+	uri_put ( uri );
+ err_resolve:
+	uri_put ( base );
+ err_no_uri:
+ err_no_family:
+	return rc;
+}
 
 /**
  * Load autoexec script from TFTP server
@@ -313,7 +364,6 @@ static int efi_autoexec_tftp ( EFI_HANDLE device ) {
 	char *filename;
 	char *sep;
 	UINT64 size;
-	VOID *data;
 	EFI_STATUS efirc;
 	int rc;
 
@@ -413,9 +463,7 @@ static int efi_autoexec_tftp ( EFI_HANDLE device ) {
 	}
 
 	/* Allocate temporary copy */
-	if ( ( efirc = bs->AllocatePool ( EfiBootServicesData, size,
-					  &data ) ) != 0 ) {
-		rc = -EEFI ( efirc );
+	if ( ( rc = efi_autoexec_resize ( size ) ) != 0 ) {
 		DBGC ( device, "EFI %s could not allocate %s:%s: %s\n",
 		       efi_handle_name ( device ), inet_ntoa ( server.in ),
 		       filename, strerror ( rc ) );
@@ -424,9 +472,9 @@ static int efi_autoexec_tftp ( EFI_HANDLE device ) {
 
 	/* Download file */
 	if ( ( efirc = u.pxe->Mtftp ( u.pxe, EFI_PXE_BASE_CODE_TFTP_READ_FILE,
-				      data, FALSE, &size, NULL, &server.ip,
-				      ( ( UINT8 * ) filename ), NULL,
-				      FALSE ) ) != 0 ) {
+				      efi_autoexec, FALSE, &size, NULL,
+				      &server.ip, ( ( UINT8 * ) filename ),
+				      NULL, FALSE ) ) != 0 ) {
 		rc = -EEFI ( efirc );
 		DBGC ( device, "EFI %s could not download %s:%s: %s\n",
 		       efi_handle_name ( device ), inet_ntoa ( server.in ),
@@ -434,19 +482,14 @@ static int efi_autoexec_tftp ( EFI_HANDLE device ) {
 		goto err_download;
 	}
 
-	/* Record autoexec script */
-	efi_autoexec = data;
-	efi_autoexec_len = size;
-	data = NULL;
+	/* Success */
+	rc = 0;
 	DBGC ( device, "EFI %s found %s:%s\n", efi_handle_name ( device ),
 	       inet_ntoa ( server.in ), filename );
 
-	/* Success */
-	rc = 0;
-
  err_download:
-	if ( data )
-		bs->FreePool ( data );
+	if ( rc != 0 )
+		efi_autoexec_resize ( 0 );
  err_alloc:
  err_empty:
  err_size:
@@ -522,8 +565,7 @@ static void efi_autoexec_startup ( void ) {
 	       efi_handle_name ( device ), efi_autoexec_name );
 
 	/* Free temporary copy */
-	bs->FreePool ( efi_autoexec );
-	efi_autoexec = NULL;
+	efi_autoexec_resize ( 0 );
 }
 
 /** Autoexec script startup function */
