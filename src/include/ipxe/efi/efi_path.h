@@ -9,6 +9,7 @@
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
+#include <ipxe/socket.h>
 #include <ipxe/interface.h>
 #include <ipxe/efi/efi.h>
 #include <ipxe/efi/Protocol/DevicePath.h>
@@ -46,6 +47,7 @@ extern size_t efi_path_len ( EFI_DEVICE_PATH_PROTOCOL *path );
 extern unsigned int efi_path_vlan ( EFI_DEVICE_PATH_PROTOCOL *path );
 extern int efi_path_guid ( EFI_DEVICE_PATH_PROTOCOL *path, union uuid *uuid );
 extern struct uri * efi_path_uri ( EFI_DEVICE_PATH_PROTOCOL *path );
+extern sa_family_t efi_path_family ( EFI_DEVICE_PATH_PROTOCOL *path );
 extern EFI_DEVICE_PATH_PROTOCOL * efi_paths ( EFI_DEVICE_PATH_PROTOCOL *first,
 					      ... );
 extern EFI_DEVICE_PATH_PROTOCOL * efi_netdev_path ( struct net_device *netdev );

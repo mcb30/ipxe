@@ -216,6 +216,28 @@ struct uri * efi_path_uri ( EFI_DEVICE_PATH_PROTOCOL *path ) {
 }
 
 /**
+ * Parse IP address family from device path
+ *
+ * @v path		Device path
+ * @ret family		IP address family, or AF_UNSPEC
+ */
+sa_family_t efi_path_family ( EFI_DEVICE_PATH_PROTOCOL *path ) {
+	EFI_DEVICE_PATH_PROTOCOL *next;
+
+	/* Search for messaging device path */
+	for ( ; ( next = efi_path_next ( path ) ) ; path = next ) {
+		if ( path->Type == MESSAGING_DEVICE_PATH ) {
+			if ( path->SubType == MSG_IPv4_DP )
+				return AF_INET;
+			if ( path->SubType == MSG_IPv6_DP )
+				return AF_INET6;
+		}
+	}
+
+	return AF_UNSPEC;
+}
+
+/**
  * Concatenate EFI device paths
  *
  * @v ...		List of device paths (NULL terminated)
