@@ -29,7 +29,11 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/image.h>
 #include <ipxe/init.h>
 #include <ipxe/in.h>
+#include <ipxe/uri.h>
 #include <ipxe/efi/efi.h>
+#include <ipxe/efi/efi_path.h>
+#include <ipxe/efi/efi_utils.h>
+#include <ipxe/efi/efi_http.h>
 #include <ipxe/efi/efi_autoexec.h>
 #include <ipxe/efi/Protocol/PxeBaseCode.h>
 #include <ipxe/efi/Protocol/SimpleFileSystem.h>
@@ -218,6 +222,83 @@ static int efi_autoexec_filesystem ( EFI_HANDLE device,
 }
 
 /**
+ * Load autoexec script from HTTP server
+ *
+ * @v device		Device handle
+ * @v path		Device path
+ * @ret rc		Return status code
+ */
+static int efi_autoexec_http ( EFI_HANDLE device,
+			       EFI_DEVICE_PATH_PROTOCOL *path ) {
+	EFI_HANDLE service;
+	struct uri *baseuri;
+	struct uri *reluri;
+	struct uri *uri;
+	sa_family_t family;
+	int rc;
+
+	/* Locate HTTP service binding protocol */
+	if ( ( rc = efi_locate_device ( device,
+					&efi_http_service_binding_protocol_guid,
+					&service, 0 ) ) != 0 ) {
+		DBGC ( device, "EFI %s could not locate HTTP service binding "
+		       "protocol: %s\n", efi_handle_name ( device ),
+		       strerror ( rc ) );
+		goto err_locate;
+	}
+
+	/* Identify address family */
+	family = efi_path_family ( path );
+	if ( ! family ) {
+		rc = -ENOTTY;
+		DBGC ( device, "EFI %s has no address family\n",
+		       efi_handle_name ( device ) );
+		goto err_family;
+	}
+
+	/* Identify device path base URI */
+	baseuri = efi_path_uri ( path );
+	if ( ! baseuri ) {
+		rc = -ENOTTY;
+		DBGC ( device, "EFI %s has no URI\n",
+		       efi_handle_name ( device ) );
+		goto err_path_uri;
+	}
+
+	/* Construct autoexec relative URI */
+	reluri = parse_uri ( efi_autoexec_name );
+	if ( ! reluri ) {
+		rc = -ENOMEM;
+		goto err_parse_uri;
+	}
+
+	/* Resolve autoexec URI */
+	uri = resolve_uri ( baseuri, reluri );
+	if ( ! uri ) {
+		rc = -ENOMEM;
+		goto err_resolve_uri;
+	}
+
+	/* Download autoexec URI via HTTP */
+	if ( ( rc = efi_http_download ( service, uri, family ) ) != 0 ) {
+		DBGC ( device, "EFI %s could not download via HTTP: %s\n",
+		       efi_handle_name ( device ), strerror ( rc ) );
+		goto err_download;
+	}
+
+ err_download:
+	uri_put ( uri );
+ err_resolve_uri:
+	uri_put ( reluri );
+ err_parse_uri:
+	uri_put ( baseuri );
+ err_path_uri:
+ err_family:
+ err_locate:
+	return rc;
+}
+
+/**
  * Load autoexec script from TFTP server
  *
  * @v device		Device handle
@@ -390,11 +471,12 @@ static int efi_autoexec_tftp ( EFI_HANDLE device ) {
  * Load autoexec script
  *
  * @v device		Device handle
- * @v path		Image path within device handle
+ * @v devpath		Device path
+ * @v filepath		Image path within device handle
  * @ret rc		Return status code
  */
-int efi_autoexec_load ( EFI_HANDLE device,
-			EFI_DEVICE_PATH_PROTOCOL *path ) {
+int efi_autoexec_load ( EFI_HANDLE device, EFI_DEVICE_PATH_PROTOCOL *devpath,
+			EFI_DEVICE_PATH_PROTOCOL *filepath ) {
 	int rc;
 
 	/* Sanity check */
@@ -402,11 +484,15 @@ int efi_autoexec_load ( EFI_HANDLE device,
 	assert ( efi_autoexec_len == 0 );
 
 	/* Try loading from file system loaded image directory, if supported */
-	if ( ( rc = efi_autoexec_filesystem ( device, path ) ) == 0 )
+	if ( ( rc = efi_autoexec_filesystem ( device, filepath ) ) == 0 )
 		return 0;
 
 	/* Try loading from file system root directory, if supported */
 	if ( ( rc = efi_autoexec_filesystem ( device, NULL ) ) == 0 )
+		return 0;
+
+	/* Try loading via HTTP, if supported */
+	if ( ( rc = efi_autoexec_http ( device, devpath ) ) == 0 )
 		return 0;
 
 	/* Try loading via TFTP, if supported */
