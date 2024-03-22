@@ -216,25 +216,43 @@ struct uri * efi_path_uri ( EFI_DEVICE_PATH_PROTOCOL *path ) {
 }
 
 /**
- * Parse IP address family from device path
+ * Parse network address configuration from device path
  *
  * @v path		Device path
- * @ret family		IP address family, or AF_UNSPEC
+ * @v net		Network address configuration to fill in
+ * @ret rc		Return status code
  */
-sa_family_t efi_path_family ( EFI_DEVICE_PATH_PROTOCOL *path ) {
+int efi_path_net_config ( EFI_DEVICE_PATH_PROTOCOL *path,
+			  struct efi_path_net_config *netcfg ) {
 	EFI_DEVICE_PATH_PROTOCOL *next;
 
-	/* Search for messaging device path */
+	/* Clear results */
+	memset ( netcfg, 0, sizeof ( *netcfg ) );
+
+	/* Search for relevant messaging device paths */
 	for ( ; ( next = efi_path_next ( path ) ) ; path = next ) {
-		if ( path->Type == MESSAGING_DEVICE_PATH ) {
-			if ( path->SubType == MSG_IPv4_DP )
-				return AF_INET;
-			if ( path->SubType == MSG_IPv6_DP )
-				return AF_INET6;
+		if ( path->Type != MESSAGING_DEVICE_PATH )
+			continue;
+		if ( path->SubType == MSG_IPv4_DP ) {
+			netcfg->ipv4 = container_of ( path, IPv4_DEVICE_PATH,
+						      Header );
+		} else if ( path->SubType == MSG_IPv6_DP ) {
+			netcfg->ipv6 = container_of ( path, IPv6_DEVICE_PATH,
+						      Header );
+		} else if ( path->SubType == MSG_DNS_DP ) {
+			netcfg->dns = container_of ( path, DNS_DEVICE_PATH,
+						     Header );
+			netcfg->dns_len =
+				( ( void * ) next -
+				  ( void * ) netcfg->dns->DnsServerIp );
 		}
 	}
 
-	return AF_UNSPEC;
+	/* Check that we have at least one address */
+	if ( ! ( netcfg->ipv4 || netcfg->ipv6 ) )
+		return -ENOENT;
+
+	return 0;
 }
 
 /**

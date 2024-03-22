@@ -23,6 +23,18 @@ struct ib_srp_device;
 struct usb_function;
 union uuid;
 
+/** An EFI device path network address configuration */
+struct efi_path_net_config {
+	/** IPv4 device path, if any */
+	IPv4_DEVICE_PATH *ipv4;
+	/** IPv6 device path, if any */
+	IPv6_DEVICE_PATH *ipv6;
+	/** DNS device path, if any */
+	DNS_DEVICE_PATH *dns;
+	/** DNS server address list length */
+	size_t dns_len;
+};
+
 /**
  * Terminate device path
  *
@@ -47,7 +59,8 @@ extern size_t efi_path_len ( EFI_DEVICE_PATH_PROTOCOL *path );
 extern unsigned int efi_path_vlan ( EFI_DEVICE_PATH_PROTOCOL *path );
 extern int efi_path_guid ( EFI_DEVICE_PATH_PROTOCOL *path, union uuid *uuid );
 extern struct uri * efi_path_uri ( EFI_DEVICE_PATH_PROTOCOL *path );
-extern sa_family_t efi_path_family ( EFI_DEVICE_PATH_PROTOCOL *path );
+extern int efi_path_net_config ( EFI_DEVICE_PATH_PROTOCOL *path,
+				 struct efi_path_net_config *netcfg );
 extern EFI_DEVICE_PATH_PROTOCOL * efi_paths ( EFI_DEVICE_PATH_PROTOCOL *first,
 					      ... );
 extern EFI_DEVICE_PATH_PROTOCOL * efi_netdev_path ( struct net_device *netdev );

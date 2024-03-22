@@ -13,8 +13,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/efi/efi.h>
 
 struct uri;
+struct efi_path_net_config;
 
 extern int efi_http_download ( EFI_HANDLE service, struct uri *uri,
-			       sa_family_t family );
+			       struct efi_path_net_config *netcfg );
 
 #endif /* _IPXE_EFI_HTTP_H */

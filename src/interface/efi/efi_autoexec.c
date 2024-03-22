@@ -234,7 +234,7 @@ static int efi_autoexec_http ( EFI_HANDLE device,
 	struct uri *baseuri;
 	struct uri *reluri;
 	struct uri *uri;
-	sa_family_t family;
+	struct efi_path_net_config netcfg;
 	int rc;
 
 	/* Locate HTTP service binding protocol */
@@ -247,13 +247,12 @@ static int efi_autoexec_http ( EFI_HANDLE device,
 		goto err_locate;
 	}
 
-	/* Identify address family */
-	family = efi_path_family ( path );
-	if ( ! family ) {
-		rc = -ENOTTY;
-		DBGC ( device, "EFI %s has no address family\n",
-		       efi_handle_name ( device ) );
-		goto err_family;
+	/* Get network address configuration */
+	if ( ( rc = efi_path_net_config ( path, &netcfg ) ) != 0 ) {
+		DBGC ( device, "EFI %s could not get network address "
+		       "configuration: %s\n", efi_handle_name ( device ),
+		       strerror ( rc ) );
+		goto err_config;
 	}
 
 	/* Identify device path base URI */
@@ -280,7 +279,7 @@ static int efi_autoexec_http ( EFI_HANDLE device,
 	}
 
 	/* Download autoexec URI via HTTP */
-	if ( ( rc = efi_http_download ( service, uri, family ) ) != 0 ) {
+	if ( ( rc = efi_http_download ( service, uri, &netcfg ) ) != 0 ) {
 		DBGC ( device, "EFI %s could not download via HTTP: %s\n",
 		       efi_handle_name ( device ), strerror ( rc ) );
 		goto err_download;
@@ -293,7 +292,7 @@ static int efi_autoexec_http ( EFI_HANDLE device,
  err_parse_uri:
 	uri_put ( baseuri );
  err_path_uri:
- err_family:
+ err_config:
  err_locate:
 	return rc;
 }

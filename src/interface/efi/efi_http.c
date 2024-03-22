@@ -38,10 +38,12 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/uri.h>
 #include <ipxe/timer.h>
 #include <ipxe/efi/efi.h>
-#include <ipxe/efi/efi_service.h>
+#include <ipxe/efi/efi_path.h>
 #include <ipxe/efi/efi_strings.h>
+#include <ipxe/efi/efi_service.h>
 #include <ipxe/efi/efi_http.h>
 #include <ipxe/efi/Protocol/Http.h>
+#include <ipxe/efi/Protocol/Ip4Config2.h>
 
 /** Timeout for EFI HTTP messages */
 #define EFIHTTP_TIMEOUT_TICKS ( 5 * TICKS_PER_SEC )
@@ -56,8 +58,6 @@ struct efi_http {
 	char *uristring;
 	/** URI as UCS-2 */
 	wchar_t *wuristring;
-	/** Address family */
-	sa_family_t family;
 	/** Name (for debug messages) */
 	const char *name;
 
@@ -125,12 +125,115 @@ static EFIAPI void efi_http_event ( EFI_EVENT event __unused, void *context ) {
 }
 
 /**
+ * Configure EFI HTTP download for IPv4
+ *
+ * @v efihttp		EFI HTTP download
+ * @v netcfg		Network address configuration
+ * @ret rc		Return status code
+ */
+static int efi_http_configure_ipv4 ( struct efi_http *efihttp,
+				     struct efi_path_net_config *netcfg ) {
+	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
+	IPv4_DEVICE_PATH *ipv4 = netcfg->ipv4;
+	union {
+		void *interface;
+		EFI_IP4_CONFIG2_PROTOCOL *ip4cfg;
+	} u;
+	EFI_IP4_CONFIG2_MANUAL_ADDRESS address;
+	EFI_STATUS efirc;
+	int rc;
+
+	/* Sanity check */
+	assert ( ipv4 != NULL );
+
+	/* Open IPv4 configuration protocol */
+	if ( ( efirc = bs->OpenProtocol ( efihttp->service,
+					  &efi_ip4_config2_protocol_guid,
+					  &u.interface, efi_image_handle,
+					  efihttp->service,
+					  EFI_OPEN_PROTOCOL_GET_PROTOCOL ))!=0){
+		rc = -EEFI ( efirc );
+		DBGC ( efihttp, "EFIHTTP %s could not open IPv4 config: %s\n",
+		       efihttp->name, strerror ( rc ) );
+		goto err_open;
+	}
+
+	/* Configure address */
+	memcpy ( &address.Address, &ipv4->LocalIpAddress,
+		 sizeof ( address.Address ) );
+	memcpy ( &address.SubnetMask, &ipv4->SubnetMask,
+		 sizeof ( address.SubnetMask ) );
+	if ( ( efirc = u.ip4cfg->SetData ( u.ip4cfg,
+					   Ip4Config2DataTypeManualAddress,
+					   sizeof ( address ),
+					   &address ) ) != 0 ) {
+		rc = -EEFI ( efirc );
+		DBGC ( efihttp, "EFIHTTP %s could not set IPv4 address: %s\n",
+		       efihttp->name, strerror ( rc ) );
+		goto err_address;
+	}
+
+	/* Configure gateway */
+	if ( ( efirc = u.ip4cfg->SetData ( u.ip4cfg,
+					   Ip4Config2DataTypeGateway,
+					   sizeof ( ipv4->GatewayIpAddress ),
+					   &ipv4->GatewayIpAddress ) ) != 0 ) {
+		rc = -EEFI ( efirc );
+		DBGC ( efihttp, "EFIHTTP %s could not set IPv4 gateway: %s\n",
+		       efihttp->name, strerror ( rc ) );
+		goto err_gateway;
+	}
+
+	/* Configure DNS, if applicable */
+	//
+	DBGC_HDA ( efihttp, 0, netcfg->dns->DnsServerIp, netcfg->dns_len );
+	if ( netcfg->dns && ( ! netcfg->dns->IsIPv6 ) &&
+	     ( ( efirc = u.ip4cfg->SetData ( u.ip4cfg,
+					     Ip4Config2DataTypeDnsServer,
+					     netcfg->dns_len,
+					     netcfg->dns->DnsServerIp ) ) !=0)){
+		rc = -EEFI ( efirc );
+		DBGC ( efihttp, "EFIHTTP %s could not set IPv4 DNS: %s\n",
+		       efihttp->name, strerror ( rc ) );
+		goto err_dns;
+	}
+
+	/* Success */
+	rc = 0;
+
+ err_dns:
+ err_gateway:
+ err_address:
+	bs->CloseProtocol ( efihttp->service, &efi_ip4_config2_protocol_guid,
+			    efi_image_handle, efihttp->service );
+ err_open:
+	return rc;
+}
+
+/**
+ * Configure EFI HTTP download for IPv6
+ *
+ * @v efihttp		EFI HTTP download
+ * @v netcfg		Network address configuration
+ * @ret rc		Return status code
+ */
+static int efi_http_configure_ipv6 ( struct efi_http *efihttp,
+				     struct efi_path_net_config *netcfg ) {
+
+	( void ) efihttp;
+	( void ) netcfg;
+	return -ENOTSUP;
+}
+
+/**
  * Configure EFI HTTP download
  *
  * @v efihttp		EFI HTTP download
+ * @v netcfg		Network address configuration
  * @ret rc		Return status code
  */
-static int efi_http_configure ( struct efi_http *efihttp ) {
+static int efi_http_configure ( struct efi_http *efihttp,
+				struct efi_path_net_config *netcfg ) {
 	struct {
 		EFI_HTTP_CONFIG_DATA data;
 		union {
@@ -138,25 +241,26 @@ static int efi_http_configure ( struct efi_http *efihttp ) {
 			EFI_HTTPv6_ACCESS_POINT ipv6;
 		};
 	} config;
+	int ( * ipcfg ) ( struct efi_http *efihttp,
+			  struct efi_path_net_config *netcfg );
 	EFI_STATUS efirc;
 	int rc;
 
-	/* Construct configuration */
+	/* Configure relevant IP address family */
+	ipcfg = ( netcfg->ipv6 ?
+		  efi_http_configure_ipv6 : efi_http_configure_ipv4 );
+	if ( ( rc = ipcfg ( efihttp, netcfg ) ) != 0 )
+		return rc;
+
+	/* Construct HTTP configuration */
 	memset ( &config, 0, sizeof ( config ) );
 	config.data.HttpVersion = HttpVersion11;
-	switch ( efihttp->family ) {
-	case AF_INET:
-		config.ipv4.UseDefaultAddress = TRUE;
-		config.data.AccessPoint.IPv4Node = &config.ipv4;
-		break;
-	case AF_INET6:
+	if ( netcfg->ipv6 ) {
 		config.data.LocalAddressIsIPv6 = TRUE;
 		config.data.AccessPoint.IPv6Node = &config.ipv6;
-		break;
-	default:
-		DBGC ( efihttp, "EFIHTTP %s unsupported address family %d\n",
-		       efihttp->name, efihttp->family );
-		return -ENOTSUP;
+	} else {
+		config.ipv4.UseDefaultAddress = TRUE;
+		config.data.AccessPoint.IPv4Node = &config.ipv4;
 	}
 
 	/* Configure HTTP protocol */
@@ -283,11 +387,11 @@ static void efi_http_free_headers ( EFI_HTTP_MESSAGE *msg ) {
  *
  * @v service		HTTP service binding handle
  * @v uri		URI
- * @v family		IP address family
+ * @v netcfg		Network address configuration
  * @ret rc		Return status code
  */
 int efi_http_download ( EFI_HANDLE service, struct uri *uri,
-			sa_family_t family ) {
+			struct efi_path_net_config *netcfg ) {
 	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	union {
 		void *interface;
@@ -305,7 +409,6 @@ int efi_http_download ( EFI_HANDLE service, struct uri *uri,
 	}
 	ref_init ( &efihttp->refcnt, efi_http_free );
 	efihttp->uri = uri_get ( uri );
-	efihttp->family = family;
 	efihttp->service = service;
 	efihttp->uristring = format_uri_alloc ( uri );
 	if ( ! efihttp->uristring ) {
@@ -354,7 +457,7 @@ int efi_http_download ( EFI_HANDLE service, struct uri *uri,
 	}
 
 	/* Configure HTTP */
-	if ( ( rc = efi_http_configure ( efihttp ) ) != 0 )
+	if ( ( rc = efi_http_configure ( efihttp, netcfg ) ) != 0 )
 		goto err_configure;
 
 	//
