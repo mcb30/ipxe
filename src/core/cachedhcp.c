@@ -46,6 +46,8 @@ struct cached_dhcp_packet {
 	struct dhcp_packet *dhcppkt;
 	/** VLAN tag (if applicable) */
 	unsigned int vlan;
+	/** Usage counter */
+	unsigned int used;
 };
 
 /** Cached DHCPACK */
@@ -80,6 +82,8 @@ static struct cached_dhcp_packet *cached_packets[] = {
  */
 static void cachedhcp_free ( struct cached_dhcp_packet *cache ) {
 
+	if ( cache->dhcppkt )
+		DBGC ( colour, "CACHEDHCP %s freed\n", cache->name );
 	dhcppkt_put ( cache->dhcppkt );
 	cache->dhcppkt = NULL;
 }
@@ -161,6 +165,12 @@ static int cachedhcp_apply ( struct cached_dhcp_packet *cache,
 		       cache->name, netdev->name );
 	}
 
+	/* Fail if cached packet is already in use */
+	if ( cache->used ) {
+		DBGC ( colour, "CACHEDHCP %s already in use\n", cache->name );
+		return -EBUSY;
+	}
+
 	/* Register settings */
 	if ( ( rc = register_settings ( &cache->dhcppkt->settings, settings,
 					cache->name ) ) != 0 ) {
@@ -169,8 +179,8 @@ static int cachedhcp_apply ( struct cached_dhcp_packet *cache,
 		return rc;
 	}
 
-	/* Free cached DHCP packet */
-	cachedhcp_free ( cache );
+	/* Mark as used */
+	cache->used++;
 
 	return 0;
 }
@@ -246,10 +256,10 @@ int cachedhcp_record ( struct cached_dhcp_packet *cache, unsigned int vlan,
 }
 
 /**
- * Cached DHCP packet startup function
+ * Cached DHCP packet early startup function
  *
  */
-static void cachedhcp_startup ( void ) {
+static void cachedhcp_startup_early ( void ) {
 
 	/* Apply cached ProxyDHCPOFFER, if any */
 	cachedhcp_apply ( &cached_proxydhcp, NULL );
@@ -258,12 +268,21 @@ static void cachedhcp_startup ( void ) {
 	/* Apply cached PXEBSACK, if any */
 	cachedhcp_apply ( &cached_pxebs, NULL );
 	cachedhcp_free ( &cached_pxebs );
+}
 
-	/* Report unclaimed DHCPACK, if any.  Do not free yet, since
-	 * it may still be claimed by a dynamically created device
-	 * such as a VLAN device.
-	 */
-	if ( cached_dhcpack.dhcppkt ) {
+/**
+ * Cache DHCP packet late startup function
+ *
+ */
+static void cachedhcp_startup_late ( void ) {
+
+	/* Free cached DHCPACK, if already applied to a network device */
+	if ( cached_dhcpack.used ) {
+		cachedhcp_free ( &cached_dhcpack );
+	} else if ( cached_dhcpack.dhcppkt ) {
+		/* Do not free yet: it may still be applied to a
+		 * dynamically created device such as a VLAN device.
+		 */
 		DBGC ( colour, "CACHEDHCP %s unclaimed\n",
 		       cached_dhcpack.name );
 	}
@@ -277,17 +296,19 @@ static void cachedhcp_startup ( void ) {
 static void cachedhcp_shutdown ( int booting __unused ) {
 
 	/* Free cached DHCPACK, if any */
-	if ( cached_dhcpack.dhcppkt ) {
-		DBGC ( colour, "CACHEDHCP %s never claimed\n",
-		       cached_dhcpack.name );
-	}
 	cachedhcp_free ( &cached_dhcpack );
 }
 
-/** Cached DHCPACK startup function */
-struct startup_fn cachedhcp_startup_fn __startup_fn ( STARTUP_LATE ) = {
-	.name = "cachedhcp",
-	.startup = cachedhcp_startup,
+/** Cached DHCP packet early startup function */
+struct startup_fn cachedhcp_early_fn __startup_fn ( STARTUP_EARLY ) = {
+	.name = "cachedhcp_early",
+	.startup = cachedhcp_startup_early,
+};
+
+/** Cached DHCP packet late startup function */
+struct startup_fn cachedhcp_late_fn __startup_fn ( STARTUP_LATE ) = {
+	.name = "cachedhcp_late",
+	.startup = cachedhcp_startup_late,
 	.shutdown = cachedhcp_shutdown,
 };
 
@@ -304,8 +325,30 @@ static int cachedhcp_probe ( struct net_device *netdev, void *priv __unused ) {
 	return cachedhcp_apply ( &cached_dhcpack, netdev );
 }
 
+/**
+ * Return cached DHCPACK, if applicable
+ *
+ * @v netdev		Network device
+ * @v priv		Private data
+ */
+static void cachedhcp_remove ( struct net_device *netdev,
+			       void *priv __unused ) {
+	struct settings *settings;
+
+	/* Return DHCPACK to cache, if applicable */
+	settings = find_child_settings ( netdev_settings ( netdev ),
+					 cached_dhcpack.name );
+	if ( cached_dhcpack.dhcppkt &&
+	     ( settings == &cached_dhcpack.dhcppkt->settings ) ) {
+		DBGC ( colour, "CACHEDHCP %s returned from %s\n",
+		       cached_dhcpack.name, netdev->name );
+		cached_dhcpack.used--;
+	}
+}
+
 /** Cached DHCP packet network device driver */
 struct net_driver cachedhcp_driver __net_driver = {
 	.name = "cachedhcp",
 	.probe = cachedhcp_probe,
+	.remove = cachedhcp_remove,
 };
