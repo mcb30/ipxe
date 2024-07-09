@@ -293,6 +293,7 @@ static int gve_admin_wait ( struct gve_nic *gve ) {
 static int gve_admin ( struct gve_nic *gve ) {
 	union gve_aq_command *cmd;
 	unsigned int index;
+	uint32_t opcode;
 	uint32_t status;
 	int rc;
 
@@ -303,7 +304,9 @@ static int gve_admin ( struct gve_nic *gve ) {
 	/* Get current command slot */
 	index = ( gve->aq.prod % GVE_AQ_COUNT );
 	cmd = &gve->aq.cmd[index];
-	DBGC2 ( gve, "GVE %p AQ %#x command:\n", gve, gve->aq.prod );
+	opcode = be32_to_cpu ( cmd->hdr.opcode );
+	DBGC2 ( gve, "GVE %p AQ %#x command %#04x:\n",
+		gve, gve->aq.prod, opcode );
 	DBGC2_HDA ( gve, 0, cmd, sizeof ( *cmd ) );
 
 	/* Increment producer counter */
@@ -319,10 +322,12 @@ static int gve_admin ( struct gve_nic *gve ) {
 	/* Check command status */
 	status = be32_to_cpu ( cmd->hdr.status );
 	if ( status != GVE_AQ_STATUS_OK ) {
-		DBGC ( gve, "GVE %p AQ %#x failed: %#08x\n",
-		       gve, ( gve->aq.prod - 1 ), status );
+		rc = -EIO_AQ ( status );
+		DBGC ( gve, "GVE %p AQ %#x failed %#04x: %#08x\n",
+		       gve, ( gve->aq.prod - 1 ), opcode, status );
 		DBGC_HDA ( gve, 0, cmd, sizeof ( *cmd ) );
-		return -EIO_AQ ( status );
+		DBGC ( gve, "GVE %p AQ error: %s\n", gve, strerror ( rc ) );
+		return rc;
 	}
 
 	DBGC2 ( gve, "GVE %p AQ %#x status:\n", gve, ( gve->aq.prod - 1 ) );
@@ -344,9 +349,9 @@ static int gve_describe ( struct net_device *netdev ) {
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = cpu_to_be32 ( GVE_AQ_DESCRIBE );
-	cmd->describe.addr = cpu_to_be64 ( virt_to_bus ( &gve->desc ) );
-	cmd->describe.ver = cpu_to_be32 ( GVE_AQ_DESCRIBE_VER );
-	cmd->describe.len = cpu_to_be32 ( sizeof ( gve->desc ) );
+	cmd->desc.addr = cpu_to_be64 ( virt_to_bus ( &gve->desc ) );
+	cmd->desc.ver = cpu_to_be32 ( GVE_AQ_DESCRIBE_VER );
+	cmd->desc.len = cpu_to_be32 ( sizeof ( gve->desc ) );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -363,6 +368,34 @@ static int gve_describe ( struct net_device *netdev ) {
 	DBGC ( gve, "GVE %p MAC %s (\"%s\") MTU %zd\n",
 	       gve, eth_ntoa ( netdev->hw_addr ),
 	       inet_ntoa ( gve->desc.mac.in ), netdev->mtu );
+	return 0;
+}
+
+/**
+ * Register page list
+ *
+ * @v gve		GVE device
+ * @ret rc		Return status code
+ */
+static int gve_register ( struct gve_nic *gve ) {
+	union gve_aq_command *cmd;
+	int rc;
+
+	/* Construct request */
+	cmd = gve_admin_command ( gve );
+	cmd->hdr.opcode = cpu_to_be32 ( GVE_AQ_REGISTER );
+	cmd->reg.id = cpu_to_be32 ( GVE_AQ_REGISTER_ID );
+	cmd->reg.count = cpu_to_be32 ( 1 );
+	//
+	extern char _textdata[];
+	physaddr_t start = virt_to_bus ( _textdata );
+	cmd->reg.addr = cpu_to_be64 ( start );
+	cmd->reg.size = cpu_to_be64 ( 0x200000 );
+
+	/* Issue command */
+	if ( ( rc = gve_admin ( gve ) ) != 0 )
+		return rc;
+
 	return 0;
 }
 
@@ -527,6 +560,9 @@ static int gve_probe ( struct pci_device *pci ) {
 	/* Fetch MAC address */
 	if ( ( rc = gve_describe ( netdev ) ) != 0 )
 		goto err_describe;
+
+	//
+	gve_register ( gve );
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )

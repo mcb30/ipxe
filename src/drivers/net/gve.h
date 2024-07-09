@@ -141,12 +141,47 @@ struct gve_device_descriptor {
 	uint8_t reserved_c[10];
 } __attribute__ (( packed ));
 
+/** Register page list command */
+#define GVE_AQ_REGISTER 0x0003
+
+/** Register page list command */
+struct gve_aq_register {
+	/** Header */
+	struct gve_aq_header hdr;
+	/** Page list ID */
+	uint32_t id;
+	/** Number of pages */
+	uint32_t count;
+	/** Address list address */
+	uint64_t addr;
+	/** Page size */
+	uint64_t size;
+} __attribute__ (( packed ));
+
+/** Page list ID */
+#define GVE_AQ_REGISTER_ID 0x69505845UL
+
+/** Unregister page list command */
+#define GVE_AQ_UNREGISTER 0x0004
+
+/** Unregister page list command */
+struct gve_aq_unregister {
+	/** Header */
+	struct gve_aq_header hdr;
+	/** Page list ID */
+	uint32_t id;
+} __attribute__ (( packed ));
+
 /** An admin queue command */
 union gve_aq_command {
 	/** Header */
 	struct gve_aq_header hdr;
 	/** Describe device */
-	struct gve_aq_describe describe;
+	struct gve_aq_describe desc;
+	/** Register page list */
+	struct gve_aq_register reg;
+	/** Unregister page list */
+	struct gve_aq_unregister unreg;
 	/** Padding */
 	uint8_t pad[64];
 };
