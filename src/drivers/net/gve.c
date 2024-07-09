@@ -25,12 +25,14 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <stdint.h>
 #include <string.h>
+#include <unistd.h>
 #include <errno.h>
 #include <byteswap.h>
 #include <ipxe/netdevice.h>
 #include <ipxe/ethernet.h>
 #include <ipxe/if_ether.h>
 #include <ipxe/iobuf.h>
+#include <ipxe/malloc.h>
 #include <ipxe/pci.h>
 #include "gve.h"
 
@@ -48,60 +50,42 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 
 /**
- * Wait for reset operation to be acknowledged
- *
- * @v gve		GVE device
- * @v expected		Expected reset state
- * @ret rc		Return status code
- */
-static int gve_reset_wait ( struct gve_nic *gve, uint32_t expected ) {
-	uint32_t stat;
-	unsigned int i;
-
-	/* Wait for reset to complete */
-	for ( i = 0 ; i < GVE_RESET_MAX_WAIT_MS ; i++ ) {
-
-		/* Check if device is ready */
-		stat = readl ( gve->regs + GVE_STAT );
-		if ( ( stat & GVE_STAT_RESET ) == expected )
-			return 0;
-
-		/* Delay */
-		mdelay ( 1 );
-	}
-
-	DBGC ( gve, "GVE %p timed out waiting for reset status %#08x "
-	       "(got %#08x)\n", gve, expected, stat );
-	return -ETIMEDOUT;
-}
-
-/**
  * Reset hardware
  *
  * @v gve		GVE device
  * @ret rc		Return status code
  */
 static int gve_reset ( struct gve_nic *gve ) {
-	int rc;
+	uint32_t devstat;
+	uint32_t pfn;
+	unsigned int i;
 
 	/* Clear admin queue page frame number (for older hardware) */
 	writel ( 0, ( gve->cfg + GVE_CFG_AQ_PFN ) );
 
-	/* Trigger reset */
-	writel ( GVE_CTRL_RESET, ( gve->regs + GVE_CTRL ) );
+	/* Trigger reset (for newer hardware) */
+	writel ( bswap_32 ( GVE_CFG_DRVSTAT_RESET ),
+		 ( gve->cfg + GVE_CFG_DRVSTAT ) );
 
-	/* Wait for reset to take effect */
-	if ( ( rc = gve_reset_wait ( gve, GVE_STAT_RESET ) ) != 0 )
-		return rc;
+	/* Wait for device to reset */
+	for ( i = 0 ; i < GVE_RESET_MAX_WAIT_MS ; i++ ) {
 
-	/* Clear reset */
-	writel ( 0, ( gve->regs + GVE_CTRL ) );
+		/* Check for reset completion */
+		devstat = readl ( gve->cfg + GVE_CFG_DEVSTAT );
+		pfn = readl ( gve->cfg + GVE_CFG_AQ_PFN );
+		if ( ( ( devstat & bswap_32 ( GVE_CFG_DEVSTAT_RESET ) ) ||
+		       ( gve->revision == 0 ) ) &&
+		     ( pfn == 0 ) ) {
+			return 0;
+		}
 
-	/* Wait for reset to clear */
-	if ( ( rc = gve_reset_wait ( gve, 0 ) ) != 0 )
-		return rc;
+		/* Delay */
+		mdelay ( 1 );
+	}
 
-	return 0;
+	DBGC ( gve, "GVE %p reset timed out (PFN %#08x devstat %#08x)\n",
+	       gve, bswap_32 ( pfn ), bswap_32 ( devstat ) );
+	return -ETIMEDOUT;
 }
 
 /******************************************************************************
@@ -112,75 +96,46 @@ static int gve_reset ( struct gve_nic *gve ) {
  */
 
 /**
- * Set queue base address
- *
- * @v gve		GVE device
- * @v offset		Register offset
- * @v address		Base address
- */
-static inline void gve_set_base ( struct gve_nic *gve, unsigned int offset,
-				  void *base ) {
-	physaddr_t phys = virt_to_bus ( base );
-
-	/* Program base address registers */
-	writel ( ( phys & 0xffffffffUL ),
-		 ( gve->regs + offset + GVE_BASE_LO ) );
-	if ( sizeof ( phys ) > sizeof ( uint32_t ) ) {
-		writel ( ( ( ( uint64_t ) phys ) >> 32 ),
-			 ( gve->regs + offset + GVE_BASE_HI ) );
-	} else {
-		writel ( 0, ( gve->regs + offset + GVE_BASE_HI ) );
-	}
-}
-
-/**
  * Create admin queues
  *
  * @v gve		GVE device
  * @ret rc		Return status code
  */
 static int gve_create_admin ( struct gve_nic *gve ) {
-	size_t aq_len = ( GVE_AQ_COUNT * sizeof ( gve->aq.req[0] ) );
-	size_t acq_len = ( GVE_ACQ_COUNT * sizeof ( gve->acq.rsp[0] ) );
+	physaddr_t base;
 	int rc;
 
-	/* Allocate admin completion queue */
-	gve->acq.rsp = malloc_phys ( acq_len, acq_len );
-	if ( ! gve->acq.rsp ) {
-		rc = -ENOMEM;
-		goto err_alloc_acq;
-	}
-	memset ( gve->acq.rsp, 0, acq_len );
-
 	/* Allocate admin queue */
-	gve->aq.req = malloc_phys ( aq_len, aq_len );
-	if ( ! gve->aq.req ) {
+	gve->aq.aqe = malloc_phys ( GVE_AQ_LEN, GVE_AQ_ALIGN );
+	if ( ! gve->aq.aqe ) {
 		rc = -ENOMEM;
-		goto err_alloc_aq;
+		goto err_alloc;
 	}
-	memset ( gve->aq.req, 0, aq_len );
+	memset ( gve->aq.aqe, 0, GVE_AQ_LEN );
 
 	/* Program queue addresses and capabilities */
-	gve_set_base ( gve, GVE_ACQ_BASE, gve->acq.rsp );
-	gve_set_caps ( gve, GVE_ACQ_CAPS, GVE_ACQ_COUNT,
-		       sizeof ( gve->acq.rsp[0] ) );
-	gve_set_base ( gve, GVE_AQ_BASE, gve->aq.req );
-	gve_set_caps ( gve, GVE_AQ_CAPS, GVE_AQ_COUNT,
-		       sizeof ( gve->aq.req[0] ) );
+	base = virt_to_bus ( gve->aq.aqe );
+	writel ( bswap_32 ( base / GVE_AQ_ALIGN ),
+		 ( gve->cfg + GVE_CFG_AQ_PFN ) );
+	writel ( bswap_32 ( base & 0xffffffffUL ),
+		 ( gve->cfg + GVE_CFG_AQ_BASE_LO ) );
+	if ( sizeof ( base ) > sizeof ( uint32_t ) ) {
+		writel ( bswap_32 ( ( ( uint64_t ) base ) >> 32 ),
+			 ( gve->cfg + GVE_CFG_AQ_BASE_HI ) );
+	} else {
+		writel ( 0, ( gve->cfg + GVE_CFG_AQ_BASE_HI ) );
+	}
+	writel ( bswap_16 ( GVE_AQ_LEN ), ( gve->cfg + GVE_CFG_AQ_LEN ) );
+	writel ( bswap_32 ( GVE_CFG_DRVSTAT_RUN ),
+		 ( gve->cfg + GVE_CFG_DRVSTAT ) );
 
-	DBGC ( gve, "GVE %p AQ [%08lx,%08lx) ACQ [%08lx,%08lx)\n",
-	       gve, virt_to_phys ( gve->aq.req ),
-	       ( virt_to_phys ( gve->aq.req ) + aq_len ),
-	       virt_to_phys ( gve->acq.rsp ),
-	       ( virt_to_phys ( gve->acq.rsp ) + acq_len ) );
+	DBGC ( gve, "GVE %p AQ [%08lx,%08lx)\n",
+	       gve, virt_to_phys ( gve->aq.aqe ),
+	       ( virt_to_phys ( gve->aq.aqe ) + GVE_AQ_LEN ) );
 	return 0;
 
-	gve_clear_caps ( gve, GVE_AQ_CAPS );
-	gve_clear_caps ( gve, GVE_ACQ_CAPS );
-	free_phys ( gve->aq.req, aq_len );
- err_alloc_aq:
-	free_phys ( gve->acq.rsp, acq_len );
- err_alloc_acq:
+	free_phys ( gve->aq.aqe, GVE_AQ_LEN );
+ err_alloc:
 	return rc;
 }
 
@@ -190,118 +145,18 @@ static int gve_create_admin ( struct gve_nic *gve ) {
  * @v gve		GVE device
  */
 static void gve_destroy_admin ( struct gve_nic *gve ) {
-	size_t aq_len = ( GVE_AQ_COUNT * sizeof ( gve->aq.req[0] ) );
-	size_t acq_len = ( GVE_ACQ_COUNT * sizeof ( gve->acq.rsp[0] ) );
-
-	/* Clear queue capabilities */
-	gve_clear_caps ( gve, GVE_AQ_CAPS );
-	gve_clear_caps ( gve, GVE_ACQ_CAPS );
-	wmb();
-
-	/* Free queues */
-	free_phys ( gve->aq.req, aq_len );
-	free_phys ( gve->acq.rsp, acq_len );
-	DBGC ( gve, "GVE %p AQ and ACQ destroyed\n", gve );
-}
-
-/**
- * Get next available admin queue request
- *
- * @v gve		GVE device
- * @ret req		Admin queue request
- */
-static union gve_aq_req * gve_admin_req ( struct gve_nic *gve ) {
-	union gve_aq_req *req;
-	unsigned int index;
-
-	/* Get next request */
-	index = ( gve->aq.prod % GVE_AQ_COUNT );
-	req = &gve->aq.req[index];
-
-	/* Initialise request */
-	memset ( ( ( ( void * ) req ) + sizeof ( req->header ) ), 0,
-		 ( sizeof ( *req ) - sizeof ( req->header ) ) );
-	req->header.id = gve->aq.prod;
-
-	/* Increment producer counter */
-	gve->aq.prod++;
-
-	return req;
-}
-
-/**
- * Issue admin queue request
- *
- * @v gve		GVE device
- * @v req		Admin queue request
- * @v rsp		Admin queue response to fill in
- * @ret rc		Return status code
- */
-static int gve_admin ( struct gve_nic *gve, union gve_aq_req *req,
-		       union gve_acq_rsp **rsp ) {
-	unsigned int index;
-	unsigned int i;
 	int rc;
 
-	/* Locate response */
-	index = ( gve->acq.cons % GVE_ACQ_COUNT );
-	*rsp = &gve->acq.rsp[index];
-
-	/* Mark request as ready */
-	req->header.flags ^= GVE_AQ_PHASE;
-	wmb();
-	DBGC2 ( gve, "GVE %p admin request %#x:\n",
-		gve, le16_to_cpu ( req->header.id ) );
-	DBGC2_HDA ( gve, virt_to_phys ( req ), req, sizeof ( *req ) );
-
-	/* Ring doorbell */
-	writel ( gve->aq.prod, ( gve->regs + GVE_AQ_DB ) );
-
-	/* Wait for response */
-	for ( i = 0 ; i < GVE_ADMIN_MAX_WAIT_MS ; i++ ) {
-
-		/* Check for response */
-		if ( ( (*rsp)->header.flags ^ gve->acq.phase ) & GVE_ACQ_PHASE){
-			mdelay ( 1 );
-			continue;
-		}
-		DBGC2 ( gve, "GVE %p admin response %#x:\n",
-			gve, le16_to_cpu ( (*rsp)->header.id ) );
-		DBGC2_HDA ( gve, virt_to_phys ( *rsp ), *rsp, sizeof ( **rsp ));
-
-		/* Increment consumer counter */
-		gve->acq.cons++;
-		if ( ( gve->acq.cons % GVE_ACQ_COUNT ) == 0 )
-			gve->acq.phase ^= GVE_ACQ_PHASE;
-
-		/* Check command identifier */
-		if ( (*rsp)->header.id != req->header.id ) {
-			DBGC ( gve, "GVE %p admin response %#x mismatch:\n",
-			       gve, le16_to_cpu ( (*rsp)->header.id ) );
-			rc = -EILSEQ;
-			goto err;
-		}
-
-		/* Check status */
-		if ( (*rsp)->header.status != 0 ) {
-			DBGC ( gve, "GVE %p admin response %#x status %d:\n",
-			       gve, le16_to_cpu ( (*rsp)->header.id ),
-			       (*rsp)->header.status );
-			rc = -EIO;
-			goto err;
-		}
-
-		/* Success */
-		return 0;
+	/* Reset device */
+	if ( ( rc = gve_reset ( gve ) ) != 0 ) {
+		DBGC ( gve, "GVE %p could not free admin queue: %s\n",
+		       gve, strerror ( rc ) );
+		/* Leak memory: there is nothing else we can do */
+		return;
 	}
 
-	rc = -ETIMEDOUT;
-	DBGC ( gve, "GVE %p timed out waiting for admin request %#x:\n",
-	       gve, le16_to_cpu ( req->header.id ) );
- err:
-	DBGC_HDA ( gve, virt_to_phys ( req ), req, sizeof ( *req ) );
-	DBGC_HDA ( gve, virt_to_phys ( *rsp ), *rsp, sizeof ( **rsp ) );
-	return rc;
+	/* Free admin queue */
+	free_phys ( gve->aq.aqe, GVE_AQ_LEN );
 }
 
 /**
@@ -455,9 +310,13 @@ static int gve_probe ( struct pci_device *pci ) {
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
 
+	/* Check PCI revision */
+	pci_read_config_byte ( pci, PCI_REVISION, &gve->revision );
+	DBGC ( gve, "GVE %p is revision %#02x\n", gve, gve->revision );
+
 	/* Map configuration registers */
 	cfg_start = pci_bar_start ( pci, GVE_CFG_BAR );
-	gve->cfg = pci_ioremap ( pci, cfG_start, GVE_CFG_SIZE );
+	gve->cfg = pci_ioremap ( pci, cfg_start, GVE_CFG_SIZE );
 	if ( ! gve->cfg ) {
 		rc = -ENODEV;
 		goto err_cfg;
@@ -467,7 +326,7 @@ static int gve_probe ( struct pci_device *pci ) {
 	if ( ( rc = gve_reset ( gve ) ) != 0 )
 		goto err_reset;
 
-	/* Create admin queues */
+	/* Create admin queue */
 	if ( ( rc = gve_create_admin ( gve ) ) != 0 )
 		goto err_create_admin;
 
@@ -489,10 +348,8 @@ static int gve_probe ( struct pci_device *pci ) {
 	unregister_netdev ( netdev );
  err_register_netdev:
  err_describe:
- err_set_host_attributes:
 	gve_destroy_admin ( gve );
  err_create_admin:
-	gve_reset ( gve );
  err_reset:
 	iounmap ( gve->cfg );
  err_cfg:
@@ -514,11 +371,8 @@ static void gve_remove ( struct pci_device *pci ) {
 	/* Unregister network device */
 	unregister_netdev ( netdev );
 
-	/* Destroy admin queues */
+	/* Destroy admin queue and reset device */
 	gve_destroy_admin ( gve );
-
-	/* Reset card */
-	gve_reset ( gve );
 
 	/* Free network device */
 	iounmap ( gve->cfg );

@@ -26,9 +26,17 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 #define GVE_CFG_SIZE 0x1000
 
+/** Device status */
+#define GVE_CFG_DEVSTAT 0x0000
+#define GVE_CFG_DEVSTAT_RESET 0x00000010UL	/**< Device is reset */
+
 /** Driver status */
 #define GVE_CFG_DRVSTAT 0x0004
-#define GVE_CFG_DRVSTAT_RESET 0x00000001UL	/**< Reset device */
+#define GVE_CFG_DRVSTAT_RUN 0x00000001UL	/**< Run admin queue */
+#define GVE_CFG_DRVSTAT_RESET 0x00000002UL	/**< Reset device */
+
+/** Maximum time to wait for reset */
+#define GVE_RESET_MAX_WAIT_MS 5000
 
 /** Admin queue page frame number (for older devices) */
 #define GVE_CFG_AQ_PFN 0x0010
@@ -136,8 +144,10 @@ struct gve_aq {
 struct gve_nic {
 	/** Configuration registers */
 	void *cfg;
+	/** PCI revision */
+	uint8_t revision;
 	/** Admin queue */
-	struct gve_admin aq;
+	struct gve_aq aq;
 };
 
 #endif /* _GVE_H */
