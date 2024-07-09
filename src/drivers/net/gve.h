@@ -92,6 +92,9 @@ struct gve_aq_header {
 	uint32_t status;
 } __attribute__ (( packed ));
 
+/** Command succeeded */
+#define GVE_AQ_STATUS_OK 0x00000001
+
 /** Describe device command */
 #define GVE_AQ_DESCRIBE 0x0001
 
@@ -124,8 +127,8 @@ struct gve_device_descriptor {
 	uint8_t reserved_c[10];
 } __attribute__ (( packed ));
 
-/** An admin queue entry */
-union gve_aq_entry {
+/** An admin queue command */
+union gve_aq_command {
 	/** Header */
 	struct gve_aq_header hdr;
 	/** Describe device */
@@ -134,10 +137,15 @@ union gve_aq_entry {
 	uint8_t pad[64];
 };
 
+/** Number of admin queue commands */
+#define GVE_AQ_COUNT ( GVE_AQ_LEN / sizeof ( union gve_aq_command ) )
+
 /** Admin queue */
 struct gve_aq {
-	/** Entries */
-	union gve_aq_entry *aqe;
+	/** Commands */
+	union gve_aq_command *cmd;
+	/** Producer counter */
+	uint32_t prod;
 };
 
 /** A Google Virtual Ethernet NIC */
@@ -148,6 +156,11 @@ struct gve_nic {
 	uint8_t revision;
 	/** Admin queue */
 	struct gve_aq aq;
+	/** Device descriptor */
+	struct gve_device_descriptor desc;
 };
+
+/** Maximum time to wait for admin queue commands */
+#define GVE_AQ_MAX_WAIT_MS 1000
 
 #endif /* _GVE_H */

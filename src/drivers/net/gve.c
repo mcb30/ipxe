@@ -42,6 +42,84 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  *
  */
 
+/* Disambiguate the various error causes */
+#define EINFO_EIO_AQ_UNSET						\
+	__einfo_uniqify ( EINFO_EIO, 0x00, "Uncompleted" )
+#define EIO_AQ_UNSET							\
+	__einfo_error ( EINFO_EIO_AQ_UNSET )
+#define EINFO_EIO_AQ_ABORTED						\
+	__einfo_uniqify ( EINFO_EIO, 0x10, "Aborted" )
+#define EIO_AQ_ABORTED							\
+	__einfo_error ( EINFO_EIO_AQ_ABORTED )
+#define EINFO_EIO_AQ_EXISTS						\
+	__einfo_uniqify ( EINFO_EIO, 0x11, "Already exists" )
+#define EIO_AQ_EXISTS							\
+	__einfo_error ( EINFO_EIO_AQ_EXISTS )
+#define EINFO_EIO_AQ_CANCELLED						\
+	__einfo_uniqify ( EINFO_EIO, 0x12, "Cancelled" )
+#define EIO_AQ_CANCELLED						\
+	__einfo_error ( EINFO_EIO_AQ_CANCELLED )
+#define EINFO_EIO_AQ_DATALOSS						\
+	__einfo_uniqify ( EINFO_EIO, 0x13, "Data loss" )
+#define EIO_AQ_DATALOSS							\
+	__einfo_error ( EINFO_EIO_AQ_DATALOSS )
+#define EINFO_EIO_AQ_DEADLINE						\
+	__einfo_uniqify ( EINFO_EIO, 0x14, "Deadline exceeded" )
+#define EIO_AQ_DEADLINE							\
+	__einfo_error ( EINFO_EIO_AQ_DEADLINE )
+#define EINFO_EIO_AQ_PRECONDITION					\
+	__einfo_uniqify ( EINFO_EIO, 0x15, "Failed precondition" )
+#define EIO_AQ_PRECONDITION						\
+	__einfo_error ( EINFO_EIO_AQ_PRECONDITION )
+#define EINFO_EIO_AQ_INTERNAL						\
+	__einfo_uniqify ( EINFO_EIO, 0x16, "Internal error" )
+#define EIO_AQ_INTERNAL							\
+	__einfo_error ( EINFO_EIO_AQ_INTERNAL )
+#define EINFO_EIO_AQ_INVAL						\
+	__einfo_uniqify ( EINFO_EIO, 0x17, "Invalid argument" )
+#define EIO_AQ_INVAL							\
+	__einfo_error ( EINFO_EIO_AQ_INVAL )
+#define EINFO_EIO_AQ_NOT_FOUND						\
+	__einfo_uniqify ( EINFO_EIO, 0x18, "Not found" )
+#define EIO_AQ_NOT_FOUND						\
+	__einfo_error ( EINFO_EIO_AQ_NOT_FOUND )
+#define EINFO_EIO_AQ_RANGE						\
+	__einfo_uniqify ( EINFO_EIO, 0x19, "Out of range" )
+#define EIO_AQ_RANGE							\
+	__einfo_error ( EINFO_EIO_AQ_RANGE )
+#define EINFO_EIO_AQ_PERM						\
+	__einfo_uniqify ( EINFO_EIO, 0x1a, "Permission denied" )
+#define EIO_AQ_PERM							\
+	__einfo_error ( EINFO_EIO_AQ_PERM )
+#define EINFO_EIO_AQ_UNAUTH						\
+	__einfo_uniqify ( EINFO_EIO, 0x1b, "Unauthenticated" )
+#define EIO_AQ_UNAUTH							\
+	__einfo_error ( EINFO_EIO_AQ_UNAUTH )
+#define EINFO_EIO_AQ_RESOURCE						\
+	__einfo_uniqify ( EINFO_EIO, 0x1c, "Resource exhausted" )
+#define EIO_AQ_RESOURCE							\
+	__einfo_error ( EINFO_EIO_AQ_RESOURCE )
+#define EINFO_EIO_AQ_UNAVAIL						\
+	__einfo_uniqify ( EINFO_EIO, 0x1d, "Unavailable" )
+#define EIO_AQ_UNAVAIL							\
+	__einfo_error ( EINFO_EIO_AQ_UNAVAIL )
+#define EINFO_EIO_AQ_NOTSUP						\
+	__einfo_uniqify ( EINFO_EIO, 0x1e, "Unimplemented" )
+#define EIO_AQ_NOTSUP	       						\
+	__einfo_error ( EINFO_EIO_AQ_NOTSUP )
+#define EINFO_EIO_AQ_UNKNOWN						\
+	__einfo_uniqify ( EINFO_EIO, 0x1f, "Unknown error" )
+#define EIO_AQ_UNKNOWN							\
+	__einfo_error ( EINFO_EIO_AQ_UNKNOWN )
+#define EIO_AQ( status )						\
+	EUNIQ ( EINFO_EIO, ( (status) & 0x1f ),				\
+		EIO_AQ_UNSET, EIO_AQ_ABORTED, EIO_AQ_EXISTS,		\
+		EIO_AQ_CANCELLED, EIO_AQ_DATALOSS, EIO_AQ_DEADLINE,	\
+		EIO_AQ_PRECONDITION, EIO_AQ_INTERNAL, EIO_AQ_INVAL,	\
+		EIO_AQ_NOT_FOUND, EIO_AQ_RANGE, EIO_AQ_PERM,		\
+		EIO_AQ_UNAUTH, EIO_AQ_RESOURCE, EIO_AQ_UNAVAIL,		\
+		EIO_AQ_NOTSUP, EIO_AQ_UNKNOWN )
+
 /******************************************************************************
  *
  * Device reset
@@ -106,15 +184,15 @@ static int gve_create_admin ( struct gve_nic *gve ) {
 	int rc;
 
 	/* Allocate admin queue */
-	gve->aq.aqe = malloc_phys ( GVE_AQ_LEN, GVE_AQ_ALIGN );
-	if ( ! gve->aq.aqe ) {
+	gve->aq.cmd = malloc_phys ( GVE_AQ_LEN, GVE_AQ_ALIGN );
+	if ( ! gve->aq.cmd ) {
 		rc = -ENOMEM;
 		goto err_alloc;
 	}
-	memset ( gve->aq.aqe, 0, GVE_AQ_LEN );
+	memset ( gve->aq.cmd, 0, GVE_AQ_LEN );
 
 	/* Program queue addresses and capabilities */
-	base = virt_to_bus ( gve->aq.aqe );
+	base = virt_to_bus ( gve->aq.cmd );
 	writel ( bswap_32 ( base / GVE_AQ_ALIGN ),
 		 ( gve->cfg + GVE_CFG_AQ_PFN ) );
 	writel ( bswap_32 ( base & 0xffffffffUL ),
@@ -129,12 +207,12 @@ static int gve_create_admin ( struct gve_nic *gve ) {
 	writel ( bswap_32 ( GVE_CFG_DRVSTAT_RUN ),
 		 ( gve->cfg + GVE_CFG_DRVSTAT ) );
 
-	DBGC ( gve, "GVE %p AQ [%08lx,%08lx)\n",
-	       gve, virt_to_phys ( gve->aq.aqe ),
-	       ( virt_to_phys ( gve->aq.aqe ) + GVE_AQ_LEN ) );
+	DBGC ( gve, "GVE %p AQ at [%08lx,%08lx)\n",
+	       gve, virt_to_phys ( gve->aq.cmd ),
+	       ( virt_to_phys ( gve->aq.cmd ) + GVE_AQ_LEN ) );
 	return 0;
 
-	free_phys ( gve->aq.aqe, GVE_AQ_LEN );
+	free_phys ( gve->aq.cmd, GVE_AQ_LEN );
  err_alloc:
 	return rc;
 }
@@ -149,14 +227,107 @@ static void gve_destroy_admin ( struct gve_nic *gve ) {
 
 	/* Reset device */
 	if ( ( rc = gve_reset ( gve ) ) != 0 ) {
-		DBGC ( gve, "GVE %p could not free admin queue: %s\n",
+		DBGC ( gve, "GVE %p could not free AQ: %s\n",
 		       gve, strerror ( rc ) );
 		/* Leak memory: there is nothing else we can do */
 		return;
 	}
 
 	/* Free admin queue */
-	free_phys ( gve->aq.aqe, GVE_AQ_LEN );
+	free_phys ( gve->aq.cmd, GVE_AQ_LEN );
+}
+
+/**
+ * Get next available admin queue command slot
+ *
+ * @v gve		GVE device
+ * @ret cmd		Admin queue command
+ */
+static union gve_aq_command * gve_admin_command ( struct gve_nic *gve ) {
+	union gve_aq_command *cmd;
+	unsigned int index;
+
+	/* Get next command slot */
+	index = ( gve->aq.prod % GVE_AQ_COUNT );
+	cmd = &gve->aq.cmd[index];
+
+	/* Initialise request */
+	memset ( cmd, 0, sizeof ( *cmd ) );
+
+	return cmd;
+}
+
+/**
+ * Wait for admin queue command to complete
+ *
+ * @v gve		GVE device
+ * @ret rc		Return status code
+ */
+static int gve_admin_wait ( struct gve_nic *gve ) {
+	uint32_t evt;
+	unsigned int i;
+
+	/* Wait for any outstanding commands to complete */
+	for ( i = 0 ; i < GVE_AQ_MAX_WAIT_MS ; i++ ) {
+
+		/* Check event counter */
+		evt = bswap_32 ( readl ( gve->cfg + GVE_CFG_AQ_EVT ) );
+		if ( evt == gve->aq.prod )
+			return 0;
+
+		/* Delay */
+		mdelay ( 1 );
+	}
+
+	DBGC ( gve, "GVE %p AQ %#x timed out (completed %#x)\n",
+	       gve, gve->aq.prod, evt );
+	return -ETIMEDOUT;
+}
+
+/**
+ * Issue admin queue command
+ *
+ * @v gve		GVE device
+ * @ret rc		Return status code
+ */
+static int gve_admin ( struct gve_nic *gve ) {
+	union gve_aq_command *cmd;
+	unsigned int index;
+	uint32_t status;
+	int rc;
+
+	/* Ensure admin queue is idle */
+	if ( ( rc = gve_admin_wait ( gve ) ) != 0 )
+		return rc;
+
+	/* Get current command slot */
+	index = ( gve->aq.prod % GVE_AQ_COUNT );
+	cmd = &gve->aq.cmd[index];
+	DBGC2 ( gve, "GVE %p AQ %#x command:\n", gve, gve->aq.prod );
+	DBGC2_HDA ( gve, 0, cmd, sizeof ( *cmd ) );
+
+	/* Increment producer counter */
+	gve->aq.prod++;
+
+	/* Ring doorbell */
+	writel ( bswap_32 ( gve->aq.prod ), ( gve->cfg + GVE_CFG_AQ_DB ) );
+
+	/* Wait for command to complete */
+	if ( ( rc = gve_admin_wait ( gve ) ) != 0 )
+		return rc;
+
+	/* Check command status */
+	status = be32_to_cpu ( cmd->hdr.status );
+	if ( status != GVE_AQ_STATUS_OK ) {
+		DBGC ( gve, "GVE %p AQ %#x failed: %#08x\n",
+		       gve, ( gve->aq.prod - 1 ), status );
+		DBGC_HDA ( gve, 0, cmd, sizeof ( *cmd ) );
+		return -EIO_AQ ( status );
+	}
+
+	DBGC2 ( gve, "GVE %p AQ %#x status:\n", gve, ( gve->aq.prod - 1 ) );
+	DBGC2_HDA ( gve, 0, cmd, sizeof ( *cmd ) );
+	return 0;
 }
 
 /**
@@ -166,10 +337,31 @@ static void gve_destroy_admin ( struct gve_nic *gve ) {
  * @ret rc		Return status code
  */
 static int gve_describe ( struct net_device *netdev ) {
+	struct gve_nic *gve = netdev->priv;
+	union gve_aq_command *cmd;
+	int rc;
 
-	//
-	( void ) netdev;
-	return -ENOTSUP;
+	/* Construct request */
+	cmd = gve_admin_command ( gve );
+	cmd->hdr.opcode = cpu_to_be32 ( GVE_AQ_DESCRIBE );
+	cmd->describe.addr = cpu_to_be64 ( virt_to_bus ( &gve->desc ) );
+	cmd->describe.ver = cpu_to_be32 ( GVE_AQ_DESCRIBE_VER );
+	cmd->describe.len = cpu_to_be32 ( sizeof ( gve->desc ) );
+
+	/* Issue command */
+	if ( ( rc = gve_admin ( gve ) ) != 0 )
+		return rc;
+	DBGC2 ( gve, "GVE %p device descriptor:\n", gve );
+	DBGC2_HDA ( gve, 0, &gve->desc, sizeof ( gve->desc ) );
+
+	/* Extract parameters */
+	memcpy ( netdev->hw_addr, gve->desc.mac, ETH_ALEN );
+	netdev->mtu = be16_to_cpu ( gve->desc.mtu );
+	netdev->max_pkt_len = ( netdev->mtu + ETH_HLEN );
+
+	DBGC ( gve, "GVE %p MAC %s (%s) MTU %zd\n",
+	       gve, eth_ntoa ( netdev->hw_addr ), netdev->mtu );
+	return 0;
 }
 
 /******************************************************************************
