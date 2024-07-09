@@ -355,12 +355,14 @@ static int gve_describe ( struct net_device *netdev ) {
 	DBGC2_HDA ( gve, 0, &gve->desc, sizeof ( gve->desc ) );
 
 	/* Extract parameters */
-	memcpy ( netdev->hw_addr, gve->desc.mac, ETH_ALEN );
+	build_assert ( sizeof ( gve->desc.mac ) == ETH_ALEN );
+	memcpy ( netdev->hw_addr, &gve->desc.mac, sizeof ( gve->desc.mac ) );
 	netdev->mtu = be16_to_cpu ( gve->desc.mtu );
 	netdev->max_pkt_len = ( netdev->mtu + ETH_HLEN );
 
-	DBGC ( gve, "GVE %p MAC %s (%s) MTU %zd\n",
-	       gve, eth_ntoa ( netdev->hw_addr ), netdev->mtu );
+	DBGC ( gve, "GVE %p MAC %s (\"%s\") MTU %zd\n",
+	       gve, eth_ntoa ( netdev->hw_addr ),
+	       inet_ntoa ( gve->desc.mac.in ), netdev->mtu );
 	return 0;
 }
 

@@ -15,7 +15,21 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <stdint.h>
 #include <ipxe/pci.h>
-#include <ipxe/if_ether.h>
+#include <ipxe/in.h>
+
+/** A Google Cloud MAC address
+ *
+ * Google Cloud locally assigned MAC addresses encode the local IPv4
+ * address in the trailing 32 bits, presumably as a performance
+ * optimisation to allow ARP resolution to be skipped by a suitably
+ * aware network stack.
+ */
+struct google_mac {
+	/** Reserved */
+	uint8_t reserved[2];
+	/** Local IPv4 address */
+	struct in_addr in;
+} __attribute__ (( packed ));
 
 /** Configuration BAR */
 #define GVE_CFG_BAR PCI_BASE_ADDRESS_0
@@ -122,7 +136,7 @@ struct gve_device_descriptor {
 	/** Reserved */
 	uint8_t reserved_b[6];
 	/** MAC address */
-	uint8_t mac[ETH_ALEN];
+	struct google_mac mac;
 	/** Reserved */
 	uint8_t reserved_c[10];
 } __attribute__ (( packed ));
