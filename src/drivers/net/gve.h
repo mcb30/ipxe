@@ -141,6 +141,25 @@ struct gve_device_descriptor {
 	uint8_t reserved_c[10];
 } __attribute__ (( packed ));
 
+/** Configure device resources command */
+#define GVE_AQ_CONFIGURE 0x0002
+
+/** Configure device resources command */
+struct gve_aq_configure {
+	/** Header */
+	struct gve_aq_header hdr;
+	/** Event counter array */
+	uint64_t counters;
+	/** IRQ doorbell address */
+	uint64_t doorbells;
+	/** Number of event counters */
+	uint32_t num_counters;
+	/** Number of IRQ doorbells */
+	uint32_t num_dbs;
+	/** IRQ doorbell stride */
+	uint32_t db_stride;
+} __attribute__ (( packed ));
+
 /** Register page list command */
 #define GVE_AQ_REGISTER 0x0003
 
@@ -178,6 +197,8 @@ union gve_aq_command {
 	struct gve_aq_header hdr;
 	/** Describe device */
 	struct gve_aq_describe desc;
+	/** Configure device resources */
+	struct gve_aq_configure conf;
 	/** Register page list */
 	struct gve_aq_register reg;
 	/** Unregister page list */

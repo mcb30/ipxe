@@ -372,6 +372,33 @@ static int gve_describe ( struct net_device *netdev ) {
 }
 
 /**
+ * Configure device resources
+ *
+ * @v gve		GVE device
+ * @ret rc		Return status code
+ */
+static int gve_configure ( struct gve_nic *gve ) {
+	union gve_aq_command *cmd;
+	int rc;
+
+	/* Construct request */
+	cmd = gve_admin_command ( gve );
+	cmd->hdr.opcode = cpu_to_be32 ( GVE_AQ_CONFIGURE );
+	//
+	cmd->conf.counters = cpu_to_be64 ( 0x10000 );
+	cmd->conf.doorbells = cpu_to_be64 ( 0x20000 );
+	cmd->conf.num_counters = cpu_to_be32 ( 2 );
+	cmd->conf.num_dbs = cpu_to_be32 ( 2 );
+	cmd->conf.db_stride = cpu_to_be32 ( 64 );
+
+	/* Issue command */
+	if ( ( rc = gve_admin ( gve ) ) != 0 )
+		return rc;
+
+	return 0;
+}
+
+/**
  * Register page list
  *
  * @v gve		GVE device
@@ -562,6 +589,7 @@ static int gve_probe ( struct pci_device *pci ) {
 		goto err_describe;
 
 	//
+	gve_configure ( gve );
 	gve_register ( gve );
 
 	/* Register network device */
