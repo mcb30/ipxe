@@ -168,6 +168,61 @@ static int gve_reset ( struct gve_nic *gve ) {
 
 /******************************************************************************
  *
+ * DMA allocation
+ *
+ ******************************************************************************
+ */
+
+/**
+ * Allocate and map DMA-coherent buffer
+ *
+ * @v gve		GVE device
+ * @v map		DMA mapping to fill in
+ * @v len		Length of buffer
+ * @ret addr		Buffer address, or NULL on error
+ */
+static inline __attribute__ (( always_inline )) void *
+gve_dma_alloc ( struct gve_nic *gve, struct dma_mapping *map, size_t len ) {
+
+	/* The alignment requirements for DMA are almost completely
+	 * undocumented.  The public source code seems to rely upon
+	 * the implicit page alignment provided by e.g. the Linux
+	 * kernel's DMA buffer allocation behaviour.
+	 *
+	 * Experimentation suggests that many aspects of the device
+	 * seem to require page-aligned or cacheline-aligned buffers.
+	 * It is unclear whether or not the device will overwrite the
+	 * remainder of the page or cacheline.
+	 *
+	 * For safety, allocate everything on a page boundary, and
+	 * round up the length to a multiple of the page size.
+	 */
+	len = ( ( len + GVE_ALIGN - 1 ) & ~( GVE_ALIGN - 1 ) );
+
+	return dma_alloc ( gve->dma, map, len, GVE_ALIGN );
+}
+
+/**
+ * Free DMA-coherent buffer
+ *
+ * @v gve		GVE device
+ * @v map		DMA mapping
+ * @v addr		Buffer address
+ * @v len		Length of buffer
+ */
+static inline __attribute__ (( always_inline )) void
+gve_dma_free ( struct gve_nic *gve __unused, struct dma_mapping *map,
+	       void *addr, size_t len ) {
+
+	/* Round up length to match that used for allocation */
+	len = ( ( len + GVE_ALIGN - 1 ) & ~( GVE_ALIGN - 1 ) );
+
+	/* Free buffer */
+	dma_free ( map, addr, len );
+}
+
+/******************************************************************************
+ *
  * Admin queue
  *
  ******************************************************************************
@@ -185,8 +240,7 @@ static int gve_create_admin ( struct gve_nic *gve ) {
 	int rc;
 
 	/* Allocate admin queue */
-	admin->cmd = dma_alloc ( gve->dma, &admin->map, GVE_ADMIN_LEN,
-				 GVE_ALIGN );
+	admin->cmd = gve_dma_alloc ( gve, &admin->map, GVE_ADMIN_LEN );
 	if ( ! admin->cmd ) {
 		rc = -ENOMEM;
 		goto err_alloc;
@@ -213,7 +267,7 @@ static int gve_create_admin ( struct gve_nic *gve ) {
 	       ( virt_to_phys ( admin->cmd ) + GVE_ADMIN_LEN ) );
 	return 0;
 
-	dma_free ( &admin->map, admin->cmd, GVE_ADMIN_LEN );
+	gve_dma_free ( gve, &admin->map, admin->cmd, GVE_ADMIN_LEN );
  err_alloc:
 	return rc;
 }
@@ -236,7 +290,7 @@ static void gve_destroy_admin ( struct gve_nic *gve ) {
 	}
 
 	/* Free admin queue */
-	dma_free ( &admin->map, admin->cmd, GVE_ADMIN_LEN );
+	gve_dma_free ( gve, &admin->map, admin->cmd, GVE_ADMIN_LEN );
 }
 
 /**
@@ -389,8 +443,8 @@ static int gve_configure ( struct gve_nic *gve ) {
 	int rc;
 
 	/* Allocate event counter */
-	event->counter = dma_alloc ( gve->dma, &event->map,
-				     sizeof ( *event->counter ), GVE_ALIGN );
+	event->counter = gve_dma_alloc ( gve, &event->map,
+					 sizeof ( *event->counter ) );
 	if ( ! event->counter ) {
 		rc = -ENOMEM;
 		goto err_alloc;
@@ -410,7 +464,8 @@ static int gve_configure ( struct gve_nic *gve ) {
 	return 0;
 
  err_admin:
-	dma_free ( &event->map, event->counter, sizeof ( *event->counter ) );
+	gve_dma_free ( gve, &event->map, event->counter,
+		       sizeof ( *event->counter ) );
  err_alloc:
 	return rc;
 }
@@ -435,7 +490,8 @@ static int gve_deconfigure ( struct gve_nic *gve ) {
 		return rc;
 
 	/* Free event counter */
-	dma_free ( &event->map, event->counter, sizeof ( *event->counter ) );
+	gve_dma_free ( gve, &event->map, event->counter,
+		       sizeof ( *event->counter ) );
 
 	return 0;
 }
@@ -460,6 +516,11 @@ static int gve_register ( struct gve_nic *gve ) {
 	physaddr_t start = virt_to_bus ( _textdata );
 	cmd->reg.addr = cpu_to_be64 ( start );
 	cmd->reg.size = cpu_to_be64 ( 0x200000 );
+
+	cmd->reg.addr = cpu_to_be64 ( 0x30000000 );
+	cmd->reg.size = cpu_to_be64 ( 0x200000 );
+
+
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -631,9 +692,8 @@ static int gve_probe ( struct pci_device *pci ) {
 		goto err_reset;
 
 	/* Allocate scratch buffer */
-	gve->scratch.buf = dma_alloc ( gve->dma, &gve->scratch.map,
-				       sizeof ( *gve->scratch.buf ),
-				       GVE_ALIGN );
+	gve->scratch.buf = gve_dma_alloc ( gve, &gve->scratch.map,
+					   sizeof ( *gve->scratch.buf ) );
 	if ( ! gve->scratch.buf ) {
 		rc = -ENOMEM;
 		goto err_scratch;
@@ -672,8 +732,8 @@ static int gve_probe ( struct pci_device *pci ) {
  err_describe:
 	gve_destroy_admin ( gve );
  err_admin:
-	dma_free ( &gve->scratch.map, gve->scratch.buf,
-		   sizeof ( *gve->scratch.buf ) );
+	gve_dma_free ( gve, &gve->scratch.map, gve->scratch.buf,
+		       sizeof ( *gve->scratch.buf ) );
  err_scratch:
  err_reset:
 	iounmap ( gve->cfg );
@@ -703,8 +763,8 @@ static void gve_remove ( struct pci_device *pci ) {
 	gve_destroy_admin ( gve );
 
 	/* Free scratch buffer */
-	dma_free ( &gve->scratch.map, gve->scratch.buf,
-		   sizeof ( *gve->scratch.buf ) );
+	gve_dma_free ( gve, &gve->scratch.map, gve->scratch.buf,
+		       sizeof ( *gve->scratch.buf ) );
 
 	/* Free network device */
 	iounmap ( gve->cfg );
