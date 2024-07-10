@@ -330,7 +330,7 @@ static int gve_admin ( struct gve_nic *gve ) {
 		return rc;
 	}
 
-	DBGC2 ( gve, "GVE %p AQ %#x status:\n", gve, ( gve->aq.prod - 1 ) );
+	DBGC2 ( gve, "GVE %p AQ %#x result:\n", gve, ( gve->aq.prod - 1 ) );
 	DBGC2_HDA ( gve, 0, cmd, sizeof ( *cmd ) );
 	return 0;
 }
@@ -384,12 +384,29 @@ static int gve_configure ( struct gve_nic *gve ) {
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = cpu_to_be32 ( GVE_AQ_CONFIGURE );
-	//
-	cmd->conf.counters = cpu_to_be64 ( 0x10000 );
-	cmd->conf.doorbells = cpu_to_be64 ( 0x20000 );
-	cmd->conf.num_counters = cpu_to_be32 ( 2 );
-	cmd->conf.num_dbs = cpu_to_be32 ( 2 );
-	cmd->conf.db_stride = cpu_to_be32 ( 64 );
+	cmd->conf.counters = cpu_to_be64 ( 0x10000 );//virt_to_bus ( &gve->counter ) );
+	cmd->conf.num_counters = cpu_to_be32 ( 1 );
+
+	/* Issue command */
+	if ( ( rc = gve_admin ( gve ) ) != 0 )
+		return rc;
+
+	return 0;
+}
+
+/**
+ * Deconfigure device resources
+ *
+ * @v gve		GVE device
+ * @ret rc		Return status code
+ */
+static int gve_deconfigure ( struct gve_nic *gve ) {
+	union gve_aq_command *cmd;
+	int rc;
+
+	/* Construct request */
+	cmd = gve_admin_command ( gve );
+	cmd->hdr.opcode = cpu_to_be32 ( GVE_AQ_DECONFIGURE );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -588,8 +605,11 @@ static int gve_probe ( struct pci_device *pci ) {
 	if ( ( rc = gve_describe ( netdev ) ) != 0 )
 		goto err_describe;
 
+	/* Configure device resources */
+	if ( ( rc = gve_configure ( gve ) ) != 0 )
+		goto err_configure;
+
 	//
-	gve_configure ( gve );
 	gve_register ( gve );
 
 	/* Register network device */
@@ -605,6 +625,8 @@ static int gve_probe ( struct pci_device *pci ) {
 
 	unregister_netdev ( netdev );
  err_register_netdev:
+	gve_deconfigure ( gve );
+ err_configure:
  err_describe:
 	gve_destroy_admin ( gve );
  err_create_admin:
@@ -628,6 +650,9 @@ static void gve_remove ( struct pci_device *pci ) {
 
 	/* Unregister network device */
 	unregister_netdev ( netdev );
+
+	/* Deconfigure device resources */
+	gve_deconfigure ( gve );
 
 	/* Destroy admin queue and reset device */
 	gve_destroy_admin ( gve );

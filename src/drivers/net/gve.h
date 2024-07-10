@@ -155,9 +155,9 @@ struct gve_aq_configure {
 	/** Number of event counters */
 	uint32_t num_counters;
 	/** Number of IRQ doorbells */
-	uint32_t num_dbs;
+	uint32_t num_doorbells;
 	/** IRQ doorbell stride */
-	uint32_t db_stride;
+	uint32_t stride;
 } __attribute__ (( packed ));
 
 /** Register page list command */
@@ -190,6 +190,9 @@ struct gve_aq_unregister {
 	/** Page list ID */
 	uint32_t id;
 } __attribute__ (( packed ));
+
+/** Deconfigure device resources command */
+#define GVE_AQ_DECONFIGURE 0x0009
 
 /** An admin queue command */
 union gve_aq_command {
@@ -228,6 +231,8 @@ struct gve_nic {
 	struct gve_aq aq;
 	/** Device descriptor */
 	struct gve_device_descriptor desc;
+	/** Event counter */
+	uint32_t counter;
 };
 
 /** Maximum time to wait for admin queue commands */
