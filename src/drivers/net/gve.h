@@ -14,6 +14,7 @@
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <stdint.h>
+#include <ipxe/dma.h>
 #include <ipxe/pci.h>
 #include <ipxe/in.h>
 
@@ -30,6 +31,14 @@ struct google_mac {
 	/** Local IPv4 address */
 	struct in_addr in;
 } __attribute__ (( packed ));
+
+/** General alignment constraint
+ *
+ * Several data structures have unstated alignment requirements.
+ * Conservatively choose to use page alignment to meet these
+ * undocumented requirements.
+ */
+#define GVE_ALIGN 0x1000
 
 /** Configuration BAR */
 #define GVE_CFG_BAR PCI_BASE_ADDRESS_0
@@ -53,34 +62,31 @@ struct google_mac {
 #define GVE_RESET_MAX_WAIT_MS 5000
 
 /** Admin queue page frame number (for older devices) */
-#define GVE_CFG_AQ_PFN 0x0010
+#define GVE_CFG_ADMIN_PFN 0x0010
 
 /** Admin queue doorbell */
-#define GVE_CFG_AQ_DB 0x0014
+#define GVE_CFG_ADMIN_DB 0x0014
 
 /** Admin queue event counter */
-#define GVE_CFG_AQ_EVT 0x0018
+#define GVE_CFG_ADMIN_EVT 0x0018
 
 /** Driver version (8-bit register) */
 #define GVE_CFG_VERSION 0x001f
 
 /** Admin queue base address high 32 bits */
-#define GVE_CFG_AQ_BASE_HI 0x0020
+#define GVE_CFG_ADMIN_BASE_HI 0x0020
 
 /** Admin queue base address low 32 bits */
-#define GVE_CFG_AQ_BASE_LO 0x0024
+#define GVE_CFG_ADMIN_BASE_LO 0x0024
 
 /** Admin queue base address length (16-bit register) */
-#define GVE_CFG_AQ_LEN 0x0028
+#define GVE_CFG_ADMIN_LEN 0x0028
 
 /** Doorbell BAR */
 #define GVE_DB_BAR PCI_BASE_ADDRESS_2
 
 /** Doorbell BAR size */
 #define GVE_DB_SIZE 0x100000
-
-/** Admin queue alignment */
-#define GVE_AQ_ALIGN 0x1000
 
 /** Admin queue length
  *
@@ -93,13 +99,13 @@ struct google_mac {
  * Choose to use a one page (4kB) admin queue for both older and newer
  * versions of the hardware, to minimise variability.
  */
-#define GVE_AQ_LEN 0x1000
+#define GVE_ADMIN_LEN 0x1000
 
 /** Admin queue entry header
  *
  * All values within admin queue entries are big-endian.
  */
-struct gve_aq_header {
+struct gve_admin_header {
 	/** Opcode */
 	uint32_t opcode;
 	/** Status */
@@ -107,15 +113,15 @@ struct gve_aq_header {
 } __attribute__ (( packed ));
 
 /** Command succeeded */
-#define GVE_AQ_STATUS_OK 0x00000001
+#define GVE_ADMIN_STATUS_OK 0x00000001
 
 /** Describe device command */
-#define GVE_AQ_DESCRIBE 0x0001
+#define GVE_ADMIN_DESCRIBE 0x0001
 
 /** Describe device command */
-struct gve_aq_describe {
+struct gve_admin_describe {
 	/** Header */
-	struct gve_aq_header hdr;
+	struct gve_admin_header hdr;
 	/** Descriptor buffer address */
 	uint64_t addr;
 	/** Descriptor version */
@@ -125,7 +131,7 @@ struct gve_aq_describe {
 } __attribute__ (( packed ));
 
 /** Device descriptor version */
-#define GVE_AQ_DESCRIBE_VER 1
+#define GVE_ADMIN_DESCRIBE_VER 1
 
 /** Device descriptor */
 struct gve_device_descriptor {
@@ -142,12 +148,12 @@ struct gve_device_descriptor {
 } __attribute__ (( packed ));
 
 /** Configure device resources command */
-#define GVE_AQ_CONFIGURE 0x0002
+#define GVE_ADMIN_CONFIGURE 0x0002
 
 /** Configure device resources command */
-struct gve_aq_configure {
+struct gve_admin_configure {
 	/** Header */
-	struct gve_aq_header hdr;
+	struct gve_admin_header hdr;
 	/** Event counter array */
 	uint64_t counters;
 	/** IRQ doorbell address */
@@ -161,12 +167,12 @@ struct gve_aq_configure {
 } __attribute__ (( packed ));
 
 /** Register page list command */
-#define GVE_AQ_REGISTER 0x0003
+#define GVE_ADMIN_REGISTER 0x0003
 
 /** Register page list command */
-struct gve_aq_register {
+struct gve_admin_register {
 	/** Header */
-	struct gve_aq_header hdr;
+	struct gve_admin_header hdr;
 	/** Page list ID */
 	uint32_t id;
 	/** Number of pages */
@@ -178,47 +184,68 @@ struct gve_aq_register {
 } __attribute__ (( packed ));
 
 /** Page list ID */
-#define GVE_AQ_REGISTER_ID 0x69505845UL
+#define GVE_ADMIN_REGISTER_ID 0x69505845UL
 
 /** Unregister page list command */
-#define GVE_AQ_UNREGISTER 0x0004
+#define GVE_ADMIN_UNREGISTER 0x0004
 
 /** Unregister page list command */
-struct gve_aq_unregister {
+struct gve_admin_unregister {
 	/** Header */
-	struct gve_aq_header hdr;
+	struct gve_admin_header hdr;
 	/** Page list ID */
 	uint32_t id;
 } __attribute__ (( packed ));
 
 /** Deconfigure device resources command */
-#define GVE_AQ_DECONFIGURE 0x0009
+#define GVE_ADMIN_DECONFIGURE 0x0009
 
 /** An admin queue command */
-union gve_aq_command {
+union gve_admin_command {
 	/** Header */
-	struct gve_aq_header hdr;
+	struct gve_admin_header hdr;
 	/** Describe device */
-	struct gve_aq_describe desc;
+	struct gve_admin_describe desc;
 	/** Configure device resources */
-	struct gve_aq_configure conf;
+	struct gve_admin_configure conf;
 	/** Register page list */
-	struct gve_aq_register reg;
+	struct gve_admin_register reg;
 	/** Unregister page list */
-	struct gve_aq_unregister unreg;
+	struct gve_admin_unregister unreg;
 	/** Padding */
 	uint8_t pad[64];
 };
 
 /** Number of admin queue commands */
-#define GVE_AQ_COUNT ( GVE_AQ_LEN / sizeof ( union gve_aq_command ) )
+#define GVE_ADMIN_COUNT ( GVE_ADMIN_LEN / sizeof ( union gve_admin_command ) )
 
 /** Admin queue */
-struct gve_aq {
+struct gve_admin {
 	/** Commands */
-	union gve_aq_command *cmd;
+	union gve_admin_command *cmd;
 	/** Producer counter */
 	uint32_t prod;
+	/** DMA mapping */
+	struct dma_mapping map;
+};
+
+/** Scratch buffer */
+struct gve_scratch {
+	/** Buffer contents */
+	union {
+		/** Device descriptor */
+		struct gve_device_descriptor desc;
+	} *buf;
+	/** DMA mapping */
+	struct dma_mapping map;
+};
+
+/** Event counter */
+struct gve_event {
+	/** Event counter */
+	uint32_t *counter;
+	/** DMA mapping */
+	struct dma_mapping map;
 };
 
 /** A Google Virtual Ethernet NIC */
@@ -227,15 +254,17 @@ struct gve_nic {
 	void *cfg;
 	/** PCI revision */
 	uint8_t revision;
+	/** DMA device */
+	struct dma_device *dma;
+	/** Scratch buffer */
+	struct gve_scratch scratch;
 	/** Admin queue */
-	struct gve_aq aq;
-	/** Device descriptor */
-	struct gve_device_descriptor desc;
+	struct gve_admin admin;
 	/** Event counter */
-	uint32_t counter;
+	struct gve_event event;
 };
 
 /** Maximum time to wait for admin queue commands */
-#define GVE_AQ_MAX_WAIT_MS 1000
+#define GVE_ADMIN_MAX_WAIT_MS 1000
 
 #endif /* _GVE_H */
