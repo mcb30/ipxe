@@ -339,8 +339,9 @@ static int gve_admin_wait ( struct gve_nic *gve ) {
 		mdelay ( 1 );
 	}
 
-	DBGC ( gve, "GVE %p AQ %#x timed out (completed %#x)\n",
-	       gve, admin->prod, evt );
+	DBGC ( gve, "GVE %p AQ %#02x timed out (completed %#02x, "
+	       "status %#08x)\n", gve, admin->prod, evt,
+	       bswap_32 ( readl ( gve->cfg + GVE_CFG_DEVSTAT ) ) );
 	return -ETIMEDOUT;
 }
 
@@ -515,8 +516,8 @@ static int gve_register ( struct gve_nic *gve ) {
 
 	/* Allocate pages */
 	for ( i = 0 ; i < GVE_PAGE_COUNT ; i++ ) {
-		pages->data[i] = dma_alloc ( gve->dma, &pages->map[i],
-					     GVE_PAGE_SIZE, GVE_PAGE_SIZE );
+		pages->data[i] = gve_dma_alloc ( gve, &pages->map[i],
+						 GVE_PAGE_SIZE );
 		if ( ! pages->data[i] ) {
 			rc = -ENOMEM;
 			goto err_alloc;
@@ -545,8 +546,10 @@ static int gve_register ( struct gve_nic *gve ) {
  err_admin:
 	assert ( i == GVE_PAGE_COUNT );
  err_alloc:
-	for ( i-- ; i >= 0 ; i-- )
-		dma_free ( &pages->map[i], pages->data[i], GVE_PAGE_SIZE );
+	for ( i-- ; i >= 0 ; i-- ) {
+		gve_dma_free ( gve, &pages->map[i], pages->data[i],
+			       GVE_PAGE_SIZE );
+	}
 	return rc;
 }
 
@@ -576,8 +579,10 @@ static int gve_unregister ( struct gve_nic *gve ) {
 	}
 
 	/* Free page list */
-	for ( i = 0 ; i < GVE_PAGE_COUNT ; i++ )
-		dma_free ( &pages->map[i], pages->data[i], GVE_PAGE_SIZE );
+	for ( i = 0 ; i < GVE_PAGE_COUNT ; i++ ) {
+		gve_dma_free ( gve, &pages->map[i], pages->data[i],
+			       GVE_PAGE_SIZE );
+	}
 
 	return 0;
 }
@@ -746,14 +751,19 @@ static int gve_probe ( struct pci_device *pci ) {
 	/* Configure DMA */
 	gve->dma = &pci->dma;
 	dma_set_mask_64bit ( gve->dma );
-
-
-	//// -- should we skip this for QPL?
-	netdev->dma = gve->dma;
+	assert ( netdev->dma == NULL );
 
 	/* Reset the NIC */
 	if ( ( rc = gve_reset ( gve ) ) != 0 )
 		goto err_reset;
+
+	///
+	DBGC ( gve, "***** device status %#08x\n",
+	       bswap_32 ( readl ( gve->cfg + GVE_CFG_DEVSTAT ) ) );
+	DBGC ( gve, "***** waiting for possible device reset\n" );
+	mdelay ( 5000 );
+	DBGC ( gve, "***** device status %#08x\n",
+	       bswap_32 ( readl ( gve->cfg + GVE_CFG_DEVSTAT ) ) );
 
 	/* Allocate scratch buffer */
 	gve->scratch.buf = gve_dma_alloc ( gve, &gve->scratch.map,
