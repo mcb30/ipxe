@@ -102,7 +102,7 @@ struct google_mac {
  * Choose to use a one page (4kB) admin queue for both older and newer
  * versions of the hardware, to minimise variability.
  */
-#define GVE_ADMIN_LEN 0x1000
+#define GVE_ADMIN_LEN GVE_PAGE_SIZE
 
 /** Admin queue entry header
  *

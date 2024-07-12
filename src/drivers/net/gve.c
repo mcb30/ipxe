@@ -307,8 +307,8 @@ static union gve_admin_command * gve_admin_command ( struct gve_nic *gve ) {
 	unsigned int index;
 
 	/* Get next command slot */
-	index = ( admin->prod % GVE_ADMIN_COUNT );
-	cmd = &admin->cmd[index];
+	index = admin->prod;
+	cmd = &admin->cmd[ index % GVE_ADMIN_COUNT ];
 
 	/* Initialise request */
 	memset ( cmd, 0, sizeof ( *cmd ) );
@@ -362,18 +362,19 @@ static int gve_admin ( struct gve_nic *gve ) {
 	if ( ( rc = gve_admin_wait ( gve ) ) != 0 )
 		return rc;
 
-	/* Get current command slot */
-	index = ( admin->prod % GVE_ADMIN_COUNT );
-	cmd = &admin->cmd[index];
+	/* Get next command slot */
+	index = admin->prod;
+	cmd = &admin->cmd[ index % GVE_ADMIN_COUNT ];
 	opcode = be32_to_cpu ( cmd->hdr.opcode );
-	DBGC2 ( gve, "GVE %p AQ %#x command %#04x:\n",
-		gve, admin->prod, opcode );
+	DBGC2 ( gve, "GVE %p AQ %#02x command %#04x request:\n",
+		gve, index, opcode );
 	DBGC2_HDA ( gve, 0, cmd, sizeof ( *cmd ) );
 
 	/* Increment producer counter */
 	admin->prod++;
 
 	/* Ring doorbell */
+	wmb();
 	writel ( bswap_32 ( admin->prod ), gve->cfg + GVE_CFG_ADMIN_DB );
 
 	/* Wait for command to complete */
@@ -384,14 +385,15 @@ static int gve_admin ( struct gve_nic *gve ) {
 	status = be32_to_cpu ( cmd->hdr.status );
 	if ( status != GVE_ADMIN_STATUS_OK ) {
 		rc = -EIO_ADMIN ( status );
-		DBGC ( gve, "GVE %p AQ %#x failed %#04x: %#08x\n",
-		       gve, ( admin->prod - 1 ), opcode, status );
+		DBGC ( gve, "GVE %p AQ %#02x command %#04x failed: %#08x\n",
+		       gve, index, opcode, status );
 		DBGC_HDA ( gve, 0, cmd, sizeof ( *cmd ) );
 		DBGC ( gve, "GVE %p AQ error: %s\n", gve, strerror ( rc ) );
 		return rc;
 	}
 
-	DBGC2 ( gve, "GVE %p AQ %#x result:\n", gve, ( admin->prod - 1 ) );
+	DBGC2 ( gve, "GVE %p AQ %#02x command %#04x result:\n",
+		gve, index, opcode );
 	DBGC2_HDA ( gve, 0, cmd, sizeof ( *cmd ) );
 	return 0;
 }
