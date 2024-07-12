@@ -27,6 +27,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <assert.h>
 #include <byteswap.h>
 #include <ipxe/netdevice.h>
 #include <ipxe/ethernet.h>
@@ -197,9 +198,9 @@ gve_dma_alloc ( struct gve_nic *gve, struct dma_mapping *map, size_t len ) {
 	 * For safety, allocate everything on a page boundary, and
 	 * round up the length to a multiple of the page size.
 	 */
-	len = ( ( len + GVE_ALIGN - 1 ) & ~( GVE_ALIGN - 1 ) );
+	len = ( ( len + GVE_PAGE_SIZE - 1 ) & ~( GVE_PAGE_SIZE - 1 ) );
 
-	return dma_alloc ( gve->dma, map, len, GVE_ALIGN );
+	return dma_alloc ( gve->dma, map, len, GVE_PAGE_SIZE );
 }
 
 /**
@@ -215,7 +216,7 @@ gve_dma_free ( struct gve_nic *gve __unused, struct dma_mapping *map,
 	       void *addr, size_t len ) {
 
 	/* Round up length to match that used for allocation */
-	len = ( ( len + GVE_ALIGN - 1 ) & ~( GVE_ALIGN - 1 ) );
+	len = ( ( len + GVE_PAGE_SIZE - 1 ) & ~( GVE_PAGE_SIZE - 1 ) );
 
 	/* Free buffer */
 	dma_free ( map, addr, len );
@@ -249,7 +250,8 @@ static int gve_create_admin ( struct gve_nic *gve ) {
 
 	/* Program queue addresses and capabilities */
 	base = dma ( &admin->map, admin->cmd );
-	writel ( bswap_32 ( base / GVE_ALIGN ), gve->cfg + GVE_CFG_ADMIN_PFN );
+	writel ( bswap_32 ( base / GVE_PAGE_SIZE ),
+		 gve->cfg + GVE_CFG_ADMIN_PFN );
 	writel ( bswap_32 ( base & 0xffffffffUL ),
 		 gve->cfg + GVE_CFG_ADMIN_BASE_LO );
 	if ( sizeof ( base ) > sizeof ( uint32_t ) ) {
@@ -503,28 +505,77 @@ static int gve_deconfigure ( struct gve_nic *gve ) {
  * @ret rc		Return status code
  */
 static int gve_register ( struct gve_nic *gve ) {
+	struct gve_pages *pages = &gve->pages;
+	struct gve_page_list *list = &gve->scratch.buf->list;
 	union gve_admin_command *cmd;
+	int i;
 	int rc;
+
+	/* Allocate pages */
+	for ( i = 0 ; i < GVE_PAGE_COUNT ; i++ ) {
+		pages->data[i] = dma_alloc ( gve->dma, &pages->map[i],
+					     GVE_PAGE_SIZE, GVE_PAGE_SIZE );
+		if ( ! pages->data[i] ) {
+			rc = -ENOMEM;
+			goto err_alloc;
+		}
+		list->addr[i] = cpu_to_be64 ( dma ( &pages->map[i],
+						    pages->data[i] ) );
+		pages->ids[i] = i;
+	}
+	pages->prod = 0;
+	pages->cons = 0;
 
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_REGISTER );
 	cmd->reg.id = cpu_to_be32 ( GVE_ADMIN_REGISTER_ID );
-	cmd->reg.count = cpu_to_be32 ( 1 );
-	//
-	extern char _textdata[];
-	physaddr_t start = virt_to_bus ( _textdata );
-	cmd->reg.addr = cpu_to_be64 ( start );
-	cmd->reg.size = cpu_to_be64 ( 0x200000 );
-
-	cmd->reg.addr = cpu_to_be64 ( 0x30000000 );
-	cmd->reg.size = cpu_to_be64 ( 0x200000 );
-
-
+	cmd->reg.count = cpu_to_be32 ( GVE_PAGE_COUNT );
+	cmd->reg.addr = cpu_to_be64 ( dma ( &gve->scratch.map, list ) );
+	cmd->reg.size = cpu_to_be64 ( GVE_PAGE_SIZE );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
+		goto err_admin;
+
+	return 0;
+
+ err_admin:
+	assert ( i == GVE_PAGE_COUNT );
+ err_alloc:
+	for ( i-- ; i >= 0 ; i-- )
+		dma_free ( &pages->map[i], pages->data[i], GVE_PAGE_SIZE );
+	return rc;
+}
+
+/**
+ * Unregister page list
+ *
+ * @v gve		GVE device
+ * @ret rc		Return status code
+ */
+static int gve_unregister ( struct gve_nic *gve ) {
+	struct gve_pages *pages = &gve->pages;
+	union gve_admin_command *cmd;
+	unsigned int i;
+	int rc;
+
+	/* Construct request */
+	cmd = gve_admin_command ( gve );
+	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_UNREGISTER );
+	cmd->reg.id = cpu_to_be32 ( GVE_ADMIN_REGISTER_ID );
+
+	/* Issue command */
+	if ( ( rc = gve_admin ( gve ) ) != 0 ) {
+		DBGC ( gve, "GVE %p could not free page list: %s\n",
+		       gve, strerror ( rc ) );
+		/* Leak memory: there is nothing else we can do */
 		return rc;
+	}
+
+	/* Free page list */
+	for ( i = 0 ; i < GVE_PAGE_COUNT ; i++ )
+		dma_free ( &pages->map[i], pages->data[i], GVE_PAGE_SIZE );
 
 	return 0;
 }
@@ -554,10 +605,20 @@ static void gve_refill_rx ( struct net_device *netdev ) {
  * @ret rc		Return status code
  */
 static int gve_open ( struct net_device *netdev ) {
+	struct gve_nic *gve = netdev->priv;
+	int rc;
 
-	//
-	( void ) netdev;
-	return -ENOTSUP;
+	/* Register page list */
+	if ( ( rc = gve_register ( gve ) ) != 0 )
+		goto err_register;
+
+	///
+
+	return 0;
+
+	gve_unregister ( gve );
+ err_register:
+	return rc;
 }
 
 /**
@@ -566,9 +627,10 @@ static int gve_open ( struct net_device *netdev ) {
  * @v netdev		Network device
  */
 static void gve_close ( struct net_device *netdev ) {
+	struct gve_nic *gve = netdev->priv;
 
-	//
-	( void ) netdev;
+	/* Unregister page list */
+	gve_unregister ( gve );
 }
 
 /**
@@ -710,9 +772,6 @@ static int gve_probe ( struct pci_device *pci ) {
 	/* Configure device resources */
 	if ( ( rc = gve_configure ( gve ) ) != 0 )
 		goto err_configure;
-
-	//
-	gve_register ( gve );
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )

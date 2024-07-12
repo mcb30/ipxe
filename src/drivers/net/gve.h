@@ -38,7 +38,10 @@ struct google_mac {
  * Conservatively choose to use page alignment to meet these
  * undocumented requirements.
  */
-#define GVE_ALIGN 0x1000
+#define GVE_PAGE_SIZE 0x1000
+
+/** Number of data buffer pages (must be a power of two) */
+#define GVE_PAGE_COUNT 32
 
 /** Configuration BAR */
 #define GVE_CFG_BAR PCI_BASE_ADDRESS_0
@@ -186,6 +189,12 @@ struct gve_admin_register {
 /** Page list ID */
 #define GVE_ADMIN_REGISTER_ID 0x69505845UL
 
+/** Page list */
+struct gve_page_list {
+	/** Page address */
+	uint64_t addr[GVE_PAGE_COUNT];
+} __attribute__ (( packed ));
+
 /** Unregister page list command */
 #define GVE_ADMIN_UNREGISTER 0x0004
 
@@ -235,6 +244,8 @@ struct gve_scratch {
 	union {
 		/** Device descriptor */
 		struct gve_device_descriptor desc;
+		/** Page address list */
+		struct gve_page_list list;
 	} *buf;
 	/** DMA mapping */
 	struct dma_mapping map;
@@ -246,6 +257,55 @@ struct gve_event {
 	uint32_t *counter;
 	/** DMA mapping */
 	struct dma_mapping map;
+};
+
+/** Queue page list
+ *
+ * The device uses preregistered pages for fast-path DMA operations
+ * (i.e. transmit and receive buffers).  A list of device addresses
+ * for each page must be registered before the transmit or receive
+ * queue is created, and cannot subsequently be modified.
+ *
+ * The Linux driver allocates pages as DMA_TO_DEVICE or
+ * DMA_FROM_DEVICE as appropriate, and uses dma_sync_single_for_cpu()
+ * etc to ensure that data is copied to/from bounce buffers as needed.
+ *
+ * Unfortunately there is no such sync operation available within our
+ * DMA API, since we are constrained by the limitations imposed by
+ * EFI_PCI_IO_PROTOCOL.  There is no way to synchronise a buffer
+ * without also [un]mapping it, and no way to force the reuse of the
+ * same device address for a subsequent remapping.  We are therefore
+ * constrained to use only DMA-coherent buffers, since this is the
+ * only way we can repeatedly reuse the same device address.
+ *
+ * Newer versions of the gVNIC device support "raw DMA addressing
+ * (RDA)", which is essentially a prebuilt queue page list covering
+ * the whole of the guest address space.  Unfortunately we cannot rely
+ * on this, since older versions will not support it.
+ *
+ * Experimentation suggests that the device will accept a request to
+ * create a queue page list covering the whole of the guest address
+ * space via two giant "pages" of 2^63 bytes each.  However,
+ * experimentation also suggests that the device will accept any old
+ * garbage value as the "page size".  In the total absence of any
+ * documentation, it is probably unsafe to conclude that the device is
+ * bothering to look at or respect the "page size" parameter: it is
+ * most likely just presuming the use of 4kB pages.
+ *
+ * We therefore maintain a ring buffer of DMA-coherent pages, used for
+ * both transmit and receive.
+ */
+struct gve_pages {
+	/** Page addresses */
+	void *data[GVE_PAGE_COUNT];
+	/** Page mappings */
+	struct dma_mapping map[GVE_PAGE_COUNT];
+	/** Ring buffer */
+	uint8_t ids[GVE_PAGE_COUNT];
+	/** Producer counter */
+	unsigned int prod;
+	/** Consumer counter */
+	unsigned int cons;
 };
 
 /** A Google Virtual Ethernet NIC */
@@ -262,9 +322,11 @@ struct gve_nic {
 	struct gve_admin admin;
 	/** Event counter */
 	struct gve_event event;
+	/** Page list */
+	struct gve_pages pages;
 };
 
 /** Maximum time to wait for admin queue commands */
-#define GVE_ADMIN_MAX_WAIT_MS 1000
+#define GVE_ADMIN_MAX_WAIT_MS 5000
 
 #endif /* _GVE_H */
