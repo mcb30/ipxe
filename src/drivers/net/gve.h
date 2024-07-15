@@ -91,25 +91,12 @@ struct google_mac {
 /** Doorbell BAR size */
 #define GVE_DB_SIZE 0x100000
 
-/** Admin queue length
- *
- * This is theoretically a policy decision.  However, older revisions
- * of the hardware seem to have only the "admin queue page frame
- * number" register and no "admin queue length" register, with the
- * implication that the admin queue must be exactly one page in
- * length.
- *
- * Choose to use a one page (4kB) admin queue for both older and newer
- * versions of the hardware, to minimise variability.
- */
-#define GVE_ADMIN_LEN GVE_PAGE_SIZE
-
 /** Admin queue entry header
  *
  * All values within admin queue entries are big-endian.
  */
 struct gve_admin_header {
-	/** Opcode */
+	/** Operation code */
 	uint32_t opcode;
 	/** Status */
 	uint32_t status;
@@ -186,8 +173,8 @@ struct gve_admin_register {
 	uint64_t size;
 } __attribute__ (( packed ));
 
-/** Page list ID */
-#define GVE_ADMIN_REGISTER_ID 0x69505845UL
+/** Queue page list ID */
+#define GVE_QPL_ID 0x18ae5150UL
 
 /** Page list */
 struct gve_pages {
@@ -198,16 +185,46 @@ struct gve_pages {
 /** Unregister page list command */
 #define GVE_ADMIN_UNREGISTER 0x0004
 
-/** Unregister page list command */
-struct gve_admin_unregister {
+/** Create transmit queue command */
+#define GVE_ADMIN_CREATE_TX 0x0005
+
+/** Create transmit queue command */
+struct gve_admin_create_tx {
 	/** Header */
 	struct gve_admin_header hdr;
-	/** Page list ID */
+	/** Queue ID */
 	uint32_t id;
+	/** Reserved */
+	uint8_t reserved_a[4];
+	/** Queue resources address */
+	uint64_t resources;
+	/** Descriptor ring address */
+	uint64_t desc;
+	/** Queue page list ID */
+	uint32_t qpl_id;
+	/** Notification channel ID */
+	uint32_t notify_id;
 } __attribute__ (( packed ));
+
+/** Transmit queue ID */
+#define GVE_TX_ID 0x18ae5458UL
+
+/** Destroy transmit queue command */
+#define GVE_ADMIN_DESTROY_TX 0x0007
+
+/** Destroy receive queue command */
+#define GVE_ADMIN_DESTROY_RX 0x0008
 
 /** Deconfigure device resources command */
 #define GVE_ADMIN_DECONFIGURE 0x0009
+
+/** Command with single ID parameter */
+struct gve_admin_single {
+	/** Header */
+	struct gve_admin_header hdr;
+	/** ID */
+	uint32_t id;
+} __attribute__ (( packed ));
 
 /** An admin queue command */
 union gve_admin_command {
@@ -219,14 +236,26 @@ union gve_admin_command {
 	struct gve_admin_configure conf;
 	/** Register page list */
 	struct gve_admin_register reg;
-	/** Unregister page list */
-	struct gve_admin_unregister unreg;
+	/** Create transmit queue */
+	struct gve_admin_create_tx create_tx;
+	/** Single ID parameter */
+	struct gve_admin_single single;
 	/** Padding */
 	uint8_t pad[64];
 };
 
-/** Number of admin queue commands */
-#define GVE_ADMIN_COUNT ( GVE_ADMIN_LEN / sizeof ( union gve_admin_command ) )
+/** Number of admin queue commands
+ *
+ * This is theoretically a policy decision.  However, older revisions
+ * of the hardware seem to have only the "admin queue page frame
+ * number" register and no "admin queue length" register, with the
+ * implication that the admin queue must be exactly one page in
+ * length.
+ *
+ * Choose to use a one page (4kB) admin queue for both older and newer
+ * versions of the hardware, to minimise variability.
+ */
+#define GVE_ADMIN_COUNT ( GVE_PAGE_SIZE / sizeof ( union gve_admin_command ) )
 
 /** Admin queue */
 struct gve_admin {
@@ -300,8 +329,43 @@ struct gve_qpl {
 	void *data[GVE_QPL_COUNT];
 	/** Page mappings */
 	struct dma_mapping map[GVE_QPL_COUNT];
-	/** Ring buffer */
+	/** Page ID ring buffer */
 	uint8_t ids[GVE_QPL_COUNT];
+	/** Producer counter */
+	unsigned int prod;
+	/** Consumer counter */
+	unsigned int cons;
+};
+
+/** A transmit descriptor */
+struct gve_tx_descriptor {
+	/** Reserved */
+	uint8_t reserved_a[3];
+	/** Number of descriptors in this packet */
+	uint8_t count;
+	/** Total length of this packet */
+	uint16_t total;
+	/** Length of this descriptor */
+	uint16_t len;
+	/** Offset within QPL address space */
+	uint64_t offset;
+} __attribute__ (( packed ));
+
+/** Number of transmit descriptors
+ *
+ * For GQI mode, the transmit descriptor ring must be exactly one page
+ * since there ring size field exists only for DQO mode.
+ */
+#define GVE_TX_COUNT ( GVE_PAGE_SIZE / sizeof ( struct gve_tx_descriptor ) )
+
+/** Transmit ring */
+struct gve_tx {
+	/** Transmit descriptors */
+	struct gve_tx_descriptor *desc;
+	/** Transmit descriptor mapping */
+	struct dma_mapping map;
+	/** Page IDs */
+	uint8_t ids[GVE_TX_COUNT];
 	/** Producer counter */
 	unsigned int prod;
 	/** Consumer counter */
@@ -324,6 +388,8 @@ struct gve_nic {
 	struct gve_event event;
 	/** Queue page list */
 	struct gve_qpl qpl;
+	/** Transmit ring */
+	struct gve_tx tx;
 };
 
 /** Maximum time to wait for admin queue commands */

@@ -239,26 +239,27 @@ static int gve_admin_alloc ( struct gve_nic *gve ) {
 	struct gve_admin *admin = &gve->admin;
 	struct gve_scratch *scratch = &gve->scratch;
 	struct gve_event *event = &gve->event;
+	size_t admin_len = ( GVE_ADMIN_COUNT * sizeof ( admin->cmd[0] ) );
+	size_t scratch_len = sizeof ( *scratch->buf );
+	size_t event_len = sizeof ( *event->counter );
 	int rc;
 
 	/* Allocate admin queue */
-	admin->cmd = gve_dma_alloc ( gve, &admin->map, GVE_ADMIN_LEN );
+	admin->cmd = gve_dma_alloc ( gve, &admin->map, admin_len );
 	if ( ! admin->cmd ) {
 		rc = -ENOMEM;
 		goto err_admin;
 	}
 
 	/* Allocate scratch buffer */
-	scratch->buf = gve_dma_alloc ( gve, &scratch->map,
-				       sizeof ( *scratch->buf ) );
+	scratch->buf = gve_dma_alloc ( gve, &scratch->map, scratch_len );
 	if ( ! scratch->buf ) {
 		rc = -ENOMEM;
 		goto err_scratch;
 	}
 
 	/* Allocate event counter */
-	event->counter = gve_dma_alloc ( gve, &event->map,
-					 sizeof ( *event->counter ) );
+	event->counter = gve_dma_alloc ( gve, &event->map, event_len );
 	if ( ! event->counter ) {
 		rc = -ENOMEM;
 		goto err_event;
@@ -266,16 +267,14 @@ static int gve_admin_alloc ( struct gve_nic *gve ) {
 
 	DBGC ( gve, "GVE %p AQ at [%08lx,%08lx)\n",
 	       gve, virt_to_phys ( admin->cmd ),
-	       ( virt_to_phys ( admin->cmd ) + GVE_ADMIN_LEN ) );
+	       ( virt_to_phys ( admin->cmd ) + admin_len ) );
 	return 0;
 
-	gve_dma_free ( gve, &event->map, event->counter,
-		       sizeof ( *event->counter ) );
+	gve_dma_free ( gve, &event->map, event->counter, event_len );
  err_event:
-	gve_dma_free ( gve, &scratch->map, scratch->buf,
-		       sizeof ( *scratch->buf ) );
+	gve_dma_free ( gve, &scratch->map, scratch->buf, scratch_len );
  err_scratch:
-	gve_dma_free ( gve, &admin->map, admin->cmd, GVE_ADMIN_LEN );
+	gve_dma_free ( gve, &admin->map, admin->cmd, admin_len );
  err_admin:
 	return rc;
 }
@@ -289,21 +288,22 @@ static void gve_admin_free ( struct gve_nic *gve ) {
 	struct gve_admin *admin = &gve->admin;
 	struct gve_scratch *scratch = &gve->scratch;
 	struct gve_event *event = &gve->event;
+	size_t admin_len = ( GVE_ADMIN_COUNT * sizeof ( admin->cmd[0] ) );
+	size_t scratch_len = sizeof ( *scratch->buf );
+	size_t event_len = sizeof ( *event->counter );
 
 	/* Leak memory if we were unable to reset the device */
-	if ( ! admin->cmd )
+	if ( ! ( admin->cmd && event->counter ) )
 		return;
 
 	/* Free event counter */
-	gve_dma_free ( gve, &event->map, event->counter,
-		       sizeof ( *event->counter ) );
+	gve_dma_free ( gve, &event->map, event->counter, event_len );
 
 	/* Free scratch buffer */
-	gve_dma_free ( gve, &scratch->map, scratch->buf,
-		       sizeof ( *scratch->buf ) );
+	gve_dma_free ( gve, &scratch->map, scratch->buf, scratch_len );
 
 	/* Free admin queue */
-	gve_dma_free ( gve, &admin->map, admin->cmd, GVE_ADMIN_LEN );
+	gve_dma_free ( gve, &admin->map, admin->cmd, admin_len );
 }
 
 /**
@@ -313,10 +313,10 @@ static void gve_admin_free ( struct gve_nic *gve ) {
  */
 static void gve_admin_enable ( struct gve_nic *gve ) {
 	struct gve_admin *admin = &gve->admin;
+	size_t admin_len = ( GVE_ADMIN_COUNT * sizeof ( admin->cmd[0] ) );
 	physaddr_t base;
 
 	/* Reset queue */
-	memset ( admin->cmd, 0, GVE_ADMIN_LEN );
 	admin->prod = 0;
 
 	/* Program queue addresses and capabilities */
@@ -331,9 +331,8 @@ static void gve_admin_enable ( struct gve_nic *gve ) {
 	} else {
 		writel ( 0, gve->cfg + GVE_CFG_ADMIN_BASE_HI );
 	}
-	writel ( bswap_16 ( GVE_ADMIN_LEN ), gve->cfg + GVE_CFG_ADMIN_LEN );
-	writel ( bswap_32 ( GVE_CFG_DRVSTAT_RUN ),
-		 gve->cfg + GVE_CFG_DRVSTAT );
+	writel ( bswap_16 ( admin_len ), gve->cfg + GVE_CFG_ADMIN_LEN );
+	writel ( bswap_32 ( GVE_CFG_DRVSTAT_RUN ), gve->cfg + GVE_CFG_DRVSTAT );
 }
 
 /**
@@ -463,6 +462,31 @@ static int gve_admin ( struct gve_nic *gve ) {
 }
 
 /**
+ * Issue command with single ID parameter
+ *
+ * @v gve		GVE device
+ * @v opcode		Operation code
+ * @v id		ID parameter
+ * @ret rc		Return status code
+ */
+static int gve_admin_single ( struct gve_nic *gve, unsigned int opcode,
+			      unsigned int id ) {
+	union gve_admin_command *cmd;
+	int rc;
+
+	/* Construct request */
+	cmd = gve_admin_command ( gve );
+	cmd->hdr.opcode = cpu_to_be32 ( opcode );
+	cmd->single.id = cpu_to_be32 ( id );
+
+	/* Issue command */
+	if ( ( rc = gve_admin ( gve ) ) != 0 )
+		return rc;
+
+	return 0;
+}
+
+/**
  * Get device descriptor
  *
  * @v netdev		Network device
@@ -531,16 +555,16 @@ static int gve_configure ( struct gve_nic *gve ) {
  * @ret rc		Return status code
  */
 static int gve_deconfigure ( struct gve_nic *gve ) {
-	union gve_admin_command *cmd;
+	struct gve_event *event = &gve->event;
 	int rc;
 
-	/* Construct request */
-	cmd = gve_admin_command ( gve );
-	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_DECONFIGURE );
-
-	/* Issue command */
-	if ( ( rc = gve_admin ( gve ) ) != 0 )
+	/* Issue command (with meaningless ID) */
+	if ( ( rc = gve_admin_single ( gve,
+				       GVE_ADMIN_DECONFIGURE, 0 ) ) != 0 ) {
+		/* Leak memory: there is nothing else we can do */
+		event->counter = NULL;
 		return rc;
+	}
 
 	return 0;
 }
@@ -570,7 +594,7 @@ static int gve_register ( struct gve_nic *gve ) {
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_REGISTER );
-	cmd->reg.id = cpu_to_be32 ( GVE_ADMIN_REGISTER_ID );
+	cmd->reg.id = cpu_to_be32 ( GVE_QPL_ID );
 	cmd->reg.count = cpu_to_be32 ( GVE_QPL_COUNT );
 	cmd->reg.addr = cpu_to_be64 ( dma ( &gve->scratch.map, pages ) );
 	cmd->reg.size = cpu_to_be64 ( GVE_PAGE_SIZE );
@@ -590,20 +614,66 @@ static int gve_register ( struct gve_nic *gve ) {
  */
 static int gve_unregister ( struct gve_nic *gve ) {
 	struct gve_qpl *qpl = &gve->qpl;
+	int rc;
+
+	/* Issue command */
+	if ( ( rc = gve_admin_single ( gve, GVE_ADMIN_UNREGISTER,
+				       GVE_QPL_ID ) ) != 0 ) {
+		DBGC ( gve, "GVE %p could not free page list: %s\n",
+		       gve, strerror ( rc ) );
+		/* Leak memory: there is nothing else we can do */
+		qpl->data[0] = NULL;
+		return rc;
+	}
+
+	return 0;
+}
+
+/**
+ * Create transmit queue
+ *
+ * @v gve		GVE device
+ * @ret rc		Return status code
+ */
+static int gve_create_tx ( struct gve_nic *gve ) {
+	struct gve_tx *tx = &gve->tx;
 	union gve_admin_command *cmd;
 	int rc;
 
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
-	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_UNREGISTER );
-	cmd->reg.id = cpu_to_be32 ( GVE_ADMIN_REGISTER_ID );
+	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_CREATE_TX );
+	cmd->create_tx.id = cpu_to_be32 ( GVE_TX_ID );
+
+	//
+	cmd->create_tx.resources = cpu_to_be64 ( 0x10000 );
+
+
+	cmd->create_tx.desc = cpu_to_be64 ( dma ( &tx->map, tx->desc ) );
+	cmd->create_tx.qpl_id = cpu_to_be32 ( GVE_QPL_ID );
 
 	/* Issue command */
-	if ( ( rc = gve_admin ( gve ) ) != 0 ) {
-		DBGC ( gve, "GVE %p could not free page list: %s\n",
-		       gve, strerror ( rc ) );
+	if ( ( rc = gve_admin ( gve ) ) != 0 )
+		return rc;
+
+	return 0;
+}
+
+/**
+ * Destroy transmit queue
+ *
+ * @v gve		GVE device
+ * @ret rc		Return status code
+ */
+static int gve_destroy_tx ( struct gve_nic *gve ) {
+	struct gve_tx *tx = &gve->tx;
+	int rc;
+
+	/* Issue command */
+	if ( ( rc = gve_admin_single ( gve, GVE_ADMIN_DESTROY_TX,
+				       GVE_TX_ID ) ) != 0 ) {
 		/* Leak memory: there is nothing else we can do */
-		qpl->data[0] = NULL;
+		tx->desc = NULL;
 		return rc;
 	}
 
@@ -668,6 +738,79 @@ static void gve_qpl_free ( struct gve_nic *gve ) {
 }
 
 /**
+ * Acquire queue page from list
+ *
+ * @v gve		GVE device
+ * @ret id		Queue page ID, or negative error
+ */
+static int gve_qpl_get ( struct gve_nic *gve ) {
+	struct gve_qpl *qpl = &gve->qpl;
+
+	/* Check for an available page */
+	if ( ( qpl->prod - qpl->cons ) >= GVE_QPL_COUNT )
+		return -ENOBUFS;
+
+	/* Return next available ID */
+	return qpl->ids[ qpl->prod++ % GVE_QPL_COUNT ];
+}
+
+/**
+ * Release queue page back to list
+ *
+ * @v gve		GVE device
+ * @v id		Queue page ID
+ */
+static void gve_qpl_put ( struct gve_nic *gve, int id ) {
+	struct gve_qpl *qpl = &gve->qpl;
+
+	/* Sanity checks */
+	assert ( qpl->prod != qpl->cons );
+	assert ( ( qpl->prod - qpl->cons ) <= GVE_QPL_COUNT );
+
+	/* Return ID to list */
+	qpl->ids[ qpl->cons++ % GVE_QPL_COUNT ] = id;
+}
+
+/**
+ * Allocate transmit queue
+ *
+ * @v gve		GVE device
+ * @ret rc		Return status code
+ */
+static int gve_tx_alloc ( struct gve_nic *gve ) {
+	struct gve_tx *tx = &gve->tx;
+	size_t len = ( sizeof ( tx->desc[0] ) * GVE_TX_COUNT );
+
+	/* Sanity check: ensure TX ring cannot fill up */
+	build_assert ( GVE_TX_COUNT > GVE_QPL_COUNT );
+
+	/* Allocate transmit descriptors */
+	tx->desc = gve_dma_alloc ( gve, &tx->map, len );
+	if ( ! tx->desc )
+		return -ENOMEM;
+	memset ( tx->desc, 0, len );
+
+	return 0;
+}
+
+/**
+ * Free transmit queue
+ *
+ * @v gve		GVE device
+ */
+static void gve_tx_free ( struct gve_nic *gve ) {
+	struct gve_tx *tx = &gve->tx;
+	size_t len = ( sizeof ( tx->desc[0] ) * GVE_TX_COUNT );
+
+	/* Leak memory if we were unable to destroy the transmit queue */
+	if ( ! tx->desc )
+		return;
+
+	/* Free transmit descriptors */
+	gve_dma_free ( gve, &tx->map, tx->desc, len );
+}
+
+/**
  * Refill receive queue
  *
  * @v netdev		Network device
@@ -692,16 +835,26 @@ static int gve_open ( struct net_device *netdev ) {
 	if ( ( rc = gve_qpl_alloc ( gve ) ) != 0 )
 		goto err_qpl;
 
+	/* Allocate transmit queue */
+	if ( ( rc = gve_tx_alloc ( gve ) ) != 0 )
+		goto err_tx;
+
 	/* Register page list */
 	if ( ( rc = gve_register ( gve ) ) != 0 )
 		goto err_register;
 
-	///
+	/* Create transmit queue */
+	if ( ( rc = gve_create_tx ( gve ) ) != 0 )
+		goto err_create_tx;
 
 	return 0;
 
+	gve_destroy_tx ( gve );
+ err_create_tx:
 	gve_unregister ( gve );
  err_register:
+	gve_tx_free ( gve );
+ err_tx:
 	gve_qpl_free ( gve );
  err_qpl:
 	return rc;
@@ -715,8 +868,14 @@ static int gve_open ( struct net_device *netdev ) {
 static void gve_close ( struct net_device *netdev ) {
 	struct gve_nic *gve = netdev->priv;
 
+	/* Destroy transmit queue */
+	gve_destroy_tx ( gve );
+
 	/* Unregister page list */
 	gve_unregister ( gve );
+
+	/* Free transmit queue */
+	gve_tx_free ( gve );
 
 	/* Free queue page list */
 	gve_qpl_free ( gve );
@@ -734,6 +893,8 @@ static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 	//
 	( void ) netdev;
 	( void ) iobuf;
+	( void ) gve_qpl_get;
+	( void ) gve_qpl_put;
 	return -ENOTSUP;
 }
 
