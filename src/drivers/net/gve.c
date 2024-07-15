@@ -462,22 +462,22 @@ static int gve_admin ( struct gve_nic *gve ) {
 }
 
 /**
- * Issue command with single ID parameter
+ * Issue simple admin queue command
  *
  * @v gve		GVE device
  * @v opcode		Operation code
- * @v id		ID parameter
  * @ret rc		Return status code
+ *
+ * Several admin queue commands take either an empty parameter list or
+ * a single 32-bit ID parameter which we may choose to always be zero.
  */
-static int gve_admin_single ( struct gve_nic *gve, unsigned int opcode,
-			      unsigned int id ) {
+static int gve_admin_simple ( struct gve_nic *gve, unsigned int opcode ) {
 	union gve_admin_command *cmd;
 	int rc;
 
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = cpu_to_be32 ( opcode );
-	cmd->single.id = cpu_to_be32 ( id );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -559,8 +559,7 @@ static int gve_deconfigure ( struct gve_nic *gve ) {
 	int rc;
 
 	/* Issue command (with meaningless ID) */
-	if ( ( rc = gve_admin_single ( gve,
-				       GVE_ADMIN_DECONFIGURE, 0 ) ) != 0 ) {
+	if ( ( rc = gve_admin_simple ( gve, GVE_ADMIN_DECONFIGURE ) ) != 0 ) {
 		/* Leak memory: there is nothing else we can do */
 		event->counter = NULL;
 		return rc;
@@ -594,7 +593,6 @@ static int gve_register ( struct gve_nic *gve ) {
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_REGISTER );
-	cmd->reg.id = cpu_to_be32 ( GVE_QPL_ID );
 	cmd->reg.count = cpu_to_be32 ( GVE_QPL_COUNT );
 	cmd->reg.addr = cpu_to_be64 ( dma ( &gve->scratch.map, pages ) );
 	cmd->reg.size = cpu_to_be64 ( GVE_PAGE_SIZE );
@@ -617,8 +615,7 @@ static int gve_unregister ( struct gve_nic *gve ) {
 	int rc;
 
 	/* Issue command */
-	if ( ( rc = gve_admin_single ( gve, GVE_ADMIN_UNREGISTER,
-				       GVE_QPL_ID ) ) != 0 ) {
+	if ( ( rc = gve_admin_simple ( gve, GVE_ADMIN_UNREGISTER ) ) != 0 ) {
 		DBGC ( gve, "GVE %p could not free page list: %s\n",
 		       gve, strerror ( rc ) );
 		/* Leak memory: there is nothing else we can do */
@@ -643,14 +640,16 @@ static int gve_create_tx ( struct gve_nic *gve ) {
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_CREATE_TX );
-	cmd->create_tx.id = cpu_to_be32 ( GVE_TX_ID );
 
 	//
 	cmd->create_tx.resources = cpu_to_be64 ( 0x10000 );
+	memset_user ( phys_to_user ( 0x10000 ), 0, 0, 64 );
 
 
 	cmd->create_tx.desc = cpu_to_be64 ( dma ( &tx->map, tx->desc ) );
-	cmd->create_tx.qpl_id = cpu_to_be32 ( GVE_QPL_ID );
+
+	//
+	cmd->create_tx.notify_id = cpu_to_be32 ( 1 );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -670,8 +669,7 @@ static int gve_destroy_tx ( struct gve_nic *gve ) {
 	int rc;
 
 	/* Issue command */
-	if ( ( rc = gve_admin_single ( gve, GVE_ADMIN_DESTROY_TX,
-				       GVE_TX_ID ) ) != 0 ) {
+	if ( ( rc = gve_admin_simple ( gve, GVE_ADMIN_DESTROY_TX ) ) != 0 ) {
 		/* Leak memory: there is nothing else we can do */
 		tx->desc = NULL;
 		return rc;

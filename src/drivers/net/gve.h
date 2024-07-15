@@ -173,9 +173,6 @@ struct gve_admin_register {
 	uint64_t size;
 } __attribute__ (( packed ));
 
-/** Queue page list ID */
-#define GVE_QPL_ID 0x18ae5150UL
-
 /** Page list */
 struct gve_pages {
 	/** Page address */
@@ -206,9 +203,6 @@ struct gve_admin_create_tx {
 	uint32_t notify_id;
 } __attribute__ (( packed ));
 
-/** Transmit queue ID */
-#define GVE_TX_ID 0x18ae5458UL
-
 /** Destroy transmit queue command */
 #define GVE_ADMIN_DESTROY_TX 0x0007
 
@@ -217,14 +211,6 @@ struct gve_admin_create_tx {
 
 /** Deconfigure device resources command */
 #define GVE_ADMIN_DECONFIGURE 0x0009
-
-/** Command with single ID parameter */
-struct gve_admin_single {
-	/** Header */
-	struct gve_admin_header hdr;
-	/** ID */
-	uint32_t id;
-} __attribute__ (( packed ));
 
 /** An admin queue command */
 union gve_admin_command {
@@ -238,8 +224,6 @@ union gve_admin_command {
 	struct gve_admin_register reg;
 	/** Create transmit queue */
 	struct gve_admin_create_tx create_tx;
-	/** Single ID parameter */
-	struct gve_admin_single single;
 	/** Padding */
 	uint8_t pad[64];
 };
