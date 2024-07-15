@@ -230,23 +230,93 @@ gve_dma_free ( struct gve_nic *gve __unused, struct dma_mapping *map,
  */
 
 /**
- * Create admin queues
+ * Allocate admin queue
  *
  * @v gve		GVE device
  * @ret rc		Return status code
  */
-static int gve_create_admin ( struct gve_nic *gve ) {
+static int gve_admin_alloc ( struct gve_nic *gve ) {
 	struct gve_admin *admin = &gve->admin;
-	physaddr_t base;
+	struct gve_scratch *scratch = &gve->scratch;
+	struct gve_event *event = &gve->event;
 	int rc;
 
 	/* Allocate admin queue */
 	admin->cmd = gve_dma_alloc ( gve, &admin->map, GVE_ADMIN_LEN );
 	if ( ! admin->cmd ) {
 		rc = -ENOMEM;
-		goto err_alloc;
+		goto err_admin;
 	}
+
+	/* Allocate scratch buffer */
+	scratch->buf = gve_dma_alloc ( gve, &scratch->map,
+				       sizeof ( *scratch->buf ) );
+	if ( ! scratch->buf ) {
+		rc = -ENOMEM;
+		goto err_scratch;
+	}
+
+	/* Allocate event counter */
+	event->counter = gve_dma_alloc ( gve, &event->map,
+					 sizeof ( *event->counter ) );
+	if ( ! event->counter ) {
+		rc = -ENOMEM;
+		goto err_event;
+	}
+
+	DBGC ( gve, "GVE %p AQ at [%08lx,%08lx)\n",
+	       gve, virt_to_phys ( admin->cmd ),
+	       ( virt_to_phys ( admin->cmd ) + GVE_ADMIN_LEN ) );
+	return 0;
+
+	gve_dma_free ( gve, &event->map, event->counter,
+		       sizeof ( *event->counter ) );
+ err_event:
+	gve_dma_free ( gve, &scratch->map, scratch->buf,
+		       sizeof ( *scratch->buf ) );
+ err_scratch:
+	gve_dma_free ( gve, &admin->map, admin->cmd, GVE_ADMIN_LEN );
+ err_admin:
+	return rc;
+}
+
+/**
+ * Free admin queue
+ *
+ * @v gve		GVE device
+ */
+static void gve_admin_free ( struct gve_nic *gve ) {
+	struct gve_admin *admin = &gve->admin;
+	struct gve_scratch *scratch = &gve->scratch;
+	struct gve_event *event = &gve->event;
+
+	/* Free event counter */
+	assert ( event->counter != NULL );
+	gve_dma_free ( gve, &event->map, event->counter,
+		       sizeof ( *event->counter ) );
+
+	/* Free scratch buffer */
+	assert ( scratch->buf != NULL );
+	gve_dma_free ( gve, &scratch->map, scratch->buf,
+		       sizeof ( *scratch->buf ) );
+
+	/* Free admin queue (if not leaked) */
+	if ( admin->cmd )
+		gve_dma_free ( gve, &admin->map, admin->cmd, GVE_ADMIN_LEN );
+}
+
+/**
+ * Enable admin queue
+ *
+ * @v gve		GVE device
+ */
+static void gve_admin_enable ( struct gve_nic *gve ) {
+	struct gve_admin *admin = &gve->admin;
+	physaddr_t base;
+
+	/* Reset queue */
 	memset ( admin->cmd, 0, GVE_ADMIN_LEN );
+	admin->prod = 0;
 
 	/* Program queue addresses and capabilities */
 	base = dma ( &admin->map, admin->cmd );
@@ -263,23 +333,14 @@ static int gve_create_admin ( struct gve_nic *gve ) {
 	writel ( bswap_16 ( GVE_ADMIN_LEN ), gve->cfg + GVE_CFG_ADMIN_LEN );
 	writel ( bswap_32 ( GVE_CFG_DRVSTAT_RUN ),
 		 gve->cfg + GVE_CFG_DRVSTAT );
-
-	DBGC ( gve, "GVE %p AQ at [%08lx,%08lx)\n",
-	       gve, virt_to_phys ( admin->cmd ),
-	       ( virt_to_phys ( admin->cmd ) + GVE_ADMIN_LEN ) );
-	return 0;
-
-	gve_dma_free ( gve, &admin->map, admin->cmd, GVE_ADMIN_LEN );
- err_alloc:
-	return rc;
 }
 
 /**
- * Destroy admin queues
+ * Disable admin queue and reset device
  *
  * @v gve		GVE device
  */
-static void gve_destroy_admin ( struct gve_nic *gve ) {
+static void gve_admin_disable ( struct gve_nic *gve ) {
 	struct gve_admin *admin = &gve->admin;
 	int rc;
 
@@ -288,11 +349,9 @@ static void gve_destroy_admin ( struct gve_nic *gve ) {
 		DBGC ( gve, "GVE %p could not free AQ: %s\n",
 		       gve, strerror ( rc ) );
 		/* Leak memory: there is nothing else we can do */
+		admin->cmd = NULL;
 		return;
 	}
-
-	/* Free admin queue */
-	gve_dma_free ( gve, &admin->map, admin->cmd, GVE_ADMIN_LEN );
 }
 
 /**
@@ -447,14 +506,6 @@ static int gve_configure ( struct gve_nic *gve ) {
 	union gve_admin_command *cmd;
 	int rc;
 
-	/* Allocate event counter */
-	event->counter = gve_dma_alloc ( gve, &event->map,
-					 sizeof ( *event->counter ) );
-	if ( ! event->counter ) {
-		rc = -ENOMEM;
-		goto err_alloc;
-	}
-
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_CONFIGURE );
@@ -464,15 +515,9 @@ static int gve_configure ( struct gve_nic *gve ) {
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
-		goto err_admin;
+		return rc;
 
 	return 0;
-
- err_admin:
-	gve_dma_free ( gve, &event->map, event->counter,
-		       sizeof ( *event->counter ) );
- err_alloc:
-	return rc;
 }
 
 /**
@@ -482,7 +527,6 @@ static int gve_configure ( struct gve_nic *gve ) {
  * @ret rc		Return status code
  */
 static int gve_deconfigure ( struct gve_nic *gve ) {
-	struct gve_event *event = &gve->event;
 	union gve_admin_command *cmd;
 	int rc;
 
@@ -493,10 +537,6 @@ static int gve_deconfigure ( struct gve_nic *gve ) {
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
 		return rc;
-
-	/* Free event counter */
-	gve_dma_free ( gve, &event->map, event->counter,
-		       sizeof ( *event->counter ) );
 
 	return 0;
 }
@@ -765,17 +805,12 @@ static int gve_probe ( struct pci_device *pci ) {
 	DBGC ( gve, "***** device status %#08x\n",
 	       bswap_32 ( readl ( gve->cfg + GVE_CFG_DEVSTAT ) ) );
 
-	/* Allocate scratch buffer */
-	gve->scratch.buf = gve_dma_alloc ( gve, &gve->scratch.map,
-					   sizeof ( *gve->scratch.buf ) );
-	if ( ! gve->scratch.buf ) {
-		rc = -ENOMEM;
-		goto err_scratch;
-	}
-
-	/* Create admin queue */
-	if ( ( rc = gve_create_admin ( gve ) ) != 0 )
+	/* Allocate admin queue */
+	if ( ( rc = gve_admin_alloc ( gve ) ) != 0 )
 		goto err_admin;
+
+	/* Enable admin queue */
+	gve_admin_enable ( gve );
 
 	/* Fetch MAC address */
 	if ( ( rc = gve_describe ( netdev ) ) != 0 )
@@ -801,11 +836,9 @@ static int gve_probe ( struct pci_device *pci ) {
 	gve_deconfigure ( gve );
  err_configure:
  err_describe:
-	gve_destroy_admin ( gve );
+	gve_admin_disable ( gve );
+	gve_admin_free ( gve );
  err_admin:
-	gve_dma_free ( gve, &gve->scratch.map, gve->scratch.buf,
-		       sizeof ( *gve->scratch.buf ) );
- err_scratch:
  err_reset:
 	iounmap ( gve->cfg );
  err_cfg:
@@ -830,12 +863,11 @@ static void gve_remove ( struct pci_device *pci ) {
 	/* Deconfigure device resources */
 	gve_deconfigure ( gve );
 
-	/* Destroy admin queue and reset device */
-	gve_destroy_admin ( gve );
+	/* Disable admin queue and reset device */
+	gve_admin_disable ( gve );
 
-	/* Free scratch buffer */
-	gve_dma_free ( gve, &gve->scratch.map, gve->scratch.buf,
-		       sizeof ( *gve->scratch.buf ) );
+	/* Free admin queue */
+	gve_admin_free ( gve );
 
 	/* Free network device */
 	iounmap ( gve->cfg );
