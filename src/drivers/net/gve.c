@@ -290,19 +290,20 @@ static void gve_admin_free ( struct gve_nic *gve ) {
 	struct gve_scratch *scratch = &gve->scratch;
 	struct gve_event *event = &gve->event;
 
+	/* Leak memory if we were unable to reset the device */
+	if ( ! admin->cmd )
+		return;
+
 	/* Free event counter */
-	assert ( event->counter != NULL );
 	gve_dma_free ( gve, &event->map, event->counter,
 		       sizeof ( *event->counter ) );
 
 	/* Free scratch buffer */
-	assert ( scratch->buf != NULL );
 	gve_dma_free ( gve, &scratch->map, scratch->buf,
 		       sizeof ( *scratch->buf ) );
 
-	/* Free admin queue (if not leaked) */
-	if ( admin->cmd )
-		gve_dma_free ( gve, &admin->map, admin->cmd, GVE_ADMIN_LEN );
+	/* Free admin queue */
+	gve_dma_free ( gve, &admin->map, admin->cmd, GVE_ADMIN_LEN );
 }
 
 /**
@@ -339,8 +340,9 @@ static void gve_admin_enable ( struct gve_nic *gve ) {
  * Disable admin queue and reset device
  *
  * @v gve		GVE device
+ * @ret rc		Return status code
  */
-static void gve_admin_disable ( struct gve_nic *gve ) {
+static int gve_admin_disable ( struct gve_nic *gve ) {
 	struct gve_admin *admin = &gve->admin;
 	int rc;
 
@@ -350,8 +352,10 @@ static void gve_admin_disable ( struct gve_nic *gve ) {
 		       gve, strerror ( rc ) );
 		/* Leak memory: there is nothing else we can do */
 		admin->cmd = NULL;
-		return;
+		return rc;
 	}
+
+	return 0;
 }
 
 /**
@@ -542,55 +546,40 @@ static int gve_deconfigure ( struct gve_nic *gve ) {
 }
 
 /**
- * Register page list
+ * Register queue page list
  *
  * @v gve		GVE device
  * @ret rc		Return status code
  */
 static int gve_register ( struct gve_nic *gve ) {
-	struct gve_pages *pages = &gve->pages;
-	struct gve_page_list *list = &gve->scratch.buf->list;
+	struct gve_qpl *qpl = &gve->qpl;
+	struct gve_pages *pages = &gve->scratch.buf->pages;
 	union gve_admin_command *cmd;
-	int i;
+	unsigned int i;
 	int rc;
 
-	/* Allocate pages */
-	for ( i = 0 ; i < GVE_PAGE_COUNT ; i++ ) {
-		pages->data[i] = gve_dma_alloc ( gve, &pages->map[i],
-						 GVE_PAGE_SIZE );
-		if ( ! pages->data[i] ) {
-			rc = -ENOMEM;
-			goto err_alloc;
-		}
-		list->addr[i] = cpu_to_be64 ( dma ( &pages->map[i],
-						    pages->data[i] ) );
-		pages->ids[i] = i;
+	/* Reset ring buffer and build page address table */
+	for ( i = 0 ; i < GVE_QPL_COUNT ; i++ ) {
+		qpl->ids[i] = i;
+		pages->addr[i] = cpu_to_be64 ( dma ( &qpl->map[i],
+						     qpl->data[i] ) );
 	}
-	pages->prod = 0;
-	pages->cons = 0;
+	qpl->prod = 0;
+	qpl->cons = 0;
 
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_REGISTER );
 	cmd->reg.id = cpu_to_be32 ( GVE_ADMIN_REGISTER_ID );
-	cmd->reg.count = cpu_to_be32 ( GVE_PAGE_COUNT );
-	cmd->reg.addr = cpu_to_be64 ( dma ( &gve->scratch.map, list ) );
+	cmd->reg.count = cpu_to_be32 ( GVE_QPL_COUNT );
+	cmd->reg.addr = cpu_to_be64 ( dma ( &gve->scratch.map, pages ) );
 	cmd->reg.size = cpu_to_be64 ( GVE_PAGE_SIZE );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
-		goto err_admin;
+		return rc;
 
 	return 0;
-
- err_admin:
-	assert ( i == GVE_PAGE_COUNT );
- err_alloc:
-	for ( i-- ; i >= 0 ; i-- ) {
-		gve_dma_free ( gve, &pages->map[i], pages->data[i],
-			       GVE_PAGE_SIZE );
-	}
-	return rc;
 }
 
 /**
@@ -600,9 +589,8 @@ static int gve_register ( struct gve_nic *gve ) {
  * @ret rc		Return status code
  */
 static int gve_unregister ( struct gve_nic *gve ) {
-	struct gve_pages *pages = &gve->pages;
+	struct gve_qpl *qpl = &gve->qpl;
 	union gve_admin_command *cmd;
-	unsigned int i;
 	int rc;
 
 	/* Construct request */
@@ -615,13 +603,8 @@ static int gve_unregister ( struct gve_nic *gve ) {
 		DBGC ( gve, "GVE %p could not free page list: %s\n",
 		       gve, strerror ( rc ) );
 		/* Leak memory: there is nothing else we can do */
+		qpl->data[0] = NULL;
 		return rc;
-	}
-
-	/* Free page list */
-	for ( i = 0 ; i < GVE_PAGE_COUNT ; i++ ) {
-		gve_dma_free ( gve, &pages->map[i], pages->data[i],
-			       GVE_PAGE_SIZE );
 	}
 
 	return 0;
@@ -633,6 +616,56 @@ static int gve_unregister ( struct gve_nic *gve ) {
  *
  ******************************************************************************
  */
+
+/**
+ * Allocate queue page list
+ *
+ * @v gve		GVE device
+ * @ret rc		Return status code
+ */
+static int gve_qpl_alloc ( struct gve_nic *gve ) {
+	struct gve_qpl *qpl = &gve->qpl;
+	int i;
+	int rc;
+
+	/* Allocate pages */
+	for ( i = 0 ; i < GVE_QPL_COUNT ; i++ ) {
+		qpl->data[i] = gve_dma_alloc ( gve, &qpl->map[i],
+					       GVE_PAGE_SIZE );
+		if ( ! qpl->data[i] ) {
+			rc = -ENOMEM;
+			goto err_alloc;
+		}
+		DBGC2 ( gve, "GVE %p page %#02x at [%08lx,%08lx)\n",
+			gve, i, virt_to_phys ( qpl->data[i] ),
+			( virt_to_phys ( qpl->data[i] ) + GVE_PAGE_SIZE ) );
+	}
+
+	return 0;
+
+ err_alloc:
+	for ( i-- ; i >= 0 ; i-- )
+		gve_dma_free ( gve, &qpl->map[i], qpl->data[i], GVE_PAGE_SIZE );
+	return rc;
+}
+
+/**
+ * Free queue page list
+ *
+ * @v gve		GVE device
+ */
+static void gve_qpl_free ( struct gve_nic *gve ) {
+	struct gve_qpl *qpl = &gve->qpl;
+	unsigned int i;
+
+	/* Leak memory if we were unable to unregister the page list */
+	if ( ! qpl->data[0] )
+		return;
+
+	/* Free page list */
+	for ( i = 0 ; i < GVE_QPL_COUNT ; i++ )
+		gve_dma_free ( gve, &qpl->map[i], qpl->data[i], GVE_PAGE_SIZE );
+}
 
 /**
  * Refill receive queue
@@ -655,6 +688,10 @@ static int gve_open ( struct net_device *netdev ) {
 	struct gve_nic *gve = netdev->priv;
 	int rc;
 
+	/* Allocate queue page list */
+	if ( ( rc = gve_qpl_alloc ( gve ) ) != 0 )
+		goto err_qpl;
+
 	/* Register page list */
 	if ( ( rc = gve_register ( gve ) ) != 0 )
 		goto err_register;
@@ -665,6 +702,8 @@ static int gve_open ( struct net_device *netdev ) {
 
 	gve_unregister ( gve );
  err_register:
+	gve_qpl_free ( gve );
+ err_qpl:
 	return rc;
 }
 
@@ -678,6 +717,9 @@ static void gve_close ( struct net_device *netdev ) {
 
 	/* Unregister page list */
 	gve_unregister ( gve );
+
+	/* Free queue page list */
+	gve_qpl_free ( gve );
 }
 
 /**

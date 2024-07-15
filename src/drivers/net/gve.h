@@ -41,7 +41,7 @@ struct google_mac {
 #define GVE_PAGE_SIZE 0x1000
 
 /** Number of data buffer pages (must be a power of two) */
-#define GVE_PAGE_COUNT 32
+#define GVE_QPL_COUNT 32
 
 /** Configuration BAR */
 #define GVE_CFG_BAR PCI_BASE_ADDRESS_0
@@ -190,9 +190,9 @@ struct gve_admin_register {
 #define GVE_ADMIN_REGISTER_ID 0x69505845UL
 
 /** Page list */
-struct gve_page_list {
+struct gve_pages {
 	/** Page address */
-	uint64_t addr[GVE_PAGE_COUNT];
+	uint64_t addr[GVE_QPL_COUNT];
 } __attribute__ (( packed ));
 
 /** Unregister page list command */
@@ -245,7 +245,7 @@ struct gve_scratch {
 		/** Device descriptor */
 		struct gve_device_descriptor desc;
 		/** Page address list */
-		struct gve_page_list list;
+		struct gve_pages pages;
 	} *buf;
 	/** DMA mapping */
 	struct dma_mapping map;
@@ -295,13 +295,13 @@ struct gve_event {
  * We therefore maintain a ring buffer of DMA-coherent pages, used for
  * both transmit and receive.
  */
-struct gve_pages {
+struct gve_qpl {
 	/** Page addresses */
-	void *data[GVE_PAGE_COUNT];
+	void *data[GVE_QPL_COUNT];
 	/** Page mappings */
-	struct dma_mapping map[GVE_PAGE_COUNT];
+	struct dma_mapping map[GVE_QPL_COUNT];
 	/** Ring buffer */
-	uint8_t ids[GVE_PAGE_COUNT];
+	uint8_t ids[GVE_QPL_COUNT];
 	/** Producer counter */
 	unsigned int prod;
 	/** Consumer counter */
@@ -322,8 +322,8 @@ struct gve_nic {
 	struct gve_admin admin;
 	/** Event counter */
 	struct gve_event event;
-	/** Page list */
-	struct gve_pages pages;
+	/** Queue page list */
+	struct gve_qpl qpl;
 };
 
 /** Maximum time to wait for admin queue commands */
