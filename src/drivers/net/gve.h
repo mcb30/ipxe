@@ -103,9 +103,6 @@ struct google_mac {
 /** Doorbell BAR */
 #define GVE_DB_BAR PCI_BASE_ADDRESS_2
 
-/** Doorbell BAR size */
-#define GVE_DB_SIZE 0x100000
-
 /**
  * Admin queue entry header
  *
@@ -441,6 +438,8 @@ struct gve_tx {
 struct gve_nic {
 	/** Configuration registers */
 	void *cfg;
+	/** Doorbell registers */
+	void *db;
 	/** PCI revision */
 	uint8_t revision;
 	/** DMA device */

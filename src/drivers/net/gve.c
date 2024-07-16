@@ -642,7 +642,7 @@ static int gve_unregister ( struct gve_nic *gve ) {
 static int gve_create_tx ( struct gve_nic *gve ) {
 	struct gve_tx *tx = &gve->tx;
 	union gve_admin_command *cmd;
-	unsigned int db_idx;
+	unsigned int db_off;
 	unsigned int evt_idx;
 	int rc;
 
@@ -657,10 +657,11 @@ static int gve_create_tx ( struct gve_nic *gve ) {
 		return rc;
 
 	/* Record indices */
-	db_idx = be32_to_cpu ( tx->res->db_idx );
+	db_off = ( be32_to_cpu ( tx->res->db_idx ) * sizeof ( uint32_t ) );
 	evt_idx = be32_to_cpu ( tx->res->evt_idx );
-	DBGC ( gve, "GVE %p TX doorbell +%#zx event counter %d\n",
-	       gve, ( db_idx * sizeof ( uint32_t ) ), evt_idx );
+	DBGC ( gve, "GVE %p TX doorbell +%#x event counter %d\n",
+	       gve, db_off, evt_idx );
+	tx->doorbell = ( gve->db + db_off );
 	assert ( evt_idx < gve->events.count );
 	tx->event = &gve->events.event[evt_idx];
 	assert ( tx->event->count == 0 );
@@ -990,6 +991,8 @@ static int gve_probe ( struct pci_device *pci ) {
 	struct net_device *netdev;
 	struct gve_nic *gve;
 	unsigned long cfg_start;
+	unsigned long db_start;
+	unsigned long db_size;
 	int rc;
 
 	/* Allocate and initialise net device */
@@ -1017,6 +1020,15 @@ static int gve_probe ( struct pci_device *pci ) {
 	if ( ! gve->cfg ) {
 		rc = -ENODEV;
 		goto err_cfg;
+	}
+
+	/* Map doorbell registers */
+	db_start = pci_bar_start ( pci, GVE_DB_BAR );
+	db_size = pci_bar_size ( pci, GVE_DB_BAR );
+	gve->db = pci_ioremap ( pci, db_start, db_size );
+	if ( ! gve->db ) {
+		rc = -ENODEV;
+		goto err_db;
 	}
 
 	/* Configure DMA */
@@ -1063,6 +1075,8 @@ static int gve_probe ( struct pci_device *pci ) {
 	gve_admin_free ( gve );
  err_admin:
  err_reset:
+	iounmap ( gve->db );
+ err_db:
 	iounmap ( gve->cfg );
  err_cfg:
 	netdev_nullify ( netdev );
@@ -1092,8 +1106,11 @@ static void gve_remove ( struct pci_device *pci ) {
 	/* Free admin queue */
 	gve_admin_free ( gve );
 
-	/* Free network device */
+	/* Unmap registers */
+	iounmap ( gve->db );
 	iounmap ( gve->cfg );
+
+	/* Free network device */
 	netdev_nullify ( netdev );
 	netdev_put ( netdev );
 }
