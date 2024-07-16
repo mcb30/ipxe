@@ -18,7 +18,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/pci.h>
 #include <ipxe/in.h>
 
-/** A Google Cloud MAC address
+/**
+ * A Google Cloud MAC address
  *
  * Google Cloud locally assigned MAC addresses encode the local IPv4
  * address in the trailing 32 bits, presumably as a performance
@@ -32,13 +33,26 @@ struct google_mac {
 	struct in_addr in;
 } __attribute__ (( packed ));
 
-/** General alignment constraint
- *
- * Several data structures have unstated alignment requirements.
- * Conservatively choose to use page alignment to meet these
- * undocumented requirements.
- */
+/** Page size */
 #define GVE_PAGE_SIZE 0x1000
+
+/**
+ * Address alignment
+ *
+ * All DMA data structure base addresses seem to need to be aligned to
+ * a page boundary.  (This is not documented anywhere, but is inferred
+ * from existing source code and experimentation.)
+ */
+#define GVE_ADDR_ALIGN GVE_PAGE_SIZE
+
+/**
+ * Length alignment
+ *
+ * All DMA data structure lengths seem to need to be aligned to a
+ * multiple of 64 bytes.  (This is not documented anywhere, but is
+ * inferred from existing source code and experimentation.)
+ */
+#define GVE_LEN_ALIGN 64
 
 /** Number of data buffer pages (must be a power of two) */
 #define GVE_QPL_COUNT 32
@@ -46,7 +60,8 @@ struct google_mac {
 /** Configuration BAR */
 #define GVE_CFG_BAR PCI_BASE_ADDRESS_0
 
-/** Configuration BAR size
+/**
+ * Configuration BAR size
  *
  * All registers within the configuration BAR are big-endian.
  */
@@ -91,7 +106,8 @@ struct google_mac {
 /** Doorbell BAR size */
 #define GVE_DB_SIZE 0x100000
 
-/** Admin queue entry header
+/**
+ * Admin queue entry header
  *
  * All values within admin queue entries are big-endian.
  */
@@ -129,8 +145,10 @@ struct gve_device_descriptor {
 	uint8_t reserved_a[16];
 	/** Maximum transmit unit */
 	uint16_t mtu;
+	/** Number of event counters */
+	uint16_t counters;
 	/** Reserved */
-	uint8_t reserved_b[6];
+	uint8_t reserved_b[4];
 	/** MAC address */
 	struct google_mac mac;
 	/** Reserved */
@@ -194,7 +212,7 @@ struct gve_admin_create_tx {
 	/** Reserved */
 	uint8_t reserved_a[4];
 	/** Queue resources address */
-	uint64_t resources;
+	uint64_t res;
 	/** Descriptor ring address */
 	uint64_t desc;
 	/** Queue page list ID */
@@ -228,7 +246,8 @@ union gve_admin_command {
 	uint8_t pad[64];
 };
 
-/** Number of admin queue commands
+/**
+ * Number of admin queue commands
  *
  * This is theoretically a policy decision.  However, older revisions
  * of the hardware seem to have only the "admin queue page frame
@@ -251,7 +270,7 @@ struct gve_admin {
 	struct dma_mapping map;
 };
 
-/** Scratch buffer */
+/** Scratch buffer for admin queue commands */
 struct gve_scratch {
 	/** Buffer contents */
 	union {
@@ -264,15 +283,67 @@ struct gve_scratch {
 	struct dma_mapping map;
 };
 
-/** Event counter */
+/**
+ * An event counter
+ *
+ * Written by the device to indicate transmit completions.  The device
+ * chooses which counter to use for each transmit queue, and stores
+ * the index of the chosen counter in the queue resources.
+ */
 struct gve_event {
-	/** Event counter */
-	uint32_t *counter;
+	/** Number of events that have occurred */
+	uint32_t count;
+} __attribute__ (( packed ));
+
+/**
+ * Maximum number of event counters
+ *
+ * We tell the device how many event counters we have provided via the
+ * "configure device resources" admin queue command.  The device will
+ * accept being given only a single counter, but will subsequently
+ * fail to create a receive queue.
+ *
+ * There is, of course, no documentation indicating how may event
+ * counters actually need to be provided.  In the absence of evidence
+ * to the contrary, assume that 16 counters (i.e. the smallest number
+ * we can allocate, given the length alignment constraint on
+ * allocations) will be sufficient.
+ */
+#define GVE_EVENT_MAX ( GVE_LEN_ALIGN / sizeof ( struct gve_event ) )
+
+/** Event counter array */
+struct gve_events {
+	/** Event counters */
+	struct gve_event *event;
 	/** DMA mapping */
 	struct dma_mapping map;
+	/** Actual number of event counters */
+	unsigned int count;
 };
 
-/** Queue page list
+/**
+ * Queue resources
+ *
+ * Written by the device to indicate the indices of the chosen event
+ * counter and descriptor doorbell register.
+ *
+ * This appears to be a largely pointless data structure: the relevant
+ * information is static for the lifetime of the queue and could
+ * trivially have been returned in the response for the "create
+ * transmit/receive queue" command, instead of requiring yet another
+ * page-aligned coherent DMA buffer allocation.
+ */
+struct gve_resources {
+	/** Descriptor doorbell index */
+	uint32_t db_idx;
+	/** Event counter index */
+	uint32_t evt_idx;
+	/** Reserved */
+	uint8_t reserved[56];
+} __attribute__ (( packed ));
+
+/**
+ * Queue page list
  *
  * The device uses preregistered pages for fast-path DMA operations
  * (i.e. transmit and receive buffers).  A list of device addresses
@@ -335,10 +406,11 @@ struct gve_tx_descriptor {
 	uint64_t offset;
 } __attribute__ (( packed ));
 
-/** Number of transmit descriptors
+/**
+ * Number of transmit descriptors
  *
  * For GQI mode, the transmit descriptor ring must be exactly one page
- * since there ring size field exists only for DQO mode.
+ * since the ring size field exists only for DQO mode.
  */
 #define GVE_TX_COUNT ( GVE_PAGE_SIZE / sizeof ( struct gve_tx_descriptor ) )
 
@@ -347,7 +419,16 @@ struct gve_tx {
 	/** Transmit descriptors */
 	struct gve_tx_descriptor *desc;
 	/** Transmit descriptor mapping */
-	struct dma_mapping map;
+	struct dma_mapping desc_map;
+	/** Queue resources */
+	struct gve_resources *res;
+	/** Queue resources mapping */
+	struct dma_mapping res_map;
+	/** Event counter */
+	struct gve_event *event;
+	/** Doorbell register */
+	volatile uint32_t *doorbell;
+
 	/** Page IDs */
 	uint8_t ids[GVE_TX_COUNT];
 	/** Producer counter */
@@ -368,8 +449,8 @@ struct gve_nic {
 	struct gve_scratch scratch;
 	/** Admin queue */
 	struct gve_admin admin;
-	/** Event counter */
-	struct gve_event event;
+	/** Event counters */
+	struct gve_events events;
 	/** Queue page list */
 	struct gve_qpl qpl;
 	/** Transmit ring */

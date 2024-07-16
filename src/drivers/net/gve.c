@@ -143,8 +143,12 @@ static int gve_reset ( struct gve_nic *gve ) {
 	writel ( 0, gve->cfg + GVE_CFG_ADMIN_PFN );
 
 	/* Trigger reset (for newer hardware) */
+
+	///
+	if ( 0 ) {
 	writel ( bswap_32 ( GVE_CFG_DRVSTAT_RESET ),
 		 gve->cfg + GVE_CFG_DRVSTAT );
+	}
 
 	/* Wait for device to reset */
 	for ( i = 0 ; i < GVE_RESET_MAX_WAIT_MS ; i++ ) {
@@ -190,17 +194,14 @@ gve_dma_alloc ( struct gve_nic *gve, struct dma_mapping *map, size_t len ) {
 	 * the implicit page alignment provided by e.g. the Linux
 	 * kernel's DMA buffer allocation behaviour.
 	 *
-	 * Experimentation suggests that many aspects of the device
-	 * seem to require page-aligned or cacheline-aligned buffers.
-	 * It is unclear whether or not the device will overwrite the
-	 * remainder of the page or cacheline.
-	 *
-	 * For safety, allocate everything on a page boundary, and
-	 * round up the length to a multiple of the page size.
+	 * Experimentation suggests that everything (even tiny data
+	 * structures) must be aligned to a page boundary, and that
+	 * the device will write blocks of 64 bytes.  Round up lengths
+	 * as needed.
 	 */
-	len = ( ( len + GVE_PAGE_SIZE - 1 ) & ~( GVE_PAGE_SIZE - 1 ) );
+	len = ( ( len + GVE_LEN_ALIGN - 1 ) & ~( GVE_LEN_ALIGN - 1 ) );
 
-	return dma_alloc ( gve->dma, map, len, GVE_PAGE_SIZE );
+	return dma_alloc ( gve->dma, map, len, GVE_ADDR_ALIGN );
 }
 
 /**
@@ -216,7 +217,7 @@ gve_dma_free ( struct gve_nic *gve __unused, struct dma_mapping *map,
 	       void *addr, size_t len ) {
 
 	/* Round up length to match that used for allocation */
-	len = ( ( len + GVE_PAGE_SIZE - 1 ) & ~( GVE_PAGE_SIZE - 1 ) );
+	len = ( ( len + GVE_LEN_ALIGN - 1 ) & ~( GVE_LEN_ALIGN - 1 ) );
 
 	/* Free buffer */
 	dma_free ( map, addr, len );
@@ -237,11 +238,11 @@ gve_dma_free ( struct gve_nic *gve __unused, struct dma_mapping *map,
  */
 static int gve_admin_alloc ( struct gve_nic *gve ) {
 	struct gve_admin *admin = &gve->admin;
+	struct gve_events *events = &gve->events;
 	struct gve_scratch *scratch = &gve->scratch;
-	struct gve_event *event = &gve->event;
 	size_t admin_len = ( GVE_ADMIN_COUNT * sizeof ( admin->cmd[0] ) );
+	size_t events_len = ( GVE_EVENT_MAX * sizeof ( events->event[0] ) );
 	size_t scratch_len = sizeof ( *scratch->buf );
-	size_t event_len = sizeof ( *event->counter );
 	int rc;
 
 	/* Allocate admin queue */
@@ -251,6 +252,13 @@ static int gve_admin_alloc ( struct gve_nic *gve ) {
 		goto err_admin;
 	}
 
+	/* Allocate event counters */
+	events->event = gve_dma_alloc ( gve, &events->map, events_len );
+	if ( ! events->event ) {
+		rc = -ENOMEM;
+		goto err_events;
+	}
+
 	/* Allocate scratch buffer */
 	scratch->buf = gve_dma_alloc ( gve, &scratch->map, scratch_len );
 	if ( ! scratch->buf ) {
@@ -258,22 +266,15 @@ static int gve_admin_alloc ( struct gve_nic *gve ) {
 		goto err_scratch;
 	}
 
-	/* Allocate event counter */
-	event->counter = gve_dma_alloc ( gve, &event->map, event_len );
-	if ( ! event->counter ) {
-		rc = -ENOMEM;
-		goto err_event;
-	}
-
 	DBGC ( gve, "GVE %p AQ at [%08lx,%08lx)\n",
 	       gve, virt_to_phys ( admin->cmd ),
 	       ( virt_to_phys ( admin->cmd ) + admin_len ) );
 	return 0;
 
-	gve_dma_free ( gve, &event->map, event->counter, event_len );
- err_event:
 	gve_dma_free ( gve, &scratch->map, scratch->buf, scratch_len );
  err_scratch:
+	gve_dma_free ( gve, &events->map, events->event, events_len );
+ err_events:
 	gve_dma_free ( gve, &admin->map, admin->cmd, admin_len );
  err_admin:
 	return rc;
@@ -286,21 +287,21 @@ static int gve_admin_alloc ( struct gve_nic *gve ) {
  */
 static void gve_admin_free ( struct gve_nic *gve ) {
 	struct gve_admin *admin = &gve->admin;
+	struct gve_events *events = &gve->events;
 	struct gve_scratch *scratch = &gve->scratch;
-	struct gve_event *event = &gve->event;
 	size_t admin_len = ( GVE_ADMIN_COUNT * sizeof ( admin->cmd[0] ) );
+	size_t events_len = ( GVE_EVENT_MAX * sizeof ( events->event[0] ) );
 	size_t scratch_len = sizeof ( *scratch->buf );
-	size_t event_len = sizeof ( *event->counter );
 
 	/* Leak memory if we were unable to reset the device */
-	if ( ! ( admin->cmd && event->counter ) )
+	if ( ! ( admin->cmd && events->event ) )
 		return;
-
-	/* Free event counter */
-	gve_dma_free ( gve, &event->map, event->counter, event_len );
 
 	/* Free scratch buffer */
 	gve_dma_free ( gve, &scratch->map, scratch->buf, scratch_len );
+
+	/* Free event counter */
+	gve_dma_free ( gve, &events->map, events->event, events_len );
 
 	/* Free admin queue */
 	gve_dma_free ( gve, &admin->map, admin->cmd, admin_len );
@@ -393,6 +394,7 @@ static int gve_admin_wait ( struct gve_nic *gve ) {
 	for ( i = 0 ; i < GVE_ADMIN_MAX_WAIT_MS ; i++ ) {
 
 		/* Check event counter */
+		rmb();
 		evt = bswap_32 ( readl ( gve->cfg + GVE_CFG_ADMIN_EVT ) );
 		if ( evt == admin->prod )
 			return 0;
@@ -512,14 +514,19 @@ static int gve_describe ( struct net_device *netdev ) {
 	DBGC2_HDA ( gve, 0, desc, sizeof ( *desc ) );
 
 	/* Extract parameters */
+	gve->events.count = be16_to_cpu ( desc->counters );
+	if ( gve->events.count > GVE_EVENT_MAX )
+		gve->events.count = GVE_EVENT_MAX;
+	DBGC ( gve, "GVE %p using %d/%d event counters\n",
+	       gve, gve->events.count, be16_to_cpu ( desc->counters ) );
 	build_assert ( sizeof ( desc->mac ) == ETH_ALEN );
 	memcpy ( netdev->hw_addr, &desc->mac, sizeof ( desc->mac ) );
 	netdev->mtu = be16_to_cpu ( desc->mtu );
 	netdev->max_pkt_len = ( netdev->mtu + ETH_HLEN );
-
 	DBGC ( gve, "GVE %p MAC %s (\"%s\") MTU %zd\n",
 	       gve, eth_ntoa ( netdev->hw_addr ),
 	       inet_ntoa ( desc->mac.in ), netdev->mtu );
+
 	return 0;
 }
 
@@ -530,7 +537,7 @@ static int gve_describe ( struct net_device *netdev ) {
  * @ret rc		Return status code
  */
 static int gve_configure ( struct gve_nic *gve ) {
-	struct gve_event *event = &gve->event;
+	struct gve_events *events = &gve->events;
 	union gve_admin_command *cmd;
 	int rc;
 
@@ -538,8 +545,8 @@ static int gve_configure ( struct gve_nic *gve ) {
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_CONFIGURE );
 	cmd->conf.counters =
-		cpu_to_be64 ( dma ( &event->map, event->counter ) );
-	cmd->conf.num_counters = cpu_to_be32 ( 1 );
+		cpu_to_be64 ( dma ( &events->map, events->event ) );
+	cmd->conf.num_counters = cpu_to_be32 ( events->count );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -555,13 +562,13 @@ static int gve_configure ( struct gve_nic *gve ) {
  * @ret rc		Return status code
  */
 static int gve_deconfigure ( struct gve_nic *gve ) {
-	struct gve_event *event = &gve->event;
+	struct gve_events *events = &gve->events;
 	int rc;
 
 	/* Issue command (with meaningless ID) */
 	if ( ( rc = gve_admin_simple ( gve, GVE_ADMIN_DECONFIGURE ) ) != 0 ) {
 		/* Leak memory: there is nothing else we can do */
-		event->counter = NULL;
+		events->event = NULL;
 		return rc;
 	}
 
@@ -635,25 +642,28 @@ static int gve_unregister ( struct gve_nic *gve ) {
 static int gve_create_tx ( struct gve_nic *gve ) {
 	struct gve_tx *tx = &gve->tx;
 	union gve_admin_command *cmd;
+	unsigned int db_idx;
+	unsigned int evt_idx;
 	int rc;
 
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = cpu_to_be32 ( GVE_ADMIN_CREATE_TX );
-
-	//
-	cmd->create_tx.resources = cpu_to_be64 ( 0x10000 );
-	memset_user ( phys_to_user ( 0x10000 ), 0, 0, 64 );
-
-
-	cmd->create_tx.desc = cpu_to_be64 ( dma ( &tx->map, tx->desc ) );
-
-	//
-	cmd->create_tx.notify_id = cpu_to_be32 ( 1 );
+	cmd->create_tx.res = cpu_to_be64 ( dma ( &tx->res_map, tx->res ) );
+	cmd->create_tx.desc = cpu_to_be64 ( dma ( &tx->desc_map, tx->desc ) );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
 		return rc;
+
+	/* Record indices */
+	db_idx = be32_to_cpu ( tx->res->db_idx );
+	evt_idx = be32_to_cpu ( tx->res->evt_idx );
+	DBGC ( gve, "GVE %p TX doorbell +%#zx event counter %d\n",
+	       gve, ( db_idx * sizeof ( uint32_t ) ), evt_idx );
+	assert ( evt_idx < gve->events.count );
+	tx->event = &gve->events.event[evt_idx];
+	assert ( tx->event->count == 0 );
 
 	return 0;
 }
@@ -778,17 +788,34 @@ static void gve_qpl_put ( struct gve_nic *gve, int id ) {
 static int gve_tx_alloc ( struct gve_nic *gve ) {
 	struct gve_tx *tx = &gve->tx;
 	size_t len = ( sizeof ( tx->desc[0] ) * GVE_TX_COUNT );
+	int rc;
 
 	/* Sanity check: ensure TX ring cannot fill up */
 	build_assert ( GVE_TX_COUNT > GVE_QPL_COUNT );
 
 	/* Allocate transmit descriptors */
-	tx->desc = gve_dma_alloc ( gve, &tx->map, len );
-	if ( ! tx->desc )
-		return -ENOMEM;
+	tx->desc = gve_dma_alloc ( gve, &tx->desc_map, len );
+	if ( ! tx->desc ) {
+		rc = -ENOMEM;
+		goto err_desc;
+	}
 	memset ( tx->desc, 0, len );
 
+	/* Allocate queue resources */
+	tx->res = gve_dma_alloc ( gve, &tx->res_map, sizeof ( *tx->res ) );
+	if ( ! tx->desc ) {
+		rc = -ENOMEM;
+		goto err_res;
+	}
+	memset ( tx->res, 0, sizeof ( *tx->res ) );
+
 	return 0;
+
+	gve_dma_free ( gve, &tx->res_map, tx->res, sizeof ( *tx->res ) );
+ err_res:
+	gve_dma_free ( gve, &tx->desc_map, tx->desc, len );
+ err_desc:
+	return rc;
 }
 
 /**
@@ -804,8 +831,11 @@ static void gve_tx_free ( struct gve_nic *gve ) {
 	if ( ! tx->desc )
 		return;
 
+	/* Free queue resources */
+	gve_dma_free ( gve, &tx->res_map, tx->res, sizeof ( *tx->res ) );
+
 	/* Free transmit descriptors */
-	gve_dma_free ( gve, &tx->map, tx->desc, len );
+	gve_dma_free ( gve, &tx->desc_map, tx->desc, len );
 }
 
 /**
@@ -997,14 +1027,6 @@ static int gve_probe ( struct pci_device *pci ) {
 	/* Reset the NIC */
 	if ( ( rc = gve_reset ( gve ) ) != 0 )
 		goto err_reset;
-
-	///
-	DBGC ( gve, "***** device status %#08x\n",
-	       bswap_32 ( readl ( gve->cfg + GVE_CFG_DEVSTAT ) ) );
-	DBGC ( gve, "***** waiting for possible device reset\n" );
-	mdelay ( 5000 );
-	DBGC ( gve, "***** device status %#08x\n",
-	       bswap_32 ( readl ( gve->cfg + GVE_CFG_DEVSTAT ) ) );
 
 	/* Allocate admin queue */
 	if ( ( rc = gve_admin_alloc ( gve ) ) != 0 )
