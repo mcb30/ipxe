@@ -18,6 +18,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/pci.h>
 #include <ipxe/in.h>
 
+struct gve_nic;
+
 /**
  * A Google Cloud MAC address
  *
@@ -54,8 +56,8 @@ struct google_mac {
  */
 #define GVE_LEN_ALIGN 64
 
-/** Number of data buffer pages (must be a power of two) */
-#define GVE_QPL_COUNT 32
+/** Number of queue pages (must be a power of two) */
+#define GVE_QPL_COUNT 16
 
 /** Configuration BAR */
 #define GVE_CFG_BAR PCI_BASE_ADDRESS_0
@@ -109,8 +111,10 @@ struct google_mac {
  * All values within admin queue entries are big-endian.
  */
 struct gve_admin_header {
+	/** Reserved */
+	uint8_t reserved[3];
 	/** Operation code */
-	uint32_t opcode;
+	uint8_t opcode;
 	/** Status */
 	uint32_t status;
 } __attribute__ (( packed ));
@@ -139,17 +143,23 @@ struct gve_admin_describe {
 /** Device descriptor */
 struct gve_device_descriptor {
 	/** Reserved */
-	uint8_t reserved_a[16];
+	uint8_t reserved_a[10];
+	/** Number of transmit queue entries */
+	uint16_t tx_count;
+	/** Number of receive queue entries */
+	uint16_t rx_count;
+	/** Reserved */
+	uint8_t reserved_b[2];
 	/** Maximum transmit unit */
 	uint16_t mtu;
 	/** Number of event counters */
 	uint16_t counters;
 	/** Reserved */
-	uint8_t reserved_b[4];
+	uint8_t reserved_c[4];
 	/** MAC address */
 	struct google_mac mac;
 	/** Reserved */
-	uint8_t reserved_c[10];
+	uint8_t reserved_d[10];
 } __attribute__ (( packed ));
 
 /** Configure device resources command */
@@ -218,6 +228,33 @@ struct gve_admin_create_tx {
 	uint32_t notify_id;
 } __attribute__ (( packed ));
 
+/** Create receive queue command */
+#define GVE_ADMIN_CREATE_RX 0x0006
+
+/** Create receive queue command */
+struct gve_admin_create_rx {
+	/** Header */
+	struct gve_admin_header hdr;
+	/** Queue ID */
+	uint32_t id;
+	/** Index */
+	uint32_t index;
+	/** Reserved */
+	uint8_t reserved_a[4];
+	/** Notification channel ID */
+	uint32_t notify_id;
+	/** Queue resources address */
+	uint64_t res;
+	/** Descriptor ring address */
+	uint64_t desc;
+	/** Completion ring address */
+	uint64_t cmplt;
+	/** Queue page list ID */
+	uint32_t qpl_id;
+	/** Reserved */
+	uint8_t reserved_b[4];
+} __attribute__ (( packed ));
+
 /** Destroy transmit queue command */
 #define GVE_ADMIN_DESTROY_TX 0x0007
 
@@ -239,6 +276,8 @@ union gve_admin_command {
 	struct gve_admin_register reg;
 	/** Create transmit queue */
 	struct gve_admin_create_tx create_tx;
+	/** Create receive queue */
+	struct gve_admin_create_rx create_rx;
 	/** Padding */
 	uint8_t pad[64];
 };
@@ -340,6 +379,20 @@ struct gve_resources {
 } __attribute__ (( packed ));
 
 /**
+ * Queue data buffer size
+ *
+ * In theory, we may specify the size of receive buffers.  However,
+ * the original version of the device seems not to have a parameter
+ * for this, and assumes the use of half-page (2kB) buffers.  Choose
+ * to use this as the buffer size, on the assumption that older
+ * devices will not support any other buffer size.
+ */
+#define GVE_BUF_SIZE ( GVE_PAGE_SIZE / 2 )
+
+/** Number of queue data buffers */
+#define GVE_BUF_COUNT ( GVE_QPL_COUNT * ( GVE_PAGE_SIZE / GVE_BUF_SIZE ) )
+
+/**
  * Queue page list
  *
  * The device uses preregistered pages for fast-path DMA operations
@@ -381,8 +434,8 @@ struct gve_qpl {
 	void *data[GVE_QPL_COUNT];
 	/** Page mappings */
 	struct dma_mapping map[GVE_QPL_COUNT];
-	/** Page ID ring buffer */
-	uint8_t ids[GVE_QPL_COUNT];
+	/** Buffer ID ring */
+	uint8_t ids[GVE_BUF_COUNT];
 	/** Producer counter */
 	unsigned int prod;
 	/** Consumer counter */
@@ -403,35 +456,103 @@ struct gve_tx_descriptor {
 	uint64_t offset;
 } __attribute__ (( packed ));
 
-/**
- * Number of transmit descriptors
- *
- * For GQI mode, the transmit descriptor ring must be exactly one page
- * since the ring size field exists only for DQO mode.
- */
-#define GVE_TX_COUNT ( GVE_PAGE_SIZE / sizeof ( struct gve_tx_descriptor ) )
+/** A receive descriptor */
+struct gve_rx_descriptor {
+	/** Offset within QPL address space */
+	uint64_t offset;
+} __attribute__ (( packed ));
 
-/** Transmit ring */
-struct gve_tx {
-	/** Transmit descriptors */
-	struct gve_tx_descriptor *desc;
-	/** Transmit descriptor mapping */
-	struct dma_mapping desc_map;
+/** A receive completion descriptor */
+struct gve_rx_completion {
+	/** Reserved */
+	uint8_t reserved[60];
+	/** Length */
+	uint16_t len;
+	/** Flags */
+	uint8_t flags;
+	/** Sequence number */
+	uint8_t seq;
+};
+
+/** Receive error */
+#define GVE_RXF_ERROR 0x08
+
+/** Receive packet continues into next descriptor */
+#define GVE_RXF_MORE 0x20
+
+/** Receive sequence number mask */
+#define GVE_RX_SEQ_MASK 0x07
+
+/** A descriptor queue */
+struct gve_queue {
+	/** Descriptor ring */
+	union {
+		/** Transmit descriptors */
+		struct gve_tx_descriptor *tx;
+		/** Receive descriptors */
+		struct gve_rx_descriptor *rx;
+		/** Raw pointer */
+		void *raw;
+	} desc;
+	/** Completion ring */
+	union {
+		/** Receive completions */
+		struct gve_rx_completion *rx;
+		/** Raw pointer */
+		void *raw;
+	} cmplt;
 	/** Queue resources */
 	struct gve_resources *res;
+
+	/** Queue type */
+	const struct gve_queue_type *type;
+	/** Number of descriptors */
+	unsigned int count;
+	/** Maximum fill level */
+	unsigned int max;
+
+	/** Descriptor mapping */
+	struct dma_mapping desc_map;
+	/** Completion mapping */
+	struct dma_mapping cmplt_map;
 	/** Queue resources mapping */
 	struct dma_mapping res_map;
+
 	/** Event counter */
 	struct gve_event *event;
 	/** Doorbell register */
 	volatile uint32_t *doorbell;
 
-	/** Page IDs */
-	uint8_t ids[GVE_TX_COUNT];
+	/** Buffer IDs */
+	uint8_t ids[GVE_BUF_COUNT];
 	/** Producer counter */
 	unsigned int prod;
 	/** Consumer counter */
 	unsigned int cons;
+};
+
+/** A descriptor queue type */
+struct gve_queue_type {
+	/** Name */
+	const char *name;
+	/**
+	 * Populate command parameters to create queue
+	 *
+	 * @v queue		Descriptor queue
+	 * @v cmd		Admin queue command
+	 */
+	void ( * param ) ( struct gve_queue *queue,
+			   union gve_admin_command *cmd );
+	/** Descriptor size */
+	uint8_t desc_len;
+	/** Completion size */
+	uint8_t cmplt_len;
+	/** Maximum fill level */
+	uint8_t max;
+	/** Command to create queue */
+	uint8_t create;
+	/** Command to destroy queue */
+	uint8_t destroy;
 };
 
 /** A Google Virtual Ethernet NIC */
@@ -452,11 +573,19 @@ struct gve_nic {
 	struct gve_events events;
 	/** Queue page list */
 	struct gve_qpl qpl;
-	/** Transmit ring */
-	struct gve_tx tx;
+	/** Transmit queue */
+	struct gve_queue tx;
+	/** Receive queue */
+	struct gve_queue rx;
 };
 
 /** Maximum time to wait for admin queue commands */
 #define GVE_ADMIN_MAX_WAIT_MS 5000
+
+/** Maximum number of transmit buffers in use */
+#define GVE_TX_MAX 8
+
+/** Maximum number of receive buffers in use */
+#define GVE_RX_MAX ( GVE_BUF_COUNT - GVE_TX_MAX )
 
 #endif /* _GVE_H */
