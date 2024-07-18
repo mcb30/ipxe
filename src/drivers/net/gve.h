@@ -56,8 +56,8 @@ struct google_mac {
  */
 #define GVE_LEN_ALIGN 64
 
-/** Number of queue pages (must be a power of two) */
-#define GVE_QPL_COUNT 16
+/** Maximum number of pages per queue (must be a power of two) */
+#define GVE_QPL_MAX 16
 
 /** Configuration BAR */
 #define GVE_CFG_BAR PCI_BASE_ADDRESS_0
@@ -121,6 +121,14 @@ struct gve_admin_header {
 
 /** Command succeeded */
 #define GVE_ADMIN_STATUS_OK 0x00000001
+
+/** Simple admin command */
+struct gve_admin_simple {
+	/** Header */
+	struct gve_admin_header hdr;
+	/** ID */
+	uint32_t id;
+} __attribute__ (( packed ));
 
 /** Describe device command */
 #define GVE_ADMIN_DESCRIBE 0x0001
@@ -201,7 +209,7 @@ struct gve_admin_register {
 /** Page list */
 struct gve_pages {
 	/** Page address */
-	uint64_t addr[GVE_QPL_COUNT];
+	uint64_t addr[GVE_QPL_MAX];
 } __attribute__ (( packed ));
 
 /** Unregister page list command */
@@ -252,7 +260,9 @@ struct gve_admin_create_rx {
 	/** Queue page list ID */
 	uint32_t qpl_id;
 	/** Reserved */
-	uint8_t reserved_b[4];
+	uint8_t reserved_b[2];
+	/** Packet buffer size */
+	uint16_t bufsz;
 } __attribute__ (( packed ));
 
 /** Destroy transmit queue command */
@@ -268,6 +278,8 @@ struct gve_admin_create_rx {
 union gve_admin_command {
 	/** Header */
 	struct gve_admin_header hdr;
+	/** Simple command */
+	struct gve_admin_simple simple;
 	/** Describe device */
 	struct gve_admin_describe desc;
 	/** Configure device resources */
@@ -322,9 +334,9 @@ struct gve_scratch {
 /**
  * An event counter
  *
- * Written by the device to indicate transmit completions.  The device
- * chooses which counter to use for each transmit queue, and stores
- * the index of the chosen counter in the queue resources.
+ * Written by the device to indicate completions.  The device chooses
+ * which counter to use for each transmit queue, and stores the index
+ * of the chosen counter in the queue resources.
  */
 struct gve_event {
 	/** Number of events that have occurred */
@@ -389,8 +401,8 @@ struct gve_resources {
  */
 #define GVE_BUF_SIZE ( GVE_PAGE_SIZE / 2 )
 
-/** Number of queue data buffers */
-#define GVE_BUF_COUNT ( GVE_QPL_COUNT * ( GVE_PAGE_SIZE / GVE_BUF_SIZE ) )
+/** Maximum number of data buffers per queue */
+#define GVE_BUF_MAX ( GVE_QPL_MAX * ( GVE_PAGE_SIZE / GVE_BUF_SIZE ) )
 
 /**
  * Queue page list
@@ -425,22 +437,27 @@ struct gve_resources {
  * documentation, it is probably unsafe to conclude that the device is
  * bothering to look at or respect the "page size" parameter: it is
  * most likely just presuming the use of 4kB pages.
- *
- * We therefore maintain a ring buffer of DMA-coherent pages, used for
- * both transmit and receive.
  */
 struct gve_qpl {
 	/** Page addresses */
-	void *data[GVE_QPL_COUNT];
+	void *data[GVE_QPL_MAX];
 	/** Page mappings */
-	struct dma_mapping map[GVE_QPL_COUNT];
-	/** Buffer ID ring */
-	uint8_t ids[GVE_BUF_COUNT];
-	/** Producer counter */
-	unsigned int prod;
-	/** Consumer counter */
-	unsigned int cons;
+	struct dma_mapping map[GVE_QPL_MAX];
+	/** Number of pages */
+	unsigned int count;
+	/** Queue page list ID */
+	unsigned int id;
 };
+
+/**
+ * Maximum number of transmit buffers in use
+ *
+ * This is a policy decision.
+ */
+#define GVE_TX_MAX 8
+
+/** Transmit queue page list ID */
+#define GVE_TX_QPL 0x18ae5458
 
 /** A transmit descriptor */
 struct gve_tx_descriptor {
@@ -455,6 +472,16 @@ struct gve_tx_descriptor {
 	/** Offset within QPL address space */
 	uint64_t offset;
 } __attribute__ (( packed ));
+
+/**
+ * Maximum number of receive buffers in use
+ *
+ * This is a policy decision.
+ */
+#define GVE_RX_MAX 16
+
+/** Receive queue page list ID */
+#define GVE_RX_QPL 0x18ae5258
 
 /** A receive descriptor */
 struct gve_rx_descriptor {
@@ -523,12 +550,13 @@ struct gve_queue {
 	/** Doorbell register */
 	volatile uint32_t *doorbell;
 
-	/** Buffer IDs */
-	uint8_t ids[GVE_BUF_COUNT];
 	/** Producer counter */
 	unsigned int prod;
 	/** Consumer counter */
 	unsigned int cons;
+
+	/** Queue page list */
+	struct gve_qpl qpl;
 };
 
 /** A descriptor queue type */
@@ -543,12 +571,14 @@ struct gve_queue_type {
 	 */
 	void ( * param ) ( struct gve_queue *queue,
 			   union gve_admin_command *cmd );
+	/** Queue page list ID */
+	uint32_t qpl;
+	/** Maximum fill level */
+	uint8_t max;
 	/** Descriptor size */
 	uint8_t desc_len;
 	/** Completion size */
 	uint8_t cmplt_len;
-	/** Maximum fill level */
-	uint8_t max;
 	/** Command to create queue */
 	uint8_t create;
 	/** Command to destroy queue */
@@ -571,8 +601,6 @@ struct gve_nic {
 	struct gve_admin admin;
 	/** Event counters */
 	struct gve_events events;
-	/** Queue page list */
-	struct gve_qpl qpl;
 	/** Transmit queue */
 	struct gve_queue tx;
 	/** Receive queue */
@@ -581,11 +609,5 @@ struct gve_nic {
 
 /** Maximum time to wait for admin queue commands */
 #define GVE_ADMIN_MAX_WAIT_MS 5000
-
-/** Maximum number of transmit buffers in use */
-#define GVE_TX_MAX 8
-
-/** Maximum number of receive buffers in use */
-#define GVE_RX_MAX ( GVE_BUF_COUNT - GVE_TX_MAX )
 
 #endif /* _GVE_H */
