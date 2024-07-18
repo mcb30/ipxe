@@ -556,6 +556,11 @@ static int gve_configure ( struct gve_nic *gve ) {
 		cpu_to_be64 ( dma ( &events->map, events->event ) );
 	cmd->conf.num_counters = cpu_to_be32 ( events->count );
 
+	//
+	cmd->conf.doorbells = cpu_to_be64 ( 0x10000 );
+	cmd->conf.num_doorbells = cpu_to_be32 ( 2 );
+	cmd->conf.stride = cpu_to_be32 ( 64 );
+
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
 		return rc;
@@ -942,7 +947,6 @@ static int gve_open ( struct net_device *netdev ) {
 		goto err_register_rx;
 
 	/* Create transmit queue */
-	///
 	if ( ( rc = gve_create_queue ( gve, &gve->tx ) ) != 0 )
 		goto err_create_tx;
 
