@@ -564,6 +564,8 @@ static int gve_configure ( struct gve_nic *gve ) {
 	struct gve_events *events = &gve->events;
 	struct gve_irqs *irqs = &gve->irqs;
 	union gve_admin_command *cmd;
+	unsigned int db_off;
+	unsigned int i;
 	int rc;
 
 	/* Construct request */
@@ -580,6 +582,15 @@ static int gve_configure ( struct gve_nic *gve ) {
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
 		return rc;
+
+	/* Disable all interrupts */
+	for ( i = 0 ; i < GVE_IRQ_COUNT ; i++ ) {
+		db_off = ( be32_to_cpu ( irqs->irq[i].db_idx ) *
+			   sizeof ( uint32_t ) );
+		DBGC ( gve, "GVE %p IRQ %d doorbell +%#04x\n", gve, i, db_off );
+		irqs->db[i] = ( gve->db + db_off );
+		writel ( bswap_32 ( GVE_IRQ_DISABLE ), irqs->db[i] );
+	}
 
 	return 0;
 }
@@ -719,7 +730,6 @@ static void gve_create_rx_param ( struct gve_queue *queue,
 static int gve_create_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	const struct gve_queue_type *type = queue->type;
 	union gve_admin_command *cmd;
-	unsigned int irq_off;
 	unsigned int db_off;
 	unsigned int evt_idx;
 	int rc;
@@ -734,12 +744,11 @@ static int gve_create_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 		return rc;
 
 	/* Record indices */
-	irq_off = be32_to_cpu ( gve->irqs.irq[type->irq].db_idx );
 	db_off = ( be32_to_cpu ( queue->res->db_idx ) * sizeof ( uint32_t ) );
 	evt_idx = be32_to_cpu ( queue->res->evt_idx );
-	DBGC ( gve, "GVE %p %s IRQ +%#04x doorbell +%#04x event counter %d\n",
-	       gve, type->name, irq_off, db_off, evt_idx );
-	queue->doorbell = ( gve->db + db_off );
+	DBGC ( gve, "GVE %p %s doorbell +%#04x event counter %d\n",
+	       gve, type->name, db_off, evt_idx );
+	queue->db = ( gve->db + db_off );
 	assert ( evt_idx < gve->events.count );
 	queue->event = &gve->events.event[evt_idx];
 	assert ( queue->event->count == 0 );

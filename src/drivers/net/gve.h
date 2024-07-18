@@ -343,16 +343,6 @@ struct gve_event {
 	uint32_t count;
 } __attribute__ (( packed ));
 
-/** Event counter array */
-struct gve_events {
-	/** Event counters */
-	struct gve_event *event;
-	/** DMA mapping */
-	struct dma_mapping map;
-	/** Actual number of event counters */
-	unsigned int count;
-};
-
 /**
  * Maximum number of event counters
  *
@@ -369,21 +359,23 @@ struct gve_events {
  */
 #define GVE_EVENT_MAX ( GVE_LEN_ALIGN / sizeof ( struct gve_event ) )
 
+/** Event counter array */
+struct gve_events {
+	/** Event counters */
+	struct gve_event *event;
+	/** DMA mapping */
+	struct dma_mapping map;
+	/** Actual number of event counters */
+	unsigned int count;
+};
+
 /** An interrupt channel */
 struct gve_irq {
-	/** Interrupt doorbell index */
+	/** Interrupt doorbell index (within doorbell BAR) */
 	uint32_t db_idx;
 	/** Reserved */
 	uint8_t reserved[60];
 } __attribute__ (( packed ));
-
-/** Interrupt channel array */
-struct gve_irqs {
-	/** Interrupt channels */
-	struct gve_irq *irq;
-	/** DMA mapping */
-	struct dma_mapping map;
-};
 
 /**
  * Number of interrupt channels
@@ -401,6 +393,19 @@ struct gve_irqs {
  */
 #define GVE_IRQ_COUNT 2
 
+/** Interrupt channel array */
+struct gve_irqs {
+	/** Interrupt channels */
+	struct gve_irq *irq;
+	/** DMA mapping */
+	struct dma_mapping map;
+	/** Interrupt doorbells */
+	volatile uint32_t *db[GVE_IRQ_COUNT];
+};
+
+/** Disable interrupts */
+#define GVE_IRQ_DISABLE 0x40000000UL
+
 /**
  * Queue resources
  *
@@ -414,9 +419,9 @@ struct gve_irqs {
  * page-aligned coherent DMA buffer allocation.
  */
 struct gve_resources {
-	/** Descriptor doorbell index */
+	/** Descriptor doorbell index (within doorbell BAR) */
 	uint32_t db_idx;
-	/** Event counter index */
+	/** Event counter index (within event counter array) */
 	uint32_t evt_idx;
 	/** Reserved */
 	uint8_t reserved[56];
@@ -583,10 +588,10 @@ struct gve_queue {
 	/** Queue resources mapping */
 	struct dma_mapping res_map;
 
+	/** Doorbell register */
+	volatile uint32_t *db;
 	/** Event counter */
 	struct gve_event *event;
-	/** Doorbell register */
-	volatile uint32_t *doorbell;
 
 	/** Producer counter */
 	unsigned int prod;
