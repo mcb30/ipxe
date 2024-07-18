@@ -238,9 +238,11 @@ gve_dma_free ( struct gve_nic *gve __unused, struct dma_mapping *map,
  */
 static int gve_admin_alloc ( struct gve_nic *gve ) {
 	struct gve_admin *admin = &gve->admin;
+	struct gve_irqs *irqs = &gve->irqs;
 	struct gve_events *events = &gve->events;
 	struct gve_scratch *scratch = &gve->scratch;
 	size_t admin_len = ( GVE_ADMIN_COUNT * sizeof ( admin->cmd[0] ) );
+	size_t irqs_len = ( GVE_IRQ_COUNT * sizeof ( irqs->irq[0] ) );
 	size_t events_len = ( GVE_EVENT_MAX * sizeof ( events->event[0] ) );
 	size_t scratch_len = sizeof ( *scratch->buf );
 	int rc;
@@ -250,6 +252,13 @@ static int gve_admin_alloc ( struct gve_nic *gve ) {
 	if ( ! admin->cmd ) {
 		rc = -ENOMEM;
 		goto err_admin;
+	}
+
+	/* Allocate interrupt channels */
+	irqs->irq = gve_dma_alloc ( gve, &irqs->map, irqs_len );
+	if ( ! irqs->irq ) {
+		rc = -ENOMEM;
+		goto err_irqs;
 	}
 
 	/* Allocate event counters */
@@ -275,6 +284,8 @@ static int gve_admin_alloc ( struct gve_nic *gve ) {
  err_scratch:
 	gve_dma_free ( gve, &events->map, events->event, events_len );
  err_events:
+	gve_dma_free ( gve, &irqs->map, irqs->irq, irqs_len );
+ err_irqs:
 	gve_dma_free ( gve, &admin->map, admin->cmd, admin_len );
  err_admin:
 	return rc;
@@ -287,9 +298,11 @@ static int gve_admin_alloc ( struct gve_nic *gve ) {
  */
 static void gve_admin_free ( struct gve_nic *gve ) {
 	struct gve_admin *admin = &gve->admin;
+	struct gve_irqs *irqs = &gve->irqs;
 	struct gve_events *events = &gve->events;
 	struct gve_scratch *scratch = &gve->scratch;
 	size_t admin_len = ( GVE_ADMIN_COUNT * sizeof ( admin->cmd[0] ) );
+	size_t irqs_len = ( GVE_IRQ_COUNT * sizeof ( irqs->irq[0] ) );
 	size_t events_len = ( GVE_EVENT_MAX * sizeof ( events->event[0] ) );
 	size_t scratch_len = sizeof ( *scratch->buf );
 
@@ -302,6 +315,9 @@ static void gve_admin_free ( struct gve_nic *gve ) {
 
 	/* Free event counter */
 	gve_dma_free ( gve, &events->map, events->event, events_len );
+
+	/* Free interrupt channels */
+	gve_dma_free ( gve, &irqs->map, irqs->irq, irqs_len );
 
 	/* Free admin queue */
 	gve_dma_free ( gve, &admin->map, admin->cmd, admin_len );
@@ -546,20 +562,20 @@ static int gve_describe ( struct net_device *netdev ) {
  */
 static int gve_configure ( struct gve_nic *gve ) {
 	struct gve_events *events = &gve->events;
+	struct gve_irqs *irqs = &gve->irqs;
 	union gve_admin_command *cmd;
 	int rc;
 
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = GVE_ADMIN_CONFIGURE;
-	cmd->conf.counters =
+	cmd->conf.events =
 		cpu_to_be64 ( dma ( &events->map, events->event ) );
-	cmd->conf.num_counters = cpu_to_be32 ( events->count );
-
-	//
-	cmd->conf.doorbells = cpu_to_be64 ( 0x10000 );
-	cmd->conf.num_doorbells = cpu_to_be32 ( 2 );
-	cmd->conf.stride = cpu_to_be32 ( 64 );
+	cmd->conf.irqs =
+		cpu_to_be64 ( dma ( &irqs->map, irqs->irq ) );
+	cmd->conf.num_events = cpu_to_be32 ( events->count );
+	cmd->conf.num_irqs = cpu_to_be32 ( GVE_IRQ_COUNT );
+	cmd->conf.irq_stride = cpu_to_be32 ( sizeof ( irqs->irq[0] ) );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -649,35 +665,47 @@ static int gve_unregister ( struct gve_nic *gve, struct gve_qpl *qpl ) {
 /**
  * Construct command to create transmit queue
  *
- * @v tx		Transmit queue
+ * @v queue		Transmit queue
  * @v cmd		Admin queue command
  */
-static void gve_create_tx_param ( struct gve_queue *tx,
+static void gve_create_tx_param ( struct gve_queue *queue,
 				  union gve_admin_command *cmd ) {
 	struct gve_admin_create_tx *create = &cmd->create_tx;
 
+	/* Sanity checks */
+	assert ( queue->qpl.id == GVE_TX_QPL );
+	assert ( queue->type->irq == GVE_TX_IRQ );
+
 	/* Construct request parameters */
-	create->res = cpu_to_be64 ( dma ( &tx->res_map, tx->res ) );
-	create->desc = cpu_to_be64 ( dma ( &tx->desc_map, tx->desc.tx ) );
-	create->qpl_id = cpu_to_be32 ( tx->qpl.id );
+	create->res = cpu_to_be64 ( dma ( &queue->res_map, queue->res ) );
+	create->desc =
+		cpu_to_be64 ( dma ( &queue->desc_map, queue->desc.raw ) );
+	create->qpl_id = cpu_to_be32 ( GVE_TX_QPL );
+	create->notify_id = cpu_to_be32 ( GVE_TX_IRQ );
 }
 
 /**
  * Construct command to create receive queue
  *
- * @v rx		Receive queue
+ * @v queue		Receive queue
  * @v cmd		Admin queue command
  */
-static void gve_create_rx_param ( struct gve_queue *rx,
+static void gve_create_rx_param ( struct gve_queue *queue,
 				  union gve_admin_command *cmd ) {
 	struct gve_admin_create_rx *create = &cmd->create_rx;
 
+	/* Sanity checks */
+	assert ( queue->qpl.id == GVE_RX_QPL );
+	assert ( queue->type->irq == GVE_RX_IRQ );
+
 	/* Construct request parameters */
-	create->notify_id = cpu_to_be32 ( 1 ); ///
-	create->res = cpu_to_be64 ( dma ( &rx->res_map, rx->res ) );
-	create->desc = cpu_to_be64 ( dma ( &rx->desc_map, rx->desc.rx ) );
-	create->cmplt = cpu_to_be64 ( dma ( &rx->cmplt_map, rx->cmplt.rx ) );
-	create->qpl_id = cpu_to_be32 ( rx->qpl.id );
+	create->notify_id = cpu_to_be32 ( GVE_RX_IRQ );
+	create->res = cpu_to_be64 ( dma ( &queue->res_map, queue->res ) );
+	create->desc =
+		cpu_to_be64 ( dma ( &queue->desc_map, queue->desc.raw ) );
+	create->cmplt =
+		cpu_to_be64 ( dma ( &queue->cmplt_map, queue->cmplt.raw ) );
+	create->qpl_id = cpu_to_be32 ( GVE_RX_QPL );
 	create->bufsz = cpu_to_be16 ( GVE_BUF_SIZE );
 }
 
@@ -691,6 +719,7 @@ static void gve_create_rx_param ( struct gve_queue *rx,
 static int gve_create_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	const struct gve_queue_type *type = queue->type;
 	union gve_admin_command *cmd;
+	unsigned int irq_off;
 	unsigned int db_off;
 	unsigned int evt_idx;
 	int rc;
@@ -705,10 +734,11 @@ static int gve_create_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 		return rc;
 
 	/* Record indices */
+	irq_off = be32_to_cpu ( gve->irqs.irq[type->irq].db_idx );
 	db_off = ( be32_to_cpu ( queue->res->db_idx ) * sizeof ( uint32_t ) );
 	evt_idx = be32_to_cpu ( queue->res->evt_idx );
-	DBGC ( gve, "GVE %p %s doorbell +%#x event counter %d\n",
-	       gve, type->name, db_off, evt_idx );
+	DBGC ( gve, "GVE %p %s IRQ +%#x doorbell +%#x event counter %d\n",
+	       gve, type->name, irq_off, db_off, evt_idx );
 	queue->doorbell = ( gve->db + db_off );
 	assert ( evt_idx < gve->events.count );
 	queue->event = &gve->events.event[evt_idx];

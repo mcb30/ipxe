@@ -178,15 +178,15 @@ struct gve_admin_configure {
 	/** Header */
 	struct gve_admin_header hdr;
 	/** Event counter array */
-	uint64_t counters;
+	uint64_t events;
 	/** IRQ doorbell address */
-	uint64_t doorbells;
+	uint64_t irqs;
 	/** Number of event counters */
-	uint32_t num_counters;
+	uint32_t num_events;
 	/** Number of IRQ doorbells */
-	uint32_t num_doorbells;
+	uint32_t num_irqs;
 	/** IRQ doorbell stride */
-	uint32_t stride;
+	uint32_t irq_stride;
 } __attribute__ (( packed ));
 
 /** Register page list command */
@@ -343,6 +343,16 @@ struct gve_event {
 	uint32_t count;
 } __attribute__ (( packed ));
 
+/** Event counter array */
+struct gve_events {
+	/** Event counters */
+	struct gve_event *event;
+	/** DMA mapping */
+	struct dma_mapping map;
+	/** Actual number of event counters */
+	unsigned int count;
+};
+
 /**
  * Maximum number of event counters
  *
@@ -359,15 +369,37 @@ struct gve_event {
  */
 #define GVE_EVENT_MAX ( GVE_LEN_ALIGN / sizeof ( struct gve_event ) )
 
-/** Event counter array */
-struct gve_events {
-	/** Event counters */
-	struct gve_event *event;
+/** An interrupt channel */
+struct gve_irq {
+	/** Interrupt doorbell index */
+	uint32_t db_idx;
+	/** Reserved */
+	uint8_t reserved[60];
+} __attribute__ (( packed ));
+
+/** Interrupt channel array */
+struct gve_irqs {
+	/** Interrupt channels */
+	struct gve_irq *irq;
 	/** DMA mapping */
 	struct dma_mapping map;
-	/** Actual number of event counters */
-	unsigned int count;
 };
+
+/**
+ * Number of interrupt channels
+ *
+ * We tell the device how many interrupt channels we have provided via
+ * the "configure device resources" admin queue command.  The device
+ * will accept being given zero interrupt channels, but will
+ * subsequently fail to create more than a single queue (either
+ * transmit or receive).
+ *
+ * There is, of course, no documentation indicating how may interrupt
+ * channels actually need to be provided.  In the absence of evidence
+ * to the contrary, assume that two channels (one for transmit, one
+ * for receive) will be sufficient.
+ */
+#define GVE_IRQ_COUNT 2
 
 /**
  * Queue resources
@@ -459,6 +491,9 @@ struct gve_qpl {
 /** Transmit queue page list ID */
 #define GVE_TX_QPL 0x18ae5458
 
+/** Tranmsit queue interrupt channel */
+#define GVE_TX_IRQ 0
+
 /** A transmit descriptor */
 struct gve_tx_descriptor {
 	/** Reserved */
@@ -482,6 +517,9 @@ struct gve_tx_descriptor {
 
 /** Receive queue page list ID */
 #define GVE_RX_QPL 0x18ae5258
+
+/** Receive queue interrupt channel */
+#define GVE_RX_IRQ 0
 
 /** A receive descriptor */
 struct gve_rx_descriptor {
@@ -573,6 +611,8 @@ struct gve_queue_type {
 			   union gve_admin_command *cmd );
 	/** Queue page list ID */
 	uint32_t qpl;
+	/** Interrupt channel */
+	uint8_t irq;
 	/** Maximum fill level */
 	uint8_t max;
 	/** Descriptor size */
@@ -595,12 +635,16 @@ struct gve_nic {
 	uint8_t revision;
 	/** DMA device */
 	struct dma_device *dma;
-	/** Scratch buffer */
-	struct gve_scratch scratch;
+
 	/** Admin queue */
 	struct gve_admin admin;
+	/** Interrupt channels */
+	struct gve_irqs irqs;
 	/** Event counters */
 	struct gve_events events;
+	/** Scratch buffer */
+	struct gve_scratch scratch;
+
 	/** Transmit queue */
 	struct gve_queue tx;
 	/** Receive queue */
