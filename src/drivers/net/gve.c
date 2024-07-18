@@ -737,7 +737,7 @@ static int gve_create_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	irq_off = be32_to_cpu ( gve->irqs.irq[type->irq].db_idx );
 	db_off = ( be32_to_cpu ( queue->res->db_idx ) * sizeof ( uint32_t ) );
 	evt_idx = be32_to_cpu ( queue->res->evt_idx );
-	DBGC ( gve, "GVE %p %s IRQ +%#x doorbell +%#x event counter %d\n",
+	DBGC ( gve, "GVE %p %s IRQ +%#04x doorbell +%#04x event counter %d\n",
 	       gve, type->name, irq_off, db_off, evt_idx );
 	queue->doorbell = ( gve->db + db_off );
 	assert ( evt_idx < gve->events.count );
@@ -1096,6 +1096,7 @@ static const struct gve_queue_type gve_tx_type = {
 	.name = "TX",
 	.param = gve_create_tx_param,
 	.qpl = GVE_TX_QPL,
+	.irq = GVE_TX_IRQ,
 	.max = GVE_TX_MAX,
 	.desc_len = sizeof ( struct gve_tx_descriptor ),
 	.create = GVE_ADMIN_CREATE_TX,
@@ -1107,6 +1108,7 @@ static const struct gve_queue_type gve_rx_type = {
 	.name = "RX",
 	.param = gve_create_rx_param,
 	.qpl = GVE_RX_QPL,
+	.irq = GVE_RX_IRQ,
 	.max = GVE_RX_MAX,
 	.desc_len = sizeof ( struct gve_rx_descriptor ),
 	.cmplt_len = sizeof ( struct gve_rx_completion ),

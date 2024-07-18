@@ -519,7 +519,7 @@ struct gve_tx_descriptor {
 #define GVE_RX_QPL 0x18ae5258
 
 /** Receive queue interrupt channel */
-#define GVE_RX_IRQ 0
+#define GVE_RX_IRQ 1
 
 /** A receive descriptor */
 struct gve_rx_descriptor {
