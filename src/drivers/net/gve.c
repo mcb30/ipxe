@@ -267,6 +267,11 @@ static int gve_admin_alloc ( struct gve_nic *gve ) {
 		rc = -ENOMEM;
 		goto err_events;
 	}
+	//
+	memset ( events->event, 0xee, events_len );
+	DBGC ( gve, "*** events:\n" );
+	DBGC_HDA ( gve, virt_to_phys ( events->event ), events->event,
+		   ( GVE_EVENT_MAX * sizeof ( events->event[0] ) ) );
 
 	/* Allocate scratch buffer */
 	scratch->buf = gve_dma_alloc ( gve, &scratch->map, scratch_len );
@@ -592,6 +597,11 @@ static int gve_configure ( struct gve_nic *gve ) {
 		writel ( bswap_32 ( GVE_IRQ_DISABLE ), irqs->db[i] );
 	}
 
+	//
+	DBGC ( gve, "*** events:\n" );
+	DBGC_HDA ( gve, virt_to_phys ( events->event ), events->event,
+		   ( GVE_EVENT_MAX * sizeof ( events->event[0] ) ) );
+
 	return 0;
 }
 
@@ -642,6 +652,10 @@ static int gve_register ( struct gve_nic *gve, struct gve_qpl *qpl ) {
 	cmd->reg.count = cpu_to_be32 ( qpl->count );
 	cmd->reg.addr = cpu_to_be64 ( dma ( &gve->scratch.map, pages ) );
 	cmd->reg.size = cpu_to_be64 ( GVE_PAGE_SIZE );
+
+	//
+	DBGC ( gve, "*** page list:\n" );
+	DBGC_HDA ( gve, virt_to_phys ( pages ), pages, sizeof ( *pages ) );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -752,6 +766,14 @@ static int gve_create_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	assert ( evt_idx < gve->events.count );
 	queue->event = &gve->events.event[evt_idx];
 	assert ( queue->event->count == 0 );
+
+	//
+	struct gve_events *events = &gve->events;
+	DBGC ( gve, "*** event at %08lx\n", virt_to_phys ( queue->event ) );
+	DBGC ( gve, "*** events:\n" );
+	DBGC_HDA ( gve, virt_to_phys ( events->event ), events->event,
+		   ( GVE_EVENT_MAX * sizeof ( events->event[0] ) ) );
+
 
 	return 0;
 }
@@ -895,8 +917,8 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 		}
 		memset ( queue->cmplt.raw, 0, cmplt_len );
 		DBGC ( gve, "GVE %p %s completions at [%08lx,%08lx)\n",
-		       gve, type->name, virt_to_phys ( queue->desc.raw ),
-		       ( virt_to_phys ( queue->desc.raw ) + desc_len ) );
+		       gve, type->name, virt_to_phys ( queue->cmplt.raw ),
+		       ( virt_to_phys ( queue->cmplt.raw ) + cmplt_len ) );
 	}
 
 	/* Allocate queue resources */
@@ -1004,11 +1026,17 @@ static void gve_refill_rx ( struct net_device *netdev ) {
 	 */
 	prod = ( rx->cons + rx->fill );
 	if ( prod != rx->prod ) {
+		//
+		DBGC ( gve, "***** (before %#08x)\n",
+		       bswap_32 ( readl ( rx->db ) ) );
+
 		rx->prod = prod;
 		writel ( bswap_32 ( prod ), rx->db );
 		//
 		DBGC ( gve, "***** RX DB %#08x -> %08lx\n",
 		       prod, virt_to_phys ( rx->db ) );
+		DBGC ( gve, "***** (readback %#08x)\n",
+		       bswap_32 ( readl ( rx->db ) ) );
 	}
 }
 
@@ -1148,10 +1176,16 @@ static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 	assert ( ( tx->prod - tx->cons ) <= tx->fill );
 
 	/* Ring doorbell */
+	//
+	DBGC ( gve, "***** (before %#08x)\n",
+	       bswap_32 ( readl ( tx->db ) ) );
+	wmb();
 	writel ( bswap_32 ( tx->prod ), tx->db );
 	//
 	DBGC ( gve, "***** TX DB %#08x -> %08lx\n",
 	       tx->prod, virt_to_phys ( tx->db ) );
+	DBGC ( gve, "***** (readback %#08x)\n",
+	       bswap_32 ( readl ( tx->db ) ) );
 
 	return 0;
 }
