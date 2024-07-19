@@ -846,6 +846,8 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	size_t desc_len = ( queue->count * type->desc_len );
 	size_t cmplt_len = ( queue->count * type->cmplt_len );
 	size_t res_len = sizeof ( *queue->res );
+	uint64_t *offset;
+	unsigned int i;
 	int rc;
 
 	/* Sanity checks */
@@ -858,17 +860,17 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	}
 
 	/* Calculate maximum fill level */
-	assert ( ( type->max & ( type->max - 1 ) ) == 0 );
-	queue->max = type->max;
-	if ( queue->max > queue->count )
-		queue->max = queue->count;
+	assert ( ( type->fill & ( type->fill - 1 ) ) == 0 );
+	queue->fill = type->fill;
+	if ( queue->fill > queue->count )
+		queue->fill = queue->count;
 	DBGC ( gve, "GVE %p %s using QPL %#08x with %d/%d descriptors\n",
-	       gve, type->name, type->qpl, queue->max, queue->count );
+	       gve, type->name, type->qpl, queue->fill, queue->count );
 
 	/* Allocate queue page list */
 	build_assert ( GVE_BUF_SIZE <= GVE_PAGE_SIZE );
 	queue->qpl.id = type->qpl;
-	queue->qpl.count = ( queue->max / ( GVE_PAGE_SIZE / GVE_BUF_SIZE ) );
+	queue->qpl.count = ( queue->fill / ( GVE_PAGE_SIZE / GVE_BUF_SIZE ) );
 	if ( ( rc = gve_alloc_qpl ( gve, &queue->qpl ) ) != 0 )
 		goto err_qpl;
 
@@ -879,6 +881,9 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 		goto err_desc;
 	}
 	memset ( queue->desc.raw, 0, desc_len );
+	DBGC ( gve, "GVE %p %s descriptors at [%08lx,%08lx)\n",
+	       gve, type->name, virt_to_phys ( queue->desc.raw ),
+	       ( virt_to_phys ( queue->desc.raw ) + desc_len ) );
 
 	/* Allocate completions */
 	if ( cmplt_len ) {
@@ -889,6 +894,9 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 			goto err_cmplt;
 		}
 		memset ( queue->cmplt.raw, 0, cmplt_len );
+		DBGC ( gve, "GVE %p %s completions at [%08lx,%08lx)\n",
+		       gve, type->name, virt_to_phys ( queue->desc.raw ),
+		       ( virt_to_phys ( queue->desc.raw ) + desc_len ) );
 	}
 
 	/* Allocate queue resources */
@@ -898,6 +906,14 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 		goto err_res;
 	}
 	memset ( queue->res, 0, res_len );
+
+	/* Populate descriptor offsets */
+	offset = ( queue->desc.raw + type->desc_len - sizeof ( *offset ) );
+	for ( i = 0 ; i < queue->count ; i++ ) {
+		*offset = cpu_to_be64 ( ( i & ( queue->fill - 1 ) ) *
+					GVE_BUF_SIZE );
+		offset = ( ( ( void * ) offset ) + type->desc_len );
+	}
 
 	return 0;
 
@@ -949,14 +965,51 @@ static void gve_free_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 }
 
 /**
+ * Get buffer address
+ *
+ * @v queue		Descriptor queue
+ * @v index		Buffer index
+ * @ret data		Buffer pointer
+ */
+static inline void * gve_buffer ( struct gve_queue *queue,
+				  unsigned int index ) {
+	unsigned int page;
+	unsigned int subpage;
+
+	/* Sanity check */
+	assert ( ( queue->fill & ( queue->fill - 1 ) ) == 0 );
+
+	/* Get address of the relevant buffer within the relevant page */
+	index &= ( queue->fill - 1 );
+	page = ( index / ( GVE_PAGE_SIZE / GVE_BUF_SIZE ) );
+	subpage = ( index & ( ( GVE_PAGE_SIZE / GVE_BUF_SIZE ) - 1 ) );
+	return ( queue->qpl.data[page] + ( subpage * GVE_BUF_SIZE ) );
+}
+
+/**
  * Refill receive queue
  *
  * @v netdev		Network device
  */
 static void gve_refill_rx ( struct net_device *netdev ) {
+	struct gve_nic *gve = netdev->priv;
+	struct gve_queue *rx = &gve->rx;
+	unsigned int prod;
 
-	//
-	( void ) netdev;
+	/* The receive descriptors are prepopulated at the time of
+	 * creating the receive queue (pointing to the preallocated
+	 * queue pages).  Refilling is therefore just a case of
+	 * ringing the doorbell if the device is not yet aware of any
+	 * available descriptors.
+	 */
+	prod = ( rx->cons + rx->fill );
+	if ( prod != rx->prod ) {
+		rx->prod = prod;
+		writel ( bswap_32 ( prod ), rx->db );
+		//
+		DBGC ( gve, "***** RX DB %#08x -> %08lx\n",
+		       prod, virt_to_phys ( rx->db ) );
+	}
 }
 
 /**
@@ -967,45 +1020,47 @@ static void gve_refill_rx ( struct net_device *netdev ) {
  */
 static int gve_open ( struct net_device *netdev ) {
 	struct gve_nic *gve = netdev->priv;
+	struct gve_queue *tx = &gve->tx;
+	struct gve_queue *rx = &gve->rx;
 	int rc;
 
-	/* Allocate transmit queue */
-	if ( ( rc = gve_alloc_queue ( gve, &gve->tx ) ) != 0 )
+	/* Allocate and populate transmit queue */
+	if ( ( rc = gve_alloc_queue ( gve, tx ) ) != 0 )
 		goto err_alloc_tx;
 
-	/* Allocate receive queue */
-	if ( ( rc = gve_alloc_queue ( gve, &gve->rx ) ) != 0 )
+	/* Allocate and populate receive queue */
+	if ( ( rc = gve_alloc_queue ( gve, rx ) ) != 0 )
 		goto err_alloc_rx;
 
 	/* Register transmit queue page list */
-	if ( ( rc = gve_register ( gve, &gve->tx.qpl ) ) != 0 )
+	if ( ( rc = gve_register ( gve, &tx->qpl ) ) != 0 )
 		goto err_register_tx;
 
 	/* Register receive queue page list */
-	if ( ( rc = gve_register ( gve, &gve->rx.qpl ) ) != 0 )
+	if ( ( rc = gve_register ( gve, &rx->qpl ) ) != 0 )
 		goto err_register_rx;
 
 	/* Create transmit queue */
-	if ( ( rc = gve_create_queue ( gve, &gve->tx ) ) != 0 )
+	if ( ( rc = gve_create_queue ( gve, tx ) ) != 0 )
 		goto err_create_tx;
 
 	/* Create receive queue */
-	if ( ( rc = gve_create_queue ( gve, &gve->rx ) ) != 0 )
+	if ( ( rc = gve_create_queue ( gve, rx ) ) != 0 )
 		goto err_create_rx;
 
 	return 0;
 
-	gve_destroy_queue ( gve, &gve->rx );
+	gve_destroy_queue ( gve, rx );
  err_create_rx:
-	gve_destroy_queue ( gve, &gve->tx );
+	gve_destroy_queue ( gve, tx );
  err_create_tx:
-	gve_unregister ( gve, &gve->rx.qpl );
+	gve_unregister ( gve, &rx->qpl );
  err_register_rx:
-	gve_unregister ( gve, &gve->tx.qpl );
+	gve_unregister ( gve, &tx->qpl );
  err_register_tx:
-	gve_free_queue ( gve, &gve->rx );
+	gve_free_queue ( gve, rx );
  err_alloc_rx:
-	gve_free_queue ( gve, &gve->tx );
+	gve_free_queue ( gve, tx );
  err_alloc_tx:
 	return rc;
 }
@@ -1017,18 +1072,20 @@ static int gve_open ( struct net_device *netdev ) {
  */
 static void gve_close ( struct net_device *netdev ) {
 	struct gve_nic *gve = netdev->priv;
+	struct gve_queue *tx = &gve->tx;
+	struct gve_queue *rx = &gve->rx;
 
 	/* Destroy queues */
-	gve_destroy_queue ( gve, &gve->rx );
-	gve_destroy_queue ( gve, &gve->tx );
+	gve_destroy_queue ( gve, rx );
+	gve_destroy_queue ( gve, tx );
 
 	/* Unregister page lists */
-	gve_unregister ( gve, &gve->rx.qpl );
-	gve_unregister ( gve, &gve->tx.qpl );
+	gve_unregister ( gve, &rx->qpl );
+	gve_unregister ( gve, &tx->qpl );
 
 	/* Free queues */
-	gve_free_queue ( gve, &gve->rx );
-	gve_free_queue ( gve, &gve->tx );
+	gve_free_queue ( gve, rx );
+	gve_free_queue ( gve, tx );
 }
 
 /**
@@ -1039,11 +1096,64 @@ static void gve_close ( struct net_device *netdev ) {
  * @ret rc		Return status code
  */
 static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
+	struct gve_nic *gve = netdev->priv;
+	struct gve_queue *tx = &gve->tx;
+	struct gve_tx_descriptor *desc;
+	unsigned int count;
+	unsigned int index;
+	size_t frag_len;
+	size_t offset;
+	size_t len;
 
+	/* Defer packet if there is no space in the transmit ring */
+	len = iob_len ( iobuf );
+	count = ( ( len + GVE_BUF_SIZE - 1 ) / GVE_BUF_SIZE );
+	if ( ( ( tx->prod - tx->cons ) + count ) > tx->fill ) {
+		netdev_tx_defer ( netdev, iobuf );
+		return 0;
+	}
+
+	/* Copy packet to queue pages and populate descriptors */
+	for ( offset = 0 ; offset < len ; offset += frag_len ) {
+
+		/* Copy packet fragment */
+		frag_len = ( len - offset );
+		if ( frag_len > GVE_BUF_SIZE )
+			frag_len = GVE_BUF_SIZE;
+		memcpy ( gve_buffer ( tx, tx->prod ), ( iobuf->data + offset ),
+			 frag_len );
+
+		/* Populate descriptor */
+		index = ( tx->prod++ & ( tx->count - 1 ) );
+		desc = &tx->desc.tx[index];
+		if ( offset ) {
+			desc->type = GVE_TX_TYPE_CONT;
+			desc->count = 0;
+			desc->total = 0;
+		} else {
+			desc->type = GVE_TX_TYPE_START;
+			desc->count = count;
+			desc->total = cpu_to_be16 ( len );
+		}
+		desc->len = cpu_to_be16 ( frag_len );
+		DBGC2 ( gve, "GVE %p TX %#04x %02x:%02x:%04x:%04x:%08llx\n",
+			gve, index, desc->type, desc->count,
+			be16_to_cpu ( desc->total ), be16_to_cpu ( desc->len ),
+			( ( unsigned long long )
+			  be64_to_cpu ( desc->offset ) ) );
+		//
+		DBGC2_HDA ( gve, virt_to_phys ( desc ), desc,
+			    sizeof ( *desc ) );
+	}
+	assert ( ( tx->prod - tx->cons ) <= tx->fill );
+
+	/* Ring doorbell */
+	writel ( bswap_32 ( tx->prod ), tx->db );
 	//
-	( void ) netdev;
-	( void ) iobuf;
-	return -ENOTSUP;
+	DBGC ( gve, "***** TX DB %#08x -> %08lx\n",
+	       tx->prod, virt_to_phys ( tx->db ) );
+
+	return 0;
 }
 
 /**
@@ -1052,9 +1162,17 @@ static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
  * @v netdev		Network device
  */
 static void gve_poll_tx ( struct net_device *netdev ) {
+	struct gve_nic *gve = netdev->priv;
+	struct gve_queue *tx = &gve->tx;
+	unsigned int count;
+
 
 	//
-	( void ) netdev;
+	count = be32_to_cpu ( tx->event->count );
+	if ( count != tx->cons ) {
+		DBGC ( gve, "**** event %08x\n", count );
+		tx->cons = count;
+	}
 }
 
 /**
@@ -1063,9 +1181,16 @@ static void gve_poll_tx ( struct net_device *netdev ) {
  * @v netdev		Network device
  */
 static void gve_poll_rx ( struct net_device *netdev ) {
+	struct gve_nic *gve = netdev->priv;
+	struct gve_queue *rx = &gve->rx;
+	struct gve_rx_completion *cmplt;
 
 	//
-	( void ) netdev;
+	cmplt = &rx->cmplt.rx[0];
+	if ( cmplt->seq ) {
+		DBGC ( gve, "***** RX\n" );
+		DBGC_HDA ( gve, 0, cmplt, sizeof ( *cmplt ) );
+	}
 }
 
 /**
@@ -1106,7 +1231,7 @@ static const struct gve_queue_type gve_tx_type = {
 	.param = gve_create_tx_param,
 	.qpl = GVE_TX_QPL,
 	.irq = GVE_TX_IRQ,
-	.max = GVE_TX_MAX,
+	.fill = GVE_TX_FILL,
 	.desc_len = sizeof ( struct gve_tx_descriptor ),
 	.create = GVE_ADMIN_CREATE_TX,
 	.destroy = GVE_ADMIN_DESTROY_TX,
@@ -1118,7 +1243,7 @@ static const struct gve_queue_type gve_rx_type = {
 	.param = gve_create_rx_param,
 	.qpl = GVE_RX_QPL,
 	.irq = GVE_RX_IRQ,
-	.max = GVE_RX_MAX,
+	.fill = GVE_RX_FILL,
 	.desc_len = sizeof ( struct gve_rx_descriptor ),
 	.cmplt_len = sizeof ( struct gve_rx_completion ),
 	.create = GVE_ADMIN_CREATE_RX,

@@ -340,7 +340,7 @@ struct gve_scratch {
  */
 struct gve_event {
 	/** Number of events that have occurred */
-	uint32_t count;
+	volatile uint32_t count;
 } __attribute__ (( packed ));
 
 /**
@@ -487,11 +487,11 @@ struct gve_qpl {
 };
 
 /**
- * Maximum number of transmit buffers in use
+ * Maximum number of transmit buffers
  *
  * This is a policy decision.
  */
-#define GVE_TX_MAX 8
+#define GVE_TX_FILL 8
 
 /** Transmit queue page list ID */
 #define GVE_TX_QPL 0x18ae5458
@@ -501,8 +501,10 @@ struct gve_qpl {
 
 /** A transmit descriptor */
 struct gve_tx_descriptor {
+	/** Type */
+	uint8_t type;
 	/** Reserved */
-	uint8_t reserved_a[3];
+	uint8_t reserved_a[2];
 	/** Number of descriptors in this packet */
 	uint8_t count;
 	/** Total length of this packet */
@@ -513,12 +515,18 @@ struct gve_tx_descriptor {
 	uint64_t offset;
 } __attribute__ (( packed ));
 
+/** Start of packet transmit descriptor type */
+#define GVE_TX_TYPE_START 0x00
+
+/** Continuation of packet transmit descriptor type */
+#define GVE_TX_TYPE_CONT 0x20
+
 /**
- * Maximum number of receive buffers in use
+ * Maximum number of receive buffers
  *
  * This is a policy decision.
  */
-#define GVE_RX_MAX 16
+#define GVE_RX_FILL 16
 
 /** Receive queue page list ID */
 #define GVE_RX_QPL 0x18ae5258
@@ -576,10 +584,10 @@ struct gve_queue {
 
 	/** Queue type */
 	const struct gve_queue_type *type;
-	/** Number of descriptors */
+	/** Number of descriptors (must be a power of two) */
 	unsigned int count;
-	/** Maximum fill level */
-	unsigned int max;
+	/** Maximum fill level (must ba a power of two) */
+	unsigned int fill;
 
 	/** Descriptor mapping */
 	struct dma_mapping desc_map;
@@ -594,9 +602,9 @@ struct gve_queue {
 	struct gve_event *event;
 
 	/** Producer counter */
-	unsigned int prod;
+	uint32_t prod;
 	/** Consumer counter */
-	unsigned int cons;
+	uint32_t cons;
 
 	/** Queue page list */
 	struct gve_qpl qpl;
@@ -619,7 +627,7 @@ struct gve_queue_type {
 	/** Interrupt channel */
 	uint8_t irq;
 	/** Maximum fill level */
-	uint8_t max;
+	uint8_t fill;
 	/** Descriptor size */
 	uint8_t desc_len;
 	/** Completion size */
