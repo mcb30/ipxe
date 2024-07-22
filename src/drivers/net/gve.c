@@ -682,17 +682,15 @@ static int gve_unregister ( struct gve_nic *gve, struct gve_qpl *qpl ) {
 static void gve_create_tx_param ( struct gve_queue *queue,
 				  union gve_admin_command *cmd ) {
 	struct gve_admin_create_tx *create = &cmd->create_tx;
-
-	/* Sanity checks */
-	assert ( queue->qpl.id == GVE_TX_QPL );
-	assert ( queue->type->irq == GVE_TX_IRQ );
+	const struct gve_queue_type *type = queue->type;
 
 	/* Construct request parameters */
+	create->id = cpu_to_be32 ( type->id );
 	create->res = cpu_to_be64 ( dma ( &queue->res_map, queue->res ) );
 	create->desc =
 		cpu_to_be64 ( dma ( &queue->desc_map, queue->desc.raw ) );
-	create->qpl_id = cpu_to_be32 ( GVE_TX_QPL );
-	create->notify_id = cpu_to_be32 ( GVE_TX_IRQ );
+	create->qpl_id = cpu_to_be32 ( type->qpl );
+	create->notify_id = cpu_to_be32 ( type->irq );
 }
 
 /**
@@ -704,19 +702,17 @@ static void gve_create_tx_param ( struct gve_queue *queue,
 static void gve_create_rx_param ( struct gve_queue *queue,
 				  union gve_admin_command *cmd ) {
 	struct gve_admin_create_rx *create = &cmd->create_rx;
-
-	/* Sanity checks */
-	assert ( queue->qpl.id == GVE_RX_QPL );
-	assert ( queue->type->irq == GVE_RX_IRQ );
+	const struct gve_queue_type *type = queue->type;
 
 	/* Construct request parameters */
-	create->notify_id = cpu_to_be32 ( GVE_RX_IRQ );
+	create->id = cpu_to_be32 ( type->id );
+	create->notify_id = cpu_to_be32 ( type->irq );
 	create->res = cpu_to_be64 ( dma ( &queue->res_map, queue->res ) );
 	create->desc =
 		cpu_to_be64 ( dma ( &queue->desc_map, queue->desc.raw ) );
 	create->cmplt =
 		cpu_to_be64 ( dma ( &queue->cmplt_map, queue->cmplt.raw ) );
-	create->qpl_id = cpu_to_be32 ( GVE_RX_QPL );
+	create->qpl_id = cpu_to_be32 ( type->qpl );
 	create->bufsz = cpu_to_be16 ( GVE_BUF_SIZE );
 }
 
@@ -772,7 +768,7 @@ static int gve_destroy_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	int rc;
 
 	/* Issue command */
-	if ( ( rc = gve_admin_simple ( gve, type->destroy, 0 ) ) != 0 ) {
+	if ( ( rc = gve_admin_simple ( gve, type->destroy, type->id ) ) != 0 ) {
 		/* Leak memory: there is nothing else we can do */
 		queue->desc.raw = NULL;
 		return rc;
@@ -1066,8 +1062,7 @@ static int gve_open ( struct net_device *netdev ) {
 		goto err_create_tx;
 
 	/* Create receive queue */
-	//
-	if ( 0 && ( rc = gve_create_queue ( gve, rx ) ) != 0 )
+	if ( ( rc = gve_create_queue ( gve, rx ) ) != 0 )
 		goto err_create_rx;
 
 	return 0;
@@ -1098,8 +1093,6 @@ static void gve_close ( struct net_device *netdev ) {
 	struct gve_queue *rx = &gve->rx;
 
 	/* Destroy queues */
-	//
-	if ( 0 )
 	gve_destroy_queue ( gve, rx );
 	gve_destroy_queue ( gve, tx );
 
@@ -1217,6 +1210,9 @@ static void gve_poll_rx ( struct net_device *netdev ) {
 	struct gve_rx_completion *cmplt;
 
 	//
+	return;
+
+	//
 	cmplt = &rx->cmplt.rx[0];
 	if ( cmplt->seq ) {
 		DBGC ( gve, "***** RX\n" );
@@ -1261,7 +1257,21 @@ static const struct gve_queue_type gve_tx_type = {
 	.name = "TX",
 	.param = gve_create_tx_param,
 	.qpl = GVE_TX_QPL,
+	.id = GVE_TX_ID,
 	.irq = GVE_TX_IRQ,
+	.fill = GVE_TX_FILL,
+	.desc_len = sizeof ( struct gve_tx_descriptor ),
+	.create = GVE_ADMIN_CREATE_TX,
+	.destroy = GVE_ADMIN_DESTROY_TX,
+};
+
+//
+static const struct gve_queue_type gve_tx_type2 = {
+	.name = "TX2",
+	.param = gve_create_tx_param,
+	.qpl = GVE_RX_QPL,
+	.id = 1,
+	.irq = GVE_RX_IRQ,
 	.fill = GVE_TX_FILL,
 	.desc_len = sizeof ( struct gve_tx_descriptor ),
 	.create = GVE_ADMIN_CREATE_TX,
@@ -1273,6 +1283,7 @@ static const struct gve_queue_type gve_rx_type = {
 	.name = "RX",
 	.param = gve_create_rx_param,
 	.qpl = GVE_RX_QPL,
+	.id = GVE_RX_ID,
 	.irq = GVE_RX_IRQ,
 	.fill = GVE_RX_FILL,
 	.desc_len = sizeof ( struct gve_rx_descriptor ),
@@ -1308,6 +1319,8 @@ static int gve_probe ( struct pci_device *pci ) {
 	memset ( gve, 0, sizeof ( *gve ) );
 	gve->tx.type = &gve_tx_type;
 	gve->rx.type = &gve_rx_type;
+	//
+	gve->rx.type = &gve_tx_type2;
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );

@@ -496,6 +496,9 @@ struct gve_qpl {
  */
 #define GVE_TX_FILL 8
 
+/** Transmit queue ID */
+#define GVE_TX_ID 0
+
 /** Transmit queue page list ID */
 #define GVE_TX_QPL 0x18ae5458
 
@@ -530,6 +533,9 @@ struct gve_tx_descriptor {
  * This is a policy decision.
  */
 #define GVE_RX_FILL 16
+
+/** Receive queue ID */
+#define GVE_RX_ID 0
 
 /** Receive queue page list ID */
 #define GVE_RX_QPL 0x18ae5258
@@ -627,6 +633,8 @@ struct gve_queue_type {
 			   union gve_admin_command *cmd );
 	/** Queue page list ID */
 	uint32_t qpl;
+	/** Queue ID */
+	uint8_t id;
 	/** Interrupt channel */
 	uint8_t irq;
 	/** Maximum fill level */
