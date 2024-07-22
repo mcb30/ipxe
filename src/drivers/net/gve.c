@@ -1265,19 +1265,6 @@ static const struct gve_queue_type gve_tx_type = {
 	.destroy = GVE_ADMIN_DESTROY_TX,
 };
 
-//
-static const struct gve_queue_type gve_tx_type2 = {
-	.name = "TX2",
-	.param = gve_create_tx_param,
-	.qpl = GVE_RX_QPL,
-	.id = 1,
-	.irq = GVE_RX_IRQ,
-	.fill = GVE_TX_FILL,
-	.desc_len = sizeof ( struct gve_tx_descriptor ),
-	.create = GVE_ADMIN_CREATE_TX,
-	.destroy = GVE_ADMIN_DESTROY_TX,
-};
-
 /** Receive descriptor queue type */
 static const struct gve_queue_type gve_rx_type = {
 	.name = "RX",
@@ -1319,8 +1306,6 @@ static int gve_probe ( struct pci_device *pci ) {
 	memset ( gve, 0, sizeof ( *gve ) );
 	gve->tx.type = &gve_tx_type;
 	gve->rx.type = &gve_rx_type;
-	//
-	gve->rx.type = &gve_tx_type2;
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
@@ -1350,6 +1335,18 @@ static int gve_probe ( struct pci_device *pci ) {
 	gve->dma = &pci->dma;
 	dma_set_mask_64bit ( gve->dma );
 	assert ( netdev->dma == NULL );
+
+	//
+	pci_msix_enable ( pci, &gve->cap );
+	pci_msix_map ( &gve->cap, 0, 0x10000, 0x18ae0000 );
+	pci_msix_map ( &gve->cap, 1, 0x10040, 0x18ae0001 );
+	pci_msix_map ( &gve->cap, 2, 0x10080, 0x18ae0002 );
+	pci_msix_unmask ( &gve->cap, 0 );
+	pci_msix_unmask ( &gve->cap, 1 );
+	pci_msix_unmask ( &gve->cap, 2 );
+	pci_msix_dump ( &gve->cap, 0 );
+	pci_msix_dump ( &gve->cap, 1 );
+	pci_msix_dump ( &gve->cap, 2 );
 
 	/* Reset the NIC */
 	if ( ( rc = gve_reset ( gve ) ) != 0 )
