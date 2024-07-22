@@ -17,6 +17,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/dma.h>
 #include <ipxe/pci.h>
 #include <ipxe/in.h>
+#include <ipxe/uaccess.h>
 
 struct gve_nic;
 
@@ -45,7 +46,7 @@ struct google_mac {
  * a page boundary.  (This is not documented anywhere, but is inferred
  * from existing source code and experimentation.)
  */
-#define GVE_ADDR_ALIGN GVE_PAGE_SIZE
+#define GVE_ALIGN GVE_PAGE_SIZE
 
 /**
  * Length alignment
@@ -441,9 +442,6 @@ struct gve_resources {
 /** Number of data buffers per page */
 #define GVE_BUF_PER_PAGE ( GVE_PAGE_SIZE / GVE_BUF_SIZE )
 
-/** Maximum number of data buffers per queue */
-#define GVE_BUF_MAX ( GVE_QPL_MAX * GVE_BUF_PER_PAGE )
-
 /**
  * Queue page list
  *
@@ -480,9 +478,9 @@ struct gve_resources {
  */
 struct gve_qpl {
 	/** Page addresses */
-	void *data[GVE_QPL_MAX];
-	/** Page mappings */
-	struct dma_mapping map[GVE_QPL_MAX];
+	userptr_t data;
+	/** Page mapping */
+	struct dma_mapping map;
 	/** Number of pages */
 	unsigned int count;
 	/** Queue page list ID */
@@ -515,7 +513,7 @@ struct gve_tx_descriptor {
 	/** Length of this descriptor */
 	uint16_t len;
 	/** Offset within QPL address space */
-	uint64_t offset;
+	uint64_t addr;
 } __attribute__ (( packed ));
 
 /** Start of packet transmit descriptor type */
@@ -540,7 +538,7 @@ struct gve_tx_descriptor {
 /** A receive descriptor */
 struct gve_rx_descriptor {
 	/** Offset within QPL address space */
-	uint64_t offset;
+	uint64_t addr;
 } __attribute__ (( packed ));
 
 /** A receive completion descriptor */
@@ -567,21 +565,9 @@ struct gve_rx_completion {
 /** A descriptor queue */
 struct gve_queue {
 	/** Descriptor ring */
-	union {
-		/** Transmit descriptors */
-		struct gve_tx_descriptor *tx;
-		/** Receive descriptors */
-		struct gve_rx_descriptor *rx;
-		/** Raw pointer */
-		void *raw;
-	} desc;
+	userptr_t desc;
 	/** Completion ring */
-	union {
-		/** Receive completions */
-		struct gve_rx_completion *rx;
-		/** Raw pointer */
-		void *raw;
-	} cmplt;
+	userptr_t cmplt;
 	/** Queue resources */
 	struct gve_resources *res;
 
