@@ -267,11 +267,6 @@ static int gve_admin_alloc ( struct gve_nic *gve ) {
 		rc = -ENOMEM;
 		goto err_events;
 	}
-	//
-	memset ( events->event, 0xee, events_len );
-	DBGC ( gve, "*** events:\n" );
-	DBGC_HDA ( gve, virt_to_phys ( events->event ), events->event,
-		   ( GVE_EVENT_MAX * sizeof ( events->event[0] ) ) );
 
 	/* Allocate scratch buffer */
 	scratch->buf = gve_dma_alloc ( gve, &scratch->map, scratch_len );
@@ -584,6 +579,9 @@ static int gve_configure ( struct gve_nic *gve ) {
 	cmd->conf.num_irqs = cpu_to_be32 ( GVE_IRQ_COUNT );
 	cmd->conf.irq_stride = cpu_to_be32 ( sizeof ( irqs->irq[0] ) );
 
+	//
+	cmd->conf.format = 0x02;
+
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
 		return rc;
@@ -596,11 +594,6 @@ static int gve_configure ( struct gve_nic *gve ) {
 		irqs->db[i] = ( gve->db + db_off );
 		writel ( bswap_32 ( GVE_IRQ_DISABLE ), irqs->db[i] );
 	}
-
-	//
-	DBGC ( gve, "*** events:\n" );
-	DBGC_HDA ( gve, virt_to_phys ( events->event ), events->event,
-		   ( GVE_EVENT_MAX * sizeof ( events->event[0] ) ) );
 
 	return 0;
 }
@@ -652,10 +645,6 @@ static int gve_register ( struct gve_nic *gve, struct gve_qpl *qpl ) {
 	cmd->reg.count = cpu_to_be32 ( qpl->count );
 	cmd->reg.addr = cpu_to_be64 ( dma ( &gve->scratch.map, pages ) );
 	cmd->reg.size = cpu_to_be64 ( GVE_PAGE_SIZE );
-
-	//
-	DBGC ( gve, "*** page list:\n" );
-	DBGC_HDA ( gve, virt_to_phys ( pages ), pages, sizeof ( *pages ) );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -753,6 +742,16 @@ static int gve_create_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	cmd->hdr.opcode = type->create;
 	type->param ( queue, cmd );
 
+	//
+	DBGC ( gve, "**** %s descriptors:\n", type->name );
+	DBGC_HDA ( gve, virt_to_phys ( queue->desc.raw ), queue->desc.raw,
+		   128 );
+	DBGC ( gve, "..." );
+	DBGC ( gve, "**** %s completions\n", type->name );
+	DBGC_HDA ( gve, virt_to_phys ( queue->cmplt.raw ), queue->cmplt.raw,
+		   128 );
+	DBGC ( gve, "..." );
+
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
 		return rc;
@@ -766,14 +765,6 @@ static int gve_create_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	assert ( evt_idx < gve->events.count );
 	queue->event = &gve->events.event[evt_idx];
 	assert ( queue->event->count == 0 );
-
-	//
-	struct gve_events *events = &gve->events;
-	DBGC ( gve, "*** event at %08lx\n", virt_to_phys ( queue->event ) );
-	DBGC ( gve, "*** events:\n" );
-	DBGC_HDA ( gve, virt_to_phys ( events->event ), events->event,
-		   ( GVE_EVENT_MAX * sizeof ( events->event[0] ) ) );
-
 
 	return 0;
 }
@@ -816,6 +807,9 @@ static int gve_destroy_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 static int gve_alloc_qpl ( struct gve_nic *gve, struct gve_qpl *qpl ) {
 	int i;
 	int rc;
+
+	/* Sanity check */
+	assert ( qpl->count <= GVE_QPL_MAX );
 
 	/* Allocate pages */
 	for ( i = 0 ; i < ( ( int ) qpl->count ) ; i++ ) {
@@ -1018,6 +1012,10 @@ static void gve_refill_rx ( struct net_device *netdev ) {
 	struct gve_queue *rx = &gve->rx;
 	unsigned int prod;
 
+
+	///
+	return;
+
 	/* The receive descriptors are prepopulated at the time of
 	 * creating the receive queue (pointing to the preallocated
 	 * queue pages).  Refilling is therefore just a case of
@@ -1073,7 +1071,8 @@ static int gve_open ( struct net_device *netdev ) {
 		goto err_create_tx;
 
 	/* Create receive queue */
-	if ( ( rc = gve_create_queue ( gve, rx ) ) != 0 )
+	//
+	if ( 0 && ( rc = gve_create_queue ( gve, rx ) ) != 0 )
 		goto err_create_rx;
 
 	return 0;
