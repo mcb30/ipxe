@@ -1000,10 +1000,6 @@ static void gve_refill_rx ( struct net_device *netdev ) {
 	struct gve_queue *rx = &gve->rx;
 	unsigned int prod;
 
-
-	///
-	return;
-
 	/* The receive descriptors are prepopulated at the time of
 	 * creating the receive queue (pointing to the preallocated
 	 * queue pages).  Refilling is therefore just a case of
@@ -1012,17 +1008,8 @@ static void gve_refill_rx ( struct net_device *netdev ) {
 	 */
 	prod = ( rx->cons + rx->fill );
 	if ( prod != rx->prod ) {
-		//
-		DBGC ( gve, "***** (before %#08x)\n",
-		       bswap_32 ( readl ( rx->db ) ) );
-
 		rx->prod = prod;
 		writel ( bswap_32 ( prod ), rx->db );
-		//
-		DBGC ( gve, "***** RX DB %#08x -> %08lx\n",
-		       prod, virt_to_phys ( rx->db ) );
-		DBGC ( gve, "***** (readback %#08x)\n",
-		       bswap_32 ( readl ( rx->db ) ) );
 	}
 }
 
@@ -1210,9 +1197,6 @@ static void gve_poll_rx ( struct net_device *netdev ) {
 	struct gve_rx_completion *cmplt;
 
 	//
-	return;
-
-	//
 	cmplt = &rx->cmplt.rx[0];
 	if ( cmplt->seq ) {
 		DBGC ( gve, "***** RX\n" );
@@ -1335,18 +1319,6 @@ static int gve_probe ( struct pci_device *pci ) {
 	gve->dma = &pci->dma;
 	dma_set_mask_64bit ( gve->dma );
 	assert ( netdev->dma == NULL );
-
-	//
-	pci_msix_enable ( pci, &gve->cap );
-	pci_msix_map ( &gve->cap, 0, 0x10000, 0x18ae0000 );
-	pci_msix_map ( &gve->cap, 1, 0x10040, 0x18ae0001 );
-	pci_msix_map ( &gve->cap, 2, 0x10080, 0x18ae0002 );
-	pci_msix_unmask ( &gve->cap, 0 );
-	pci_msix_unmask ( &gve->cap, 1 );
-	pci_msix_unmask ( &gve->cap, 2 );
-	pci_msix_dump ( &gve->cap, 0 );
-	pci_msix_dump ( &gve->cap, 1 );
-	pci_msix_dump ( &gve->cap, 2 );
 
 	/* Reset the NIC */
 	if ( ( rc = gve_reset ( gve ) ) != 0 )

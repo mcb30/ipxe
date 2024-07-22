@@ -18,9 +18,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/pci.h>
 #include <ipxe/in.h>
 
-//
-#include <ipxe/pcimsix.h>
-
 struct gve_nic;
 
 /**
@@ -506,7 +503,7 @@ struct gve_qpl {
 #define GVE_TX_QPL 0x18ae5458
 
 /** Tranmsit queue interrupt channel */
-#define GVE_TX_IRQ 1 // 0
+#define GVE_TX_IRQ 0
 
 /** A transmit descriptor */
 struct gve_tx_descriptor {
@@ -541,10 +538,10 @@ struct gve_tx_descriptor {
 #define GVE_RX_ID 0
 
 /** Receive queue page list ID */
-#define GVE_RX_QPL 1 //0x18ae5258
+#define GVE_RX_QPL 0x18ae5258
 
 /** Receive queue interrupt channel */
-#define GVE_RX_IRQ 0 // 1
+#define GVE_RX_IRQ 1
 
 /** A receive descriptor */
 struct gve_rx_descriptor {
@@ -678,10 +675,6 @@ struct gve_nic {
 	struct gve_queue rx;
 	/** Transmit I/O buffers */
 	struct io_buffer *tx_iobuf[GVE_TX_FILL];
-
-
-	//
-	struct pci_msix cap;
 };
 
 /** Maximum time to wait for admin queue commands */
