@@ -187,10 +187,6 @@ struct gve_admin_configure {
 	uint32_t num_irqs;
 	/** IRQ doorbell stride */
 	uint32_t irq_stride;
-	/** Notify block base MSI-X index */
-	uint32_t msix;
-	/** Queue format */
-	uint8_t format;
 } __attribute__ (( packed ));
 
 /** Register page list command */

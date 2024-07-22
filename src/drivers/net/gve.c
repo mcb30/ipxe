@@ -579,9 +579,6 @@ static int gve_configure ( struct gve_nic *gve ) {
 	cmd->conf.num_irqs = cpu_to_be32 ( GVE_IRQ_COUNT );
 	cmd->conf.irq_stride = cpu_to_be32 ( sizeof ( irqs->irq[0] ) );
 
-	//
-	cmd->conf.format = 0x02;
-
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
 		return rc;
@@ -737,20 +734,14 @@ static int gve_create_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	unsigned int evt_idx;
 	int rc;
 
+	/* Reset queue */
+	queue->prod = 0;
+	queue->cons = 0;
+
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = type->create;
 	type->param ( queue, cmd );
-
-	//
-	DBGC ( gve, "**** %s descriptors:\n", type->name );
-	DBGC_HDA ( gve, virt_to_phys ( queue->desc.raw ), queue->desc.raw,
-		   128 );
-	DBGC ( gve, "..." );
-	DBGC ( gve, "**** %s completions\n", type->name );
-	DBGC_HDA ( gve, virt_to_phys ( queue->cmplt.raw ), queue->cmplt.raw,
-		   128 );
-	DBGC ( gve, "..." );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -1103,6 +1094,8 @@ static void gve_close ( struct net_device *netdev ) {
 	struct gve_queue *rx = &gve->rx;
 
 	/* Destroy queues */
+	//
+	if ( 0 )
 	gve_destroy_queue ( gve, rx );
 	gve_destroy_queue ( gve, tx );
 
@@ -1168,23 +1161,12 @@ static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 			be16_to_cpu ( desc->total ), be16_to_cpu ( desc->len ),
 			( ( unsigned long long )
 			  be64_to_cpu ( desc->offset ) ) );
-		//
-		DBGC2_HDA ( gve, virt_to_phys ( desc ), desc,
-			    sizeof ( *desc ) );
 	}
 	assert ( ( tx->prod - tx->cons ) <= tx->fill );
 
 	/* Ring doorbell */
-	//
-	DBGC ( gve, "***** (before %#08x)\n",
-	       bswap_32 ( readl ( tx->db ) ) );
 	wmb();
 	writel ( bswap_32 ( tx->prod ), tx->db );
-	//
-	DBGC ( gve, "***** TX DB %#08x -> %08lx\n",
-	       tx->prod, virt_to_phys ( tx->db ) );
-	DBGC ( gve, "***** (readback %#08x)\n",
-	       bswap_32 ( readl ( tx->db ) ) );
 
 	return 0;
 }
@@ -1197,14 +1179,17 @@ static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 static void gve_poll_tx ( struct net_device *netdev ) {
 	struct gve_nic *gve = netdev->priv;
 	struct gve_queue *tx = &gve->tx;
-	unsigned int count;
+	uint32_t count;
 
-
-	//
+	/* Read event counter */
 	count = be32_to_cpu ( tx->event->count );
-	if ( count != tx->cons ) {
-		DBGC ( gve, "**** event %08x\n", count );
-		tx->cons = count;
+
+	/* Process transmit completions */
+	while ( count != tx->cons ) {
+		DBGC2 ( gve, "GVE %p TX %#04x complete\n", gve, tx->cons );
+		tx->cons++;
+		assert ( ! list_empty ( &netdev->tx_queue ) );
+		netdev_tx_complete_next ( netdev );
 	}
 }
 
