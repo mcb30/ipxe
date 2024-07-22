@@ -685,7 +685,6 @@ static void gve_create_tx_param ( struct gve_queue *queue,
 	const struct gve_queue_type *type = queue->type;
 
 	/* Construct request parameters */
-	create->id = cpu_to_be32 ( type->id );
 	create->res = cpu_to_be64 ( dma ( &queue->res_map, queue->res ) );
 	create->desc =
 		cpu_to_be64 ( dma ( &queue->desc_map, queue->desc.raw ) );
@@ -705,7 +704,6 @@ static void gve_create_rx_param ( struct gve_queue *queue,
 	const struct gve_queue_type *type = queue->type;
 
 	/* Construct request parameters */
-	create->id = cpu_to_be32 ( type->id );
 	create->notify_id = cpu_to_be32 ( type->irq );
 	create->res = cpu_to_be64 ( dma ( &queue->res_map, queue->res ) );
 	create->desc =
@@ -768,7 +766,7 @@ static int gve_destroy_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	int rc;
 
 	/* Issue command */
-	if ( ( rc = gve_admin_simple ( gve, type->destroy, type->id ) ) != 0 ) {
+	if ( ( rc = gve_admin_simple ( gve, type->destroy, 0 ) ) != 0 ) {
 		/* Leak memory: there is nothing else we can do */
 		queue->desc.raw = NULL;
 		return rc;
@@ -1241,7 +1239,6 @@ static const struct gve_queue_type gve_tx_type = {
 	.name = "TX",
 	.param = gve_create_tx_param,
 	.qpl = GVE_TX_QPL,
-	.id = GVE_TX_ID,
 	.irq = GVE_TX_IRQ,
 	.fill = GVE_TX_FILL,
 	.desc_len = sizeof ( struct gve_tx_descriptor ),
@@ -1254,7 +1251,6 @@ static const struct gve_queue_type gve_rx_type = {
 	.name = "RX",
 	.param = gve_create_rx_param,
 	.qpl = GVE_RX_QPL,
-	.id = GVE_RX_ID,
 	.irq = GVE_RX_IRQ,
 	.fill = GVE_RX_FILL,
 	.desc_len = sizeof ( struct gve_rx_descriptor ),
