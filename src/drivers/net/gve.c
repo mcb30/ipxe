@@ -877,7 +877,8 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	/* Allocate queue page list */
 	build_assert ( GVE_BUF_SIZE <= GVE_PAGE_SIZE );
 	queue->qpl.id = type->qpl;
-	queue->qpl.count = ( queue->fill / ( GVE_PAGE_SIZE / GVE_BUF_SIZE ) );
+	queue->qpl.count = ( ( queue->fill + GVE_BUF_PER_PAGE - 1 ) /
+			     GVE_BUF_PER_PAGE );
 	if ( ( rc = gve_alloc_qpl ( gve, &queue->qpl ) ) != 0 )
 		goto err_qpl;
 
@@ -988,8 +989,8 @@ static inline void * gve_buffer ( struct gve_queue *queue,
 
 	/* Get address of the relevant buffer within the relevant page */
 	index &= ( queue->fill - 1 );
-	page = ( index / ( GVE_PAGE_SIZE / GVE_BUF_SIZE ) );
-	subpage = ( index & ( ( GVE_PAGE_SIZE / GVE_BUF_SIZE ) - 1 ) );
+	page = ( index / GVE_BUF_PER_PAGE );
+	subpage = ( index & ( GVE_BUF_PER_PAGE - 1 ) );
 	return ( queue->qpl.data[page] + ( subpage * GVE_BUF_SIZE ) );
 }
 
@@ -1040,6 +1041,9 @@ static int gve_open ( struct net_device *netdev ) {
 	struct gve_queue *tx = &gve->tx;
 	struct gve_queue *rx = &gve->rx;
 	int rc;
+
+	/* Reset transmit I/O buffers */
+	memset ( gve->tx_iobuf, 0, sizeof ( gve->tx_iobuf ) );
 
 	/* Allocate and populate transmit queue */
 	if ( ( rc = gve_alloc_queue ( gve, tx ) ) != 0 )
@@ -1136,6 +1140,9 @@ static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 	/* Copy packet to queue pages and populate descriptors */
 	for ( offset = 0 ; offset < len ; offset += frag_len ) {
 
+		/* Sanity check */
+		assert ( gve->tx_iobuf[ tx->prod % GVE_TX_FILL ] == NULL );
+
 		/* Copy packet fragment */
 		frag_len = ( len - offset );
 		if ( frag_len > GVE_BUF_SIZE )
@@ -1164,6 +1171,9 @@ static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 	}
 	assert ( ( tx->prod - tx->cons ) <= tx->fill );
 
+	/* Record I/O buffer against final descriptor */
+	gve->tx_iobuf[ ( tx->prod - 1U ) % GVE_TX_FILL ] = iobuf;
+
 	/* Ring doorbell */
 	wmb();
 	writel ( bswap_32 ( tx->prod ), tx->db );
@@ -1179,6 +1189,7 @@ static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 static void gve_poll_tx ( struct net_device *netdev ) {
 	struct gve_nic *gve = netdev->priv;
 	struct gve_queue *tx = &gve->tx;
+	struct io_buffer *iobuf;
 	uint32_t count;
 
 	/* Read event counter */
@@ -1187,9 +1198,11 @@ static void gve_poll_tx ( struct net_device *netdev ) {
 	/* Process transmit completions */
 	while ( count != tx->cons ) {
 		DBGC2 ( gve, "GVE %p TX %#04x complete\n", gve, tx->cons );
+		iobuf = gve->tx_iobuf[ tx->cons % GVE_TX_FILL ];
+		gve->tx_iobuf[ tx->cons % GVE_TX_FILL ] = NULL;
 		tx->cons++;
-		assert ( ! list_empty ( &netdev->tx_queue ) );
-		netdev_tx_complete_next ( netdev );
+		if ( iobuf )
+			netdev_tx_complete ( netdev, iobuf );
 	}
 }
 

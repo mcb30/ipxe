@@ -438,8 +438,11 @@ struct gve_resources {
  */
 #define GVE_BUF_SIZE ( GVE_PAGE_SIZE / 2 )
 
+/** Number of data buffers per page */
+#define GVE_BUF_PER_PAGE ( GVE_PAGE_SIZE / GVE_BUF_SIZE )
+
 /** Maximum number of data buffers per queue */
-#define GVE_BUF_MAX ( GVE_QPL_MAX * ( GVE_PAGE_SIZE / GVE_BUF_SIZE ) )
+#define GVE_BUF_MAX ( GVE_QPL_MAX * GVE_BUF_PER_PAGE )
 
 /**
  * Queue page list
@@ -662,6 +665,8 @@ struct gve_nic {
 	struct gve_queue tx;
 	/** Receive queue */
 	struct gve_queue rx;
+	/** Transmit I/O buffers */
+	struct io_buffer *tx_iobuf[GVE_TX_FILL];
 };
 
 /** Maximum time to wait for admin queue commands */
