@@ -785,6 +785,87 @@ static int gve_destroy_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
  */
 
 /**
+ * Allocate queue page list
+ *
+ * @v gve		GVE device
+ * @v qpl		Queue page list
+ * @v id		Queue page list ID
+ * @v buffers		Number of data buffers
+ * @ret rc		Return status code
+ */
+static int gve_alloc_qpl ( struct gve_nic *gve, struct gve_qpl *qpl,
+			   uint32_t id, unsigned int buffers ) {
+	size_t len;
+
+	/* Record ID */
+	qpl->id = id;
+
+	/* Calculate number of pages required */
+	build_assert ( GVE_BUF_SIZE <= GVE_PAGE_SIZE );
+	qpl->count = ( ( buffers + GVE_BUF_PER_PAGE - 1 ) / GVE_BUF_PER_PAGE );
+
+	/* Allocate pages (as a single block) */
+	len = ( qpl->count * GVE_PAGE_SIZE );
+	qpl->data = dma_umalloc ( gve->dma, &qpl->map, len, GVE_ALIGN );
+	if ( ! qpl->data )
+		return -ENOMEM;
+
+	DBGC ( gve, "GVE %p QPL %#08x at [%08lx,%08lx)\n",
+	       gve, qpl->id, user_to_phys ( qpl->data, 0 ),
+	       user_to_phys ( qpl->data, len ) );
+	return 0;
+}
+
+/**
+ * Free queue page list
+ *
+ * @v gve		GVE device
+ * @v qpl		Queue page list
+ */
+static void gve_free_qpl ( struct gve_nic *nic __unused,
+			   struct gve_qpl *qpl ) {
+	size_t len = ( qpl->count * GVE_PAGE_SIZE );
+
+	/* Leak memory if we could not unregister the queue page list */
+	if ( ! qpl->data )
+		return;
+
+	/* Free pages */
+	dma_ufree ( &qpl->map, qpl->data, len );
+}
+
+/**
+ * Get buffer address (within queue page list address space)
+ *
+ * @v queue		Descriptor queue
+ * @v index		Buffer index
+ * @ret addr		Buffer address within queue page list address space
+ */
+static inline __attribute__ (( always_inline)) size_t
+gve_address ( struct gve_queue *queue, unsigned int index ) {
+
+	/* We allocate sufficient pages for the maximum fill level of
+	 * buffers, and reuse the pages in strict rotation as we
+	 * progress through the queue.
+	 */
+	return ( ( index & ( queue->fill - 1 ) ) * GVE_BUF_SIZE );
+}
+
+/**
+ * Get buffer address
+ *
+ * @v queue		Descriptor queue
+ * @v index		Buffer index
+ * @ret addr		Buffer address
+ */
+static inline __attribute__ (( always_inline )) userptr_t
+gve_buffer ( struct gve_queue *queue, unsigned int index ) {
+
+	/* Pages are currently allocated as a single contiguous block */
+	return userptr_add ( queue->qpl.data, gve_address ( queue, index ) );
+}
+
+/**
  * Allocate descriptor queue
  *
  * @v gve		GVE device
@@ -797,8 +878,8 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	size_t desc_len = ( queue->count * type->desc_len );
 	size_t cmplt_len = ( queue->count * type->cmplt_len );
 	size_t res_len = sizeof ( *queue->res );
+	struct gve_buffer buf;
 	size_t offset;
-	uint64_t addr;
 	unsigned int i;
 	int rc;
 
@@ -820,21 +901,9 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	       gve, type->name, type->qpl, queue->fill, queue->count );
 
 	/* Allocate queue page list */
-	build_assert ( GVE_BUF_SIZE <= GVE_PAGE_SIZE );
-	queue->qpl.id = type->qpl;
-	queue->qpl.count = ( ( queue->fill + GVE_BUF_PER_PAGE - 1 ) /
-			     GVE_BUF_PER_PAGE );
-	queue->qpl.data = dma_umalloc ( dma, &queue->qpl.map,
-					( queue->qpl.count * GVE_PAGE_SIZE ),
-					GVE_ALIGN );
-	if ( ! queue->qpl.data ) {
-		rc = -ENOMEM;
+	if ( ( rc = gve_alloc_qpl ( gve, &queue->qpl, type->qpl,
+				    queue->fill ) ) != 0 )
 		goto err_qpl;
-	}
-	DBGC ( gve, "GVE %p QPL %#08x at [%08lx,%08lx)\n",
-	       gve, queue->qpl.id, user_to_phys ( queue->qpl.data, 0 ),
-	       user_to_phys ( queue->qpl.data,
-			      ( queue->qpl.count * GVE_PAGE_SIZE ) ) );
 
 	/* Allocate descriptors */
 	queue->desc = dma_umalloc ( dma, &queue->desc_map, desc_len,
@@ -870,11 +939,10 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	memset ( queue->res, 0, res_len );
 
 	/* Populate descriptor offsets */
-	offset = ( type->desc_len - sizeof ( addr ) );
+	offset = ( type->desc_len - sizeof ( buf ) );
 	for ( i = 0 ; i < queue->count ; i++ ) {
-		addr = cpu_to_be64 ( ( i & ( queue->fill - 1 ) ) *
-				     GVE_BUF_SIZE );
-		copy_to_user ( queue->desc, offset, &addr, sizeof ( addr ) );
+		buf.addr = cpu_to_be64 ( gve_address ( queue, i ) );
+		copy_to_user ( queue->desc, offset, &buf, sizeof ( buf ) );
 		offset += type->desc_len;
 	}
 
@@ -887,8 +955,7 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
  err_cmplt:
 	dma_ufree ( &queue->desc_map, queue->desc, desc_len );
  err_desc:
-	dma_ufree ( &queue->qpl.map, queue->qpl.data,
-		    ( queue->qpl.count * GVE_PAGE_SIZE ) );
+	gve_free_qpl ( gve, &queue->qpl );
  err_qpl:
  err_sanity:
 	return rc;
@@ -900,15 +967,14 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
  * @v gve		GVE device
  * @v queue		Descriptor queue
  */
-static void gve_free_queue ( struct gve_nic *gve __unused,
-			     struct gve_queue *queue ) {
+static void gve_free_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	const struct gve_queue_type *type = queue->type;
 	size_t desc_len = ( queue->count * type->desc_len );
 	size_t cmplt_len = ( queue->count * type->cmplt_len );
 	size_t res_len = sizeof ( *queue->res );
 
 	/* Leak memory if we were unable to destroy the queue */
-	if ( ! ( queue->desc && queue->qpl.data ) )
+	if ( ! queue->desc )
 		return;
 
 	/* Free queue resources */
@@ -922,8 +988,7 @@ static void gve_free_queue ( struct gve_nic *gve __unused,
 	dma_ufree ( &queue->desc_map, queue->desc, desc_len );
 
 	/* Free queue page list */
-	dma_ufree ( &queue->qpl.map, queue->qpl.data,
-		    ( queue->qpl.count * GVE_PAGE_SIZE ) );
+	gve_free_qpl ( gve, &queue->qpl );
 }
 
 /**
@@ -1063,26 +1128,27 @@ static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 		frag_len = ( len - offset );
 		if ( frag_len > GVE_BUF_SIZE )
 			frag_len = GVE_BUF_SIZE;
-		index = ( tx->prod & ( tx->fill - 1 ) );
-		copy_to_user ( tx->qpl.data, ( index * GVE_BUF_SIZE ),
+		copy_to_user ( gve_buffer ( tx, tx->prod ), 0,
 			       ( iobuf->data + offset ), frag_len );
 
 		/* Populate descriptor */
 		index = ( tx->prod++ & ( tx->count - 1 ) );
-		memset ( &desc, 0, offsetof ( typeof ( desc ), addr ) );
+		memset ( &desc.pkt, 0, sizeof ( desc.pkt ) );
 		if ( offset ) {
-			desc.type = GVE_TX_TYPE_CONT;
+			desc.pkt.type = GVE_TX_TYPE_CONT;
 		} else {
-			desc.type = GVE_TX_TYPE_START;
-			desc.count = count;
-			desc.total = cpu_to_be16 ( len );
+			desc.pkt.type = GVE_TX_TYPE_START;
+			desc.pkt.count = count;
+			desc.pkt.total = cpu_to_be16 ( len );
 		}
-		desc.len = cpu_to_be16 ( frag_len );
+		desc.pkt.len = cpu_to_be16 ( frag_len );
 		copy_to_user ( tx->desc, ( index * sizeof ( desc ) ), &desc,
-			       offsetof ( typeof ( desc ), addr ) );
-		DBGC2 ( gve, "GVE %p TX %#04x typ %#02x cnt %#02x tot %#04x "
-			"len %#04x\n", gve, index, desc.type, desc.count,
-			be16_to_cpu ( desc.total ), be16_to_cpu ( desc.len ) );
+			       sizeof ( desc.pkt ) );
+		DBGC2 ( gve, "GVE %p TX %#04x %#02x:%#02x len %#04x/%#04x at "
+			"%#08zx\n", gve, index, desc.pkt.type, desc.pkt.count,
+			be16_to_cpu ( desc.pkt.len ),
+			be16_to_cpu ( desc.pkt.total ),
+			gve_address ( tx, index ) );
 	}
 	assert ( ( tx->prod - tx->cons ) <= tx->fill );
 

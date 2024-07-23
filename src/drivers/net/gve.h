@@ -500,8 +500,14 @@ struct gve_qpl {
 /** Tranmsit queue interrupt channel */
 #define GVE_TX_IRQ 0
 
-/** A transmit descriptor */
-struct gve_tx_descriptor {
+/** A transmit or receive buffer descriptor */
+struct gve_buffer {
+	/** Address (within queue page list address space) */
+	uint64_t addr;
+} __attribute__ (( packed ));
+
+/** A transmit packet descriptor */
+struct gve_tx_packet {
 	/** Type */
 	uint8_t type;
 	/** Reserved */
@@ -512,8 +518,14 @@ struct gve_tx_descriptor {
 	uint16_t total;
 	/** Length of this descriptor */
 	uint16_t len;
-	/** Offset within QPL address space */
-	uint64_t addr;
+} __attribute__ (( packed ));
+
+/** A transmit descriptor */
+struct gve_tx_descriptor {
+	/** Packet descriptor */
+	struct gve_tx_packet pkt;
+	/** Buffer descriptor */
+	struct gve_buffer buf;
 } __attribute__ (( packed ));
 
 /** Start of packet transmit descriptor type */
@@ -537,8 +549,8 @@ struct gve_tx_descriptor {
 
 /** A receive descriptor */
 struct gve_rx_descriptor {
-	/** Offset within QPL address space */
-	uint64_t addr;
+	/** Buffer descriptor */
+	struct gve_buffer buf;
 } __attribute__ (( packed ));
 
 /** A receive completion descriptor */
