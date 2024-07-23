@@ -1278,7 +1278,7 @@ static void gve_poll_rx ( struct net_device *netdev ) {
 
 		/* Hand off packet to network stack */
 		if ( iobuf ) {
-			iob_reserve ( iobuf, GVE_RX_RESERVE );
+			iob_pull ( iobuf, GVE_RX_PAD );
 			netdev_rx ( netdev, iobuf );
 		} else {
 			rc = ( ( cmplt.pkt.flags & GVE_RXF_ERROR ) ?

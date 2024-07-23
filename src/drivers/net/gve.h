@@ -580,7 +580,7 @@ struct gve_rx_completion {
 } __attribute__ (( packed ));
 
 /** Padding at the start of all received packets */
-#define GVE_RX_RESERVE 2
+#define GVE_RX_PAD 2
 
 /** A descriptor queue */
 struct gve_queue {
