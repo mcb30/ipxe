@@ -135,39 +135,27 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  * @ret rc		Return status code
  */
 static int gve_reset ( struct gve_nic *gve ) {
-	uint32_t devstat;
 	uint32_t pfn;
 	unsigned int i;
 
-	/* Clear admin queue page frame number (for older hardware) */
+	/* Clear admin queue page frame number */
 	writel ( 0, gve->cfg + GVE_CFG_ADMIN_PFN );
-
-	/* Trigger reset (for newer hardware) */
-
-	///
-	if ( 0 ) {
-	writel ( bswap_32 ( GVE_CFG_DRVSTAT_RESET ),
-		 gve->cfg + GVE_CFG_DRVSTAT );
-	}
 
 	/* Wait for device to reset */
 	for ( i = 0 ; i < GVE_RESET_MAX_WAIT_MS ; i++ ) {
 
 		/* Check for reset completion */
-		devstat = readl ( gve->cfg + GVE_CFG_DEVSTAT );
 		pfn = readl ( gve->cfg + GVE_CFG_ADMIN_PFN );
-		if ( ( ( devstat & bswap_32 ( GVE_CFG_DEVSTAT_RESET ) ) ||
-		       ( gve->revision == 0 ) ) &&
-		     ( pfn == 0 ) ) {
+		if ( pfn == 0 )
 			return 0;
-		}
 
 		/* Delay */
 		mdelay ( 1 );
 	}
 
 	DBGC ( gve, "GVE %p reset timed out (PFN %#08x devstat %#08x)\n",
-	       gve, bswap_32 ( pfn ), bswap_32 ( devstat ) );
+	       gve, bswap_32 ( pfn ),
+	       bswap_32 ( readl ( gve->cfg + GVE_CFG_DEVSTAT ) ) );
 	return -ETIMEDOUT;
 }
 
@@ -866,6 +854,31 @@ gve_buffer ( struct gve_queue *queue, unsigned int index ) {
 }
 
 /**
+ * Calculate next receive sequence number
+ *
+ * @v seq		Current sequence number, or zero to start sequence
+ * @ret next		Next sequence number
+ */
+static inline __attribute__ (( always_inline )) unsigned int
+gve_next ( unsigned int seq ) {
+
+	/* The receive completion sequence number is a modulo 7
+	 * counter that cycles through the non-zero three-bit values 1
+	 * to 7 inclusive.
+	 *
+	 * Since 7 is coprime to 2^n, this ensures that the sequence
+	 * number changes each time that a new completion is written
+	 * to memory.
+	 *
+	 * Since the counter takes only non-zero values, this ensures
+	 * that the sequence number changes whenever a new completion
+	 * is first written to a zero-initialised completion ring.
+	 */
+	seq = ( ( seq + 1 ) & GVE_RX_SEQ_MASK );
+	return ( seq ? seq : 1 );
+}
+
+/**
  * Allocate descriptor queue
  *
  * @v gve		GVE device
@@ -916,7 +929,7 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	       gve, type->name, user_to_phys ( queue->desc, 0 ),
 	       user_to_phys ( queue->desc, desc_len ) );
 
-	/* Allocate completions */
+	/* Allocate and zero-initialise completions */
 	if ( cmplt_len ) {
 		queue->cmplt = dma_umalloc ( dma, &queue->cmplt_map, cmplt_len,
 					     GVE_ALIGN );
@@ -1011,6 +1024,7 @@ static void gve_refill_rx ( struct net_device *netdev ) {
 	if ( prod != rx->prod ) {
 		rx->prod = prod;
 		writel ( bswap_32 ( prod ), rx->db );
+		DBGC2 ( gve, "GVE %p RX %#04x ready\n", gve, rx->prod );
 	}
 }
 
@@ -1026,8 +1040,9 @@ static int gve_open ( struct net_device *netdev ) {
 	struct gve_queue *rx = &gve->rx;
 	int rc;
 
-	/* Reset transmit I/O buffers */
+	/* Reset transmit and receive state */
 	memset ( gve->tx_iobuf, 0, sizeof ( gve->tx_iobuf ) );
+	gve->seq = gve_next ( 0 );
 
 	/* Allocate and populate transmit queue */
 	if ( ( rc = gve_alloc_queue ( gve, tx ) ) != 0 )
@@ -1196,12 +1211,89 @@ static void gve_poll_rx ( struct net_device *netdev ) {
 	struct gve_nic *gve = netdev->priv;
 	struct gve_queue *rx = &gve->rx;
 	struct gve_rx_completion cmplt;
+	struct io_buffer *iobuf;
+	unsigned int index;
+	unsigned int seq;
+	uint32_t cons;
+	size_t offset;
+	size_t total;
+	size_t len;
+	int rc;
 
-	//
-	copy_from_user ( &cmplt, rx->cmplt, 0, sizeof ( cmplt ) );
-	if ( cmplt.seq ) {
-		DBGC ( gve, "***** RX\n" );
-		DBGC_HDA ( gve, 0, &cmplt, sizeof ( cmplt ) );
+	/* Process receive completions */
+	cons = rx->cons;
+	seq = gve->seq;
+	total = 0;
+	while ( 1 ) {
+
+		/* Read next possible completion */
+		index = ( cons++ & ( rx->count - 1 ) );
+		offset = ( ( index * sizeof ( cmplt ) ) +
+			   offsetof ( typeof ( cmplt ), pkt ) );
+		copy_from_user ( &cmplt.pkt, rx->cmplt, offset,
+				 sizeof ( cmplt.pkt ) );
+
+		/* Check sequence number */
+		if ( ( cmplt.pkt.seq & GVE_RX_SEQ_MASK ) != seq )
+			break;
+		seq = gve_next ( seq );
+
+		/* Parse completion */
+		len = be16_to_cpu ( cmplt.pkt.len );
+		DBGC2 ( gve, "GVE %p RX %#04x %#02x:%#02x len %#04zx at "
+			"%#08zx\n", gve, index, cmplt.pkt.seq, cmplt.pkt.flags,
+			len, gve_address ( rx, index ) );
+
+		/* Accumulate a complete packet */
+		if ( cmplt.pkt.flags & GVE_RXF_ERROR ) {
+			total = 0;
+		} else {
+			total += len;
+			if ( cmplt.pkt.flags & GVE_RXF_MORE )
+				continue;
+		}
+		gve->seq = seq;
+
+		/* Allocate and populate I/O buffer */
+		iobuf = ( total ? alloc_iob ( total ) : NULL );
+		for ( ; rx->cons != cons ; rx->cons++ ) {
+
+			/* Re-read completion length */
+			index = ( rx->cons & ( rx->count - 1 ) );
+			offset = ( ( index * sizeof ( cmplt ) ) +
+				   offsetof ( typeof ( cmplt ), pkt.len ) );
+			copy_from_user ( &cmplt.pkt, rx->cmplt, offset,
+					 sizeof ( cmplt.pkt.len ) );
+
+			/* Copy data */
+			if ( iobuf ) {
+				len = be16_to_cpu ( cmplt.pkt.len );
+				copy_from_user ( iob_put ( iobuf, len ),
+						 gve_buffer ( rx, rx->cons ),
+						 0, len );
+			}
+		}
+		assert ( ( iobuf == NULL ) || ( iob_len ( iobuf ) == total ) );
+		total = 0;
+
+		/* Hand off packet to network stack */
+		if ( iobuf ) {
+			iob_reserve ( iobuf, GVE_RX_RESERVE );
+
+			//
+			DBGC_HDA ( gve, 0, iobuf->data, iob_len ( iobuf ) );
+
+			netdev_rx ( netdev, iobuf );
+		} else {
+			rc = ( ( cmplt.pkt.flags & GVE_RXF_ERROR ) ?
+			       -EIO : -ENOMEM );
+			netdev_rx_err ( netdev, NULL, rc );
+		}
+
+		/* Sanity check */
+		assert ( rx->cons == cons );
+		assert ( gve->seq == seq );
+		assert ( total == 0 );
 	}
 }
 

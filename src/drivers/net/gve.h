@@ -77,7 +77,6 @@ struct google_mac {
 /** Driver status */
 #define GVE_CFG_DRVSTAT 0x0004
 #define GVE_CFG_DRVSTAT_RUN 0x00000001UL	/**< Run admin queue */
-#define GVE_CFG_DRVSTAT_RESET 0x00000002UL	/**< Reset device */
 
 /** Maximum time to wait for reset */
 #define GVE_RESET_MAX_WAIT_MS 5000
@@ -553,17 +552,15 @@ struct gve_rx_descriptor {
 	struct gve_buffer buf;
 } __attribute__ (( packed ));
 
-/** A receive completion descriptor */
-struct gve_rx_completion {
-	/** Reserved */
-	uint8_t reserved[60];
+/** A receive packet descriptor */
+struct gve_rx_packet {
 	/** Length */
 	uint16_t len;
 	/** Flags */
 	uint8_t flags;
 	/** Sequence number */
 	uint8_t seq;
-};
+} __attribute__ (( packed ));
 
 /** Receive error */
 #define GVE_RXF_ERROR 0x08
@@ -573,6 +570,17 @@ struct gve_rx_completion {
 
 /** Receive sequence number mask */
 #define GVE_RX_SEQ_MASK 0x07
+
+/** A receive completion descriptor */
+struct gve_rx_completion {
+	/** Reserved */
+	uint8_t reserved[60];
+	/** Packet descriptor */
+	struct gve_rx_packet pkt;
+} __attribute__ (( packed ));
+
+/** Padding at the start of all received packets */
+#define GVE_RX_RESERVE 2
 
 /** A descriptor queue */
 struct gve_queue {
@@ -665,6 +673,8 @@ struct gve_nic {
 	struct gve_queue rx;
 	/** Transmit I/O buffers */
 	struct io_buffer *tx_iobuf[GVE_TX_FILL];
+	/** Receive sequence number */
+	unsigned int seq;
 };
 
 /** Maximum time to wait for admin queue commands */
