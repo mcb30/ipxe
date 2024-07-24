@@ -142,16 +142,19 @@ static int gve_reset ( struct gve_nic *gve ) {
 	writel ( 0, gve->cfg + GVE_CFG_ADMIN_PFN );
 	wmb();
 
+	/* Allow time for device to respond to reset */
+	mdelay ( GVE_RESET_DELAY_MS );
+
 	/* Wait for device to reset */
 	for ( i = 0 ; i < GVE_RESET_MAX_WAIT_MS ; i++ ) {
-
-		/* Delay */
-		mdelay ( 1 );
 
 		/* Check for reset completion */
 		pfn = readl ( gve->cfg + GVE_CFG_ADMIN_PFN );
 		if ( pfn == 0 )
 			return 0;
+
+		/* Delay */
+		mdelay ( 1 );
 	}
 
 	DBGC ( gve, "GVE %p reset timed out (PFN %#08x devstat %#08x)\n",
@@ -316,6 +319,7 @@ static union gve_admin_command * gve_admin_command ( struct gve_nic *gve ) {
 static int gve_admin_wait ( struct gve_nic *gve ) {
 	struct gve_admin *admin = &gve->admin;
 	uint32_t evt;
+	uint32_t pfn;
 	unsigned int i;
 
 	/* Wait for any outstanding commands to complete */
@@ -327,14 +331,19 @@ static int gve_admin_wait ( struct gve_nic *gve ) {
 		if ( evt == admin->prod )
 			return 0;
 
+		/* Check for device reset */
+		pfn = readl ( gve->cfg + GVE_CFG_ADMIN_PFN );
+		if ( ! pfn )
+			break;
+
 		/* Delay */
 		mdelay ( 1 );
 	}
 
-	DBGC ( gve, "GVE %p AQ %#02x timed out (completed %#02x, "
-	       "status %#08x)\n", gve, admin->prod, evt,
+	DBGC ( gve, "GVE %p AQ %#02x %s (completed %#02x, status %#08x)\n",
+	       gve, admin->prod, ( pfn ? "timed out" : "saw reset" ), evt,
 	       bswap_32 ( readl ( gve->cfg + GVE_CFG_DEVSTAT ) ) );
-	return -ETIMEDOUT;
+	return ( pfn ? -ETIMEDOUT : -ECONNRESET );
 }
 
 /**
@@ -422,11 +431,11 @@ static int gve_admin_simple ( struct gve_nic *gve, unsigned int opcode,
 /**
  * Get device descriptor
  *
- * @v netdev		Network device
+ * @v gve		GVE device
  * @ret rc		Return status code
  */
-static int gve_describe ( struct net_device *netdev ) {
-	struct gve_nic *gve = netdev->priv;
+static int gve_describe ( struct gve_nic *gve ) {
+	struct net_device *netdev = gve->netdev;
 	struct gve_device_descriptor *desc = &gve->scratch.buf->desc;
 	union gve_admin_command *cmd;
 	int rc;
@@ -517,12 +526,8 @@ static int gve_deconfigure ( struct gve_nic *gve ) {
 	int rc;
 
 	/* Issue command (with meaningless ID) */
-	if ( ( rc = gve_admin_simple ( gve, GVE_ADMIN_DECONFIGURE,
-				       0 ) ) != 0 ) {
-		/* Leak memory: there is nothing else we can do */
-		/////
+	if ( ( rc = gve_admin_simple ( gve, GVE_ADMIN_DECONFIGURE, 0 ) ) != 0 )
 		return rc;
-	}
 
 	return 0;
 }
@@ -575,10 +580,6 @@ static int gve_unregister ( struct gve_nic *gve, struct gve_qpl *qpl ) {
 	/* Issue command */
 	if ( ( rc = gve_admin_simple ( gve, GVE_ADMIN_UNREGISTER,
 				       qpl->id ) ) != 0 ) {
-		DBGC ( gve, "GVE %p could not free page list: %s\n",
-		       gve, strerror ( rc ) );
-		/* Leak memory: there is nothing else we can do */
-		qpl->data = UNULL;
 		return rc;
 	}
 
@@ -678,11 +679,8 @@ static int gve_destroy_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	int rc;
 
 	/* Issue command */
-	if ( ( rc = gve_admin_simple ( gve, type->destroy, 0 ) ) != 0 ) {
-		/* Leak memory: there is nothing else we can do */
-		queue->desc = UNULL;
+	if ( ( rc = gve_admin_simple ( gve, type->destroy, 0 ) ) != 0 )
 		return rc;
-	}
 
 	return 0;
 }
@@ -735,10 +733,6 @@ static int gve_alloc_qpl ( struct gve_nic *gve, struct gve_qpl *qpl,
 static void gve_free_qpl ( struct gve_nic *nic __unused,
 			   struct gve_qpl *qpl ) {
 	size_t len = ( qpl->count * GVE_PAGE_SIZE );
-
-	/* Leak memory if we could not unregister the queue page list */
-	if ( ! qpl->data )
-		return;
 
 	/* Free pages */
 	dma_ufree ( &qpl->map, qpl->data, len );
@@ -851,7 +845,7 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	       gve, type->name, user_to_phys ( queue->desc, 0 ),
 	       user_to_phys ( queue->desc, desc_len ) );
 
-	/* Allocate and zero-initialise completions */
+	/* Allocate completions */
 	if ( cmplt_len ) {
 		queue->cmplt = dma_umalloc ( dma, &queue->cmplt_map, cmplt_len,
 					     GVE_ALIGN );
@@ -859,7 +853,6 @@ static int gve_alloc_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 			rc = -ENOMEM;
 			goto err_cmplt;
 		}
-		memset_user ( queue->cmplt, 0, 0, cmplt_len );
 		DBGC ( gve, "GVE %p %s completions at [%08lx,%08lx)\n",
 		       gve, type->name, user_to_phys ( queue->cmplt, 0 ),
 		       user_to_phys ( queue->cmplt, cmplt_len ) );
@@ -908,10 +901,6 @@ static void gve_free_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	size_t cmplt_len = ( queue->count * type->cmplt_len );
 	size_t res_len = sizeof ( *queue->res );
 
-	/* Leak memory if we were unable to destroy the queue */
-	if ( ! queue->desc )
-		return;
-
 	/* Free queue resources */
 	dma_free ( &queue->res_map, queue->res, res_len );
 
@@ -927,55 +916,33 @@ static void gve_free_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 }
 
 /**
- * Refill receive queue
+ * Create device queues
  *
- * @v netdev		Network device
- */
-static void gve_refill_rx ( struct net_device *netdev ) {
-	struct gve_nic *gve = netdev->priv;
-	struct gve_queue *rx = &gve->rx;
-	unsigned int prod;
-
-	/* The receive descriptors are prepopulated at the time of
-	 * creating the receive queue (pointing to the preallocated
-	 * queue pages).  Refilling is therefore just a case of
-	 * ringing the doorbell if the device is not yet aware of any
-	 * available descriptors.
-	 */
-	prod = ( rx->cons + rx->fill );
-	if ( prod != rx->prod ) {
-		rx->prod = prod;
-		writel ( bswap_32 ( prod ), rx->db );
-		DBGC2 ( gve, "GVE %p RX %#04x ready\n", gve, rx->prod );
-	}
-}
-
-/**
- * Open network device
- *
- * @v netdev		Network device
+ * @v gve		GVE device
  * @ret rc		Return status code
  */
-static int gve_open ( struct net_device *netdev ) {
-	struct gve_nic *gve = netdev->priv;
+static int gve_create_all ( struct gve_nic *gve ) {
+	struct net_device *netdev = gve->netdev;
 	struct gve_queue *tx = &gve->tx;
 	struct gve_queue *rx = &gve->rx;
+	struct io_buffer *iobuf;
+	unsigned int i;
 	int rc;
 
-	/* Reset transmit and receive state */
-	memset ( gve->tx_iobuf, 0, sizeof ( gve->tx_iobuf ) );
+	/* Cancel any pending transmissions */
+	for ( i = 0 ; i < ( sizeof ( gve->tx_iobuf ) /
+			    sizeof ( gve->tx_iobuf[0] ) ) ; i++ ) {
+		iobuf = gve->tx_iobuf[i];
+		gve->tx_iobuf[i] = NULL;
+		if ( iobuf )
+			netdev_tx_complete_err ( netdev, iobuf, -ECANCELED );
+	}
+
+	/* Invalidate receive completions */
+	memset_user ( rx->cmplt, 0, 0, ( rx->count * rx->type->cmplt_len ) );
+
+	/* Reset receive sequence */
 	gve->seq = gve_next ( 0 );
-
-	/* Allocate and populate transmit queue */
-	if ( ( rc = gve_alloc_queue ( gve, tx ) ) != 0 )
-		goto err_alloc_tx;
-
-	/* Allocate and populate receive queue */
-	if ( ( rc = gve_alloc_queue ( gve, rx ) ) != 0 )
-		goto err_alloc_rx;
-
-
- foo:
 
 	/* Configure device resources */
 	if ( ( rc = gve_configure ( gve ) ) != 0 )
@@ -997,16 +964,6 @@ static int gve_open ( struct net_device *netdev ) {
 	if ( ( rc = gve_create_queue ( gve, rx ) ) != 0 )
 		goto err_create_rx;
 
-	static int x;
-	//
-	if ( 0 && ! x++ ) {
-		gve_reset ( gve );
-		gve_admin_enable ( gve );
-		goto foo;
-	}
-
-
-
 	return 0;
 
 	gve_destroy_queue ( gve, rx );
@@ -1019,6 +976,93 @@ static int gve_open ( struct net_device *netdev ) {
  err_register_tx:
 	gve_deconfigure ( gve );
  err_configure:
+	return rc;
+}
+
+/**
+ * Destroy device queues
+ *
+ * @v gve		GVE device
+ */
+static void gve_destroy_all ( struct gve_nic *gve ) {
+	struct gve_queue *tx = &gve->tx;
+	struct gve_queue *rx = &gve->rx;
+
+	/* Destroy queues */
+	gve_destroy_queue ( gve, rx );
+	gve_destroy_queue ( gve, tx );
+
+	/* Unregister page lists */
+	gve_unregister ( gve, &rx->qpl );
+	gve_unregister ( gve, &tx->qpl );
+
+	/* Deconfigure device */
+	gve_deconfigure ( gve );
+}
+
+/**
+ * Device setup process
+ *
+ * @v gve		GVE device
+ */
+static void gve_setup ( struct gve_nic *gve ) {
+	struct net_device *netdev = gve->netdev;
+	int rc;
+
+	/* Reset device */
+	if ( ( rc = gve_reset ( gve ) ) != 0 )
+		goto err_reset;
+
+	/* Enable admin queue */
+	gve_admin_enable ( gve );
+
+	/* Create queues */
+	if ( ( rc = gve_create_all ( gve ) ) != 0 )
+		goto err_create;
+
+	/* Reset retry count */
+	gve->retries = 0;
+
+	/* (Ab)use link status to report setup status */
+	netdev_link_up ( netdev );
+
+	return;
+
+	gve_destroy_all ( gve );
+ err_create:
+ err_reset:
+	DBGC ( gve, "GVE %p setup failed: %s\n", gve, strerror ( rc ) );
+	netdev_link_err ( netdev, rc );
+	if ( gve->retries++ < GVE_RESET_MAX_RETRY )
+		process_add ( &gve->setup );
+}
+
+/**
+ * Open network device
+ *
+ * @v netdev		Network device
+ * @ret rc		Return status code
+ */
+static int gve_open ( struct net_device *netdev ) {
+	struct gve_nic *gve = netdev->priv;
+	struct gve_queue *tx = &gve->tx;
+	struct gve_queue *rx = &gve->rx;
+	int rc;
+
+	/* Allocate and prepopulate transmit queue */
+	if ( ( rc = gve_alloc_queue ( gve, tx ) ) != 0 )
+		goto err_alloc_tx;
+
+	/* Allocate and prepopulate receive queue */
+	if ( ( rc = gve_alloc_queue ( gve, rx ) ) != 0 )
+		goto err_alloc_rx;
+
+	/* Trigger setup process to create queues */
+	netdev_link_down ( netdev );
+	process_add ( &gve->setup );
+
+	return 0;
+
 	gve_free_queue ( gve, rx );
  err_alloc_rx:
 	gve_free_queue ( gve, tx );
@@ -1036,16 +1080,12 @@ static void gve_close ( struct net_device *netdev ) {
 	struct gve_queue *tx = &gve->tx;
 	struct gve_queue *rx = &gve->rx;
 
-	/* Destroy queues */
-	gve_destroy_queue ( gve, rx );
-	gve_destroy_queue ( gve, tx );
+	/* Terminate setup process */
+	process_del ( &gve->setup );
 
-	/* Unregister page lists */
-	gve_unregister ( gve, &rx->qpl );
-	gve_unregister ( gve, &tx->qpl );
-
-	/* Deconfigure device */
-	gve_deconfigure ( gve );
+	/* Destroy queues and reset device */
+	gve_destroy_all ( gve );
+	gve_reset ( gve );
 
 	/* Free queues */
 	gve_free_queue ( gve, rx );
@@ -1068,6 +1108,10 @@ static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 	size_t frag_len;
 	size_t offset;
 	size_t len;
+
+	/* Do nothing if queues are not yet set up */
+	if ( ! netdev_link_ok ( netdev ) )
+		return -ENETDOWN;
 
 	/* Defer packet if there is no space in the transmit ring */
 	len = iob_len ( iobuf );
@@ -1238,11 +1282,39 @@ static void gve_poll_rx ( struct net_device *netdev ) {
 }
 
 /**
+ * Refill receive queue
+ *
+ * @v netdev		Network device
+ */
+static void gve_refill_rx ( struct net_device *netdev ) {
+	struct gve_nic *gve = netdev->priv;
+	struct gve_queue *rx = &gve->rx;
+	unsigned int prod;
+
+	/* The receive descriptors are prepopulated at the time of
+	 * creating the receive queue (pointing to the preallocated
+	 * queue pages).  Refilling is therefore just a case of
+	 * ringing the doorbell if the device is not yet aware of any
+	 * available descriptors.
+	 */
+	prod = ( rx->cons + rx->fill );
+	if ( prod != rx->prod ) {
+		rx->prod = prod;
+		writel ( bswap_32 ( prod ), rx->db );
+		DBGC2 ( gve, "GVE %p RX %#04x ready\n", gve, rx->prod );
+	}
+}
+
+/**
  * Poll for completed and received packets
  *
  * @v netdev		Network device
  */
 static void gve_poll ( struct net_device *netdev ) {
+
+	/* Do nothing if queues are not yet set up */
+	if ( ! netdev_link_ok ( netdev ) )
+		return;
 
 	/* Poll for transmit completions */
 	gve_poll_tx ( netdev );
@@ -1295,18 +1367,17 @@ static const struct gve_queue_type gve_rx_type = {
 };
 
 /**
- * Set up admin queue and get device description
+ * Start up admin queue and get device description
  *
- * @v netdev		Network device
+ * @v gve		GVE device
  * @ret rc		Return status code
  */
-static int gve_setup ( struct net_device *netdev ) {
-	struct gve_nic *gve = netdev->priv;
+static int gve_startup ( struct gve_nic *gve ) {
 	unsigned int i;
 	int rc;
 
-	/* Attempt setup a few times, since the device may decide to
-	 * add in a few spurious resets.
+	/* Attempt several times, since the device may decide to add
+	 * in a few spurious resets.
 	 */
 	for ( i = 0 ; i < GVE_RESET_MAX_RETRY ; i++ ) {
 
@@ -1318,7 +1389,7 @@ static int gve_setup ( struct net_device *netdev ) {
 		gve_admin_enable ( gve );
 
 		/* Fetch MAC address */
-		if ( ( rc = gve_describe ( netdev ) ) != 0 )
+		if ( ( rc = gve_describe ( gve ) ) != 0 )
 			continue;
 
 		/* Success */
@@ -1329,6 +1400,10 @@ static int gve_setup ( struct net_device *netdev ) {
 	       gve, strerror ( rc ) );
 	return rc;
 }
+
+/** Device setup process descriptor */
+static struct process_descriptor gve_setup_desc =
+	PROC_DESC_ONCE ( struct gve_nic, setup, gve_setup );
 
 /**
  * Probe PCI device
@@ -1355,8 +1430,10 @@ static int gve_probe ( struct pci_device *pci ) {
 	pci_set_drvdata ( pci, netdev );
 	netdev->dev = &pci->dev;
 	memset ( gve, 0, sizeof ( *gve ) );
+	gve->netdev = netdev;
 	gve->tx.type = &gve_tx_type;
 	gve->rx.type = &gve_rx_type;
+	process_init ( &gve->setup, &gve_setup_desc, &netdev->refcnt );
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
@@ -1391,24 +1468,19 @@ static int gve_probe ( struct pci_device *pci ) {
 	if ( ( rc = gve_admin_alloc ( gve ) ) != 0 )
 		goto err_admin;
 
-	/* Reset and set up the device */
-	if ( ( rc = gve_setup ( netdev ) ) != 0 )
-		goto err_setup;
+	/* Reset and start up the device */
+	if ( ( rc = gve_startup ( gve ) ) != 0 )
+		goto err_startup;
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
 
-	/* Mark as link up, since we have no way to test link state on
-	 * this hardware.
-	 */
-	netdev_link_up ( netdev );
-
 	return 0;
 
 	unregister_netdev ( netdev );
  err_register_netdev:
- err_setup:
+ err_startup:
 	gve_reset ( gve );
 	gve_admin_free ( gve );
  err_admin:

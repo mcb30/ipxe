@@ -18,6 +18,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/pci.h>
 #include <ipxe/in.h>
 #include <ipxe/uaccess.h>
+#include <ipxe/process.h>
 
 struct gve_nic;
 
@@ -78,8 +79,11 @@ struct google_mac {
 #define GVE_CFG_DRVSTAT 0x0004
 #define GVE_CFG_DRVSTAT_RUN 0x00000001UL	/**< Run admin queue */
 
+/** Time to wait for reset to take effect */
+#define GVE_RESET_DELAY_MS 100
+
 /** Maximum time to wait for reset */
-#define GVE_RESET_MAX_WAIT_MS 5000
+#define GVE_RESET_MAX_WAIT_MS 500
 
 /** Admin queue page frame number (for older devices) */
 #define GVE_CFG_ADMIN_PFN 0x0010
@@ -655,6 +659,8 @@ struct gve_nic {
 	void *db;
 	/** PCI revision */
 	uint8_t revision;
+	/** Network device */
+	struct net_device *netdev;
 	/** DMA device */
 	struct dma_device *dma;
 
@@ -675,10 +681,15 @@ struct gve_nic {
 	struct io_buffer *tx_iobuf[GVE_TX_FILL];
 	/** Receive sequence number */
 	unsigned int seq;
+
+	/** Setup process */
+	struct process setup;
+	/** Setup process retry counter */
+	unsigned int retries;
 };
 
 /** Maximum time to wait for admin queue commands */
-#define GVE_ADMIN_MAX_WAIT_MS 5000
+#define GVE_ADMIN_MAX_WAIT_MS 500
 
 /** Maximum number of times to reattempt device reset */
 #define GVE_RESET_MAX_RETRY 5
