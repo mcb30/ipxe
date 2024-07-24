@@ -35,6 +35,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/iobuf.h>
 #include <ipxe/dma.h>
 #include <ipxe/pci.h>
+#include <ipxe/fault.h>
 #include "gve.h"
 
 /** @file
@@ -163,7 +164,7 @@ static int gve_reset ( struct gve_nic *gve ) {
 
 		/* Check for reset completion */
 		pfn = readl ( gve->cfg + GVE_CFG_ADMIN_PFN );
-		if ( pfn == 0 )
+		if ( ! pfn )
 			return 0;
 	}
 
@@ -926,12 +927,12 @@ static void gve_free_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 }
 
 /**
- * Create device queues
+ * Start up device
  *
  * @v gve		GVE device
  * @ret rc		Return status code
  */
-static int gve_create_all ( struct gve_nic *gve ) {
+static int gve_start ( struct gve_nic *gve ) {
 	struct net_device *netdev = gve->netdev;
 	struct gve_queue *tx = &gve->tx;
 	struct gve_queue *rx = &gve->rx;
@@ -990,11 +991,11 @@ static int gve_create_all ( struct gve_nic *gve ) {
 }
 
 /**
- * Destroy device queues
+ * Stop device
  *
  * @v gve		GVE device
  */
-static void gve_destroy_all ( struct gve_nic *gve ) {
+static void gve_stop ( struct gve_nic *gve ) {
 	struct gve_queue *tx = &gve->tx;
 	struct gve_queue *rx = &gve->rx;
 
@@ -1011,11 +1012,11 @@ static void gve_destroy_all ( struct gve_nic *gve ) {
 }
 
 /**
- * Device setup process
+ * Device startup process
  *
  * @v gve		GVE device
  */
-static void gve_setup ( struct gve_nic *gve ) {
+static void gve_startup ( struct gve_nic *gve ) {
 	struct net_device *netdev = gve->netdev;
 	int rc;
 
@@ -1026,25 +1027,80 @@ static void gve_setup ( struct gve_nic *gve ) {
 	/* Enable admin queue */
 	gve_admin_enable ( gve );
 
-	/* Create queues */
-	if ( ( rc = gve_create_all ( gve ) ) != 0 )
-		goto err_create;
+	/* Start device */
+	if ( ( rc = gve_start ( gve ) ) != 0 )
+		goto err_start;
 
 	/* Reset retry count */
 	gve->retries = 0;
 
-	/* (Ab)use link status to report setup status */
+	/* (Ab)use link status to report startup status */
 	netdev_link_up ( netdev );
 
 	return;
 
-	gve_destroy_all ( gve );
- err_create:
+	gve_stop ( gve );
+ err_start:
  err_reset:
-	DBGC ( gve, "GVE %p setup failed: %s\n", gve, strerror ( rc ) );
+	DBGC ( gve, "GVE %p startup failed: %s\n", gve, strerror ( rc ) );
 	netdev_link_err ( netdev, rc );
 	if ( gve->retries++ < GVE_RESET_MAX_RETRY )
-		process_add ( &gve->setup );
+		process_add ( &gve->startup );
+}
+
+/**
+ * Trigger startup process
+ *
+ * @v gve		GVE device
+ */
+static void gve_restart ( struct gve_nic *gve ) {
+	struct net_device *netdev = gve->netdev;
+
+	/* Mark link down to inhibit polling and transmit activity */
+	netdev_link_down ( netdev );
+
+	/* Schedule startup process */
+	process_add ( &gve->startup );
+}
+
+/**
+ * Reset recovery watchdog
+ *
+ * @v timer		Reset recovery watchdog timer
+ * @v over		Failure indicator
+ */
+static void gve_watchdog ( struct retry_timer *timer, int over __unused ) {
+	struct gve_nic *gve = container_of ( timer, struct gve_nic, watchdog );
+	uint32_t activity;
+	uint32_t pfn;
+	int rc;
+
+	/* Reschedule watchdog */
+	start_timer_fixed ( &gve->watchdog, GVE_WATCHDOG_TIMEOUT );
+
+	/* Reset device (for test purposes) if applicable */
+	if ( ( rc = inject_fault ( VM_MIGRATED_RATE ) ) != 0 ) {
+		DBGC ( gve, "GVE %p synthesising host reset\n", gve );
+		writel ( 0, gve->cfg + GVE_CFG_ADMIN_PFN );
+	}
+
+	/* Check for activity since last timer invocation */
+	activity = ( gve->tx.cons + gve->rx.cons );
+	if ( activity != gve->activity ) {
+		gve->activity = activity;
+		return;
+	}
+
+	/* Check for reset */
+	pfn = readl ( gve->cfg + GVE_CFG_ADMIN_PFN );
+	if ( pfn ) {
+		DBGC2 ( gve, "GVE %p idle but not in reset\n", gve );
+		return;
+	}
+
+	/* Schedule restart */
+	DBGC ( gve, "GVE %p watchdog detected reset by host\n", gve );
+	gve_restart ( gve );
 }
 
 /**
@@ -1067,9 +1123,11 @@ static int gve_open ( struct net_device *netdev ) {
 	if ( ( rc = gve_alloc_queue ( gve, rx ) ) != 0 )
 		goto err_alloc_rx;
 
-	/* Trigger setup process to create queues */
-	netdev_link_down ( netdev );
-	process_add ( &gve->setup );
+	/* Trigger startup */
+	gve_restart ( gve );
+
+	/* Start reset recovery watchdog timer */
+	start_timer_fixed ( &gve->watchdog, GVE_WATCHDOG_TIMEOUT );
 
 	return 0;
 
@@ -1090,11 +1148,14 @@ static void gve_close ( struct net_device *netdev ) {
 	struct gve_queue *tx = &gve->tx;
 	struct gve_queue *rx = &gve->rx;
 
-	/* Terminate setup process */
-	process_del ( &gve->setup );
+	/* Stop reset recovery timer */
+	stop_timer ( &gve->watchdog );
 
-	/* Destroy queues and reset device */
-	gve_destroy_all ( gve );
+	/* Terminate startup process */
+	process_del ( &gve->startup );
+
+	/* Stop and reset device */
+	gve_stop ( gve );
 	gve_reset ( gve );
 
 	/* Free queues */
@@ -1377,12 +1438,12 @@ static const struct gve_queue_type gve_rx_type = {
 };
 
 /**
- * Start up admin queue and get device description
+ * Set up admin queue and get device description
  *
  * @v gve		GVE device
  * @ret rc		Return status code
  */
-static int gve_startup ( struct gve_nic *gve ) {
+static int gve_setup ( struct gve_nic *gve ) {
 	unsigned int i;
 	int rc;
 
@@ -1411,9 +1472,9 @@ static int gve_startup ( struct gve_nic *gve ) {
 	return rc;
 }
 
-/** Device setup process descriptor */
-static struct process_descriptor gve_setup_desc =
-	PROC_DESC_ONCE ( struct gve_nic, setup, gve_setup );
+/** Device startup process descriptor */
+static struct process_descriptor gve_startup_desc =
+	PROC_DESC_ONCE ( struct gve_nic, startup, gve_startup );
 
 /**
  * Probe PCI device
@@ -1443,7 +1504,8 @@ static int gve_probe ( struct pci_device *pci ) {
 	gve->netdev = netdev;
 	gve->tx.type = &gve_tx_type;
 	gve->rx.type = &gve_rx_type;
-	process_init ( &gve->setup, &gve_setup_desc, &netdev->refcnt );
+	process_init ( &gve->startup, &gve_startup_desc, &netdev->refcnt );
+	timer_init ( &gve->watchdog, gve_watchdog, &netdev->refcnt );
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
@@ -1478,9 +1540,9 @@ static int gve_probe ( struct pci_device *pci ) {
 	if ( ( rc = gve_admin_alloc ( gve ) ) != 0 )
 		goto err_admin;
 
-	/* Reset and start up the device */
-	if ( ( rc = gve_startup ( gve ) ) != 0 )
-		goto err_startup;
+	/* Set up the device */
+	if ( ( rc = gve_setup ( gve ) ) != 0 )
+		goto err_setup;
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
@@ -1490,7 +1552,7 @@ static int gve_probe ( struct pci_device *pci ) {
 
 	unregister_netdev ( netdev );
  err_register_netdev:
- err_startup:
+ err_setup:
 	gve_reset ( gve );
 	gve_admin_free ( gve );
  err_admin:

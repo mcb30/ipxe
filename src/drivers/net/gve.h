@@ -19,6 +19,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/in.h>
 #include <ipxe/uaccess.h>
 #include <ipxe/process.h>
+#include <ipxe/retry.h>
 
 struct gve_nic;
 
@@ -679,10 +680,14 @@ struct gve_nic {
 	/** Receive sequence number */
 	unsigned int seq;
 
-	/** Setup process */
-	struct process setup;
-	/** Setup process retry counter */
+	/** Startup process */
+	struct process startup;
+	/** Startup process retry counter */
 	unsigned int retries;
+	/** Reset recovery watchdog timer */
+	struct retry_timer watchdog;
+	/** Reset recovery recorded activity counter */
+	uint32_t activity;
 };
 
 /** Maximum time to wait for admin queue commands */
@@ -690,5 +695,8 @@ struct gve_nic {
 
 /** Maximum number of times to reattempt device reset */
 #define GVE_RESET_MAX_RETRY 5
+
+/** Time between reset recovery checks */
+#define GVE_WATCHDOG_TIMEOUT ( 1 * TICKS_PER_SEC )
 
 #endif /* _GVE_H */
