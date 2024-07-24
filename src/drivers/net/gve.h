@@ -79,9 +79,6 @@ struct google_mac {
 #define GVE_CFG_DRVSTAT 0x0004
 #define GVE_CFG_DRVSTAT_RUN 0x00000001UL	/**< Run admin queue */
 
-/** Time to wait for reset to take effect */
-#define GVE_RESET_DELAY_MS 100
-
 /** Maximum time to wait for reset */
 #define GVE_RESET_MAX_WAIT_MS 500
 

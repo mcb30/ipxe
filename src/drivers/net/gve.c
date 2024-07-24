@@ -138,23 +138,33 @@ static int gve_reset ( struct gve_nic *gve ) {
 	uint32_t pfn;
 	unsigned int i;
 
+	/* Skip reset if admin queue page frame number is already
+	 * clear.  Triggering a reset on an already-reset device seems
+	 * to cause a delayed reset to be scheduled.  This can cause
+	 * the device to end up in a reset loop, where each attempt to
+	 * recover from reset triggers another reset a few seconds
+	 * later.
+	 */
+	pfn = readl ( gve->cfg + GVE_CFG_ADMIN_PFN );
+	if ( ! pfn ) {
+		DBGC ( gve, "GVE %p skipping reset\n", gve );
+		return 0;
+	}
+
 	/* Clear admin queue page frame number */
 	writel ( 0, gve->cfg + GVE_CFG_ADMIN_PFN );
 	wmb();
 
-	/* Allow time for device to respond to reset */
-	mdelay ( GVE_RESET_DELAY_MS );
-
 	/* Wait for device to reset */
 	for ( i = 0 ; i < GVE_RESET_MAX_WAIT_MS ; i++ ) {
+
+		/* Delay */
+		mdelay ( 1 );
 
 		/* Check for reset completion */
 		pfn = readl ( gve->cfg + GVE_CFG_ADMIN_PFN );
 		if ( pfn == 0 )
 			return 0;
-
-		/* Delay */
-		mdelay ( 1 );
 	}
 
 	DBGC ( gve, "GVE %p reset timed out (PFN %#08x devstat %#08x)\n",
