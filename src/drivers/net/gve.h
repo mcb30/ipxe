@@ -680,4 +680,7 @@ struct gve_nic {
 /** Maximum time to wait for admin queue commands */
 #define GVE_ADMIN_MAX_WAIT_MS 5000
 
+/** Maximum number of times to reattempt device reset */
+#define GVE_RESET_MAX_RETRY 5
+
 #endif /* _GVE_H */

@@ -140,75 +140,24 @@ static int gve_reset ( struct gve_nic *gve ) {
 
 	/* Clear admin queue page frame number */
 	writel ( 0, gve->cfg + GVE_CFG_ADMIN_PFN );
+	wmb();
 
 	/* Wait for device to reset */
 	for ( i = 0 ; i < GVE_RESET_MAX_WAIT_MS ; i++ ) {
+
+		/* Delay */
+		mdelay ( 1 );
 
 		/* Check for reset completion */
 		pfn = readl ( gve->cfg + GVE_CFG_ADMIN_PFN );
 		if ( pfn == 0 )
 			return 0;
-
-		/* Delay */
-		mdelay ( 1 );
 	}
 
 	DBGC ( gve, "GVE %p reset timed out (PFN %#08x devstat %#08x)\n",
 	       gve, bswap_32 ( pfn ),
 	       bswap_32 ( readl ( gve->cfg + GVE_CFG_DEVSTAT ) ) );
 	return -ETIMEDOUT;
-}
-
-/******************************************************************************
- *
- * DMA allocation
- *
- ******************************************************************************
- */
-
-/**
- * Allocate and map DMA-coherent buffer
- *
- * @v gve		GVE device
- * @v map		DMA mapping to fill in
- * @v len		Length of buffer
- * @ret addr		Buffer address, or NULL on error
- */
-static inline __attribute__ (( always_inline )) void *
-gve_dma_alloc ( struct gve_nic *gve, struct dma_mapping *map, size_t len ) {
-
-	/* The alignment requirements for DMA are almost completely
-	 * undocumented.  The public source code seems to rely upon
-	 * the implicit page alignment provided by e.g. the Linux
-	 * kernel's DMA buffer allocation behaviour.
-	 *
-	 * Experimentation suggests that everything (even tiny data
-	 * structures) must be aligned to a page boundary, and that
-	 * the device will write blocks of 64 bytes.  Round up lengths
-	 * as needed.
-	 */
-	len = ( ( len + GVE_LEN_ALIGN - 1 ) & ~( GVE_LEN_ALIGN - 1 ) );
-
-	return dma_alloc ( gve->dma, map, len, GVE_ALIGN );
-}
-
-/**
- * Free DMA-coherent buffer
- *
- * @v gve		GVE device
- * @v map		DMA mapping
- * @v addr		Buffer address
- * @v len		Length of buffer
- */
-static inline __attribute__ (( always_inline )) void
-gve_dma_free ( struct gve_nic *gve __unused, struct dma_mapping *map,
-	       void *addr, size_t len ) {
-
-	/* Round up length to match that used for allocation */
-	len = ( ( len + GVE_LEN_ALIGN - 1 ) & ~( GVE_LEN_ALIGN - 1 ) );
-
-	/* Free buffer */
-	dma_free ( map, addr, len );
 }
 
 /******************************************************************************
@@ -295,10 +244,6 @@ static void gve_admin_free ( struct gve_nic *gve ) {
 	size_t events_len = ( GVE_EVENT_MAX * sizeof ( events->event[0] ) );
 	size_t scratch_len = sizeof ( *scratch->buf );
 
-	/* Leak memory if we were unable to reset the device */
-	if ( ! ( admin->cmd && events->event ) )
-		return;
-
 	/* Free scratch buffer */
 	dma_free ( &scratch->map, scratch->buf, scratch_len );
 
@@ -339,28 +284,6 @@ static void gve_admin_enable ( struct gve_nic *gve ) {
 	}
 	writel ( bswap_16 ( admin_len ), gve->cfg + GVE_CFG_ADMIN_LEN );
 	writel ( bswap_32 ( GVE_CFG_DRVSTAT_RUN ), gve->cfg + GVE_CFG_DRVSTAT );
-}
-
-/**
- * Disable admin queue and reset device
- *
- * @v gve		GVE device
- * @ret rc		Return status code
- */
-static int gve_admin_disable ( struct gve_nic *gve ) {
-	struct gve_admin *admin = &gve->admin;
-	int rc;
-
-	/* Reset device */
-	if ( ( rc = gve_reset ( gve ) ) != 0 ) {
-		DBGC ( gve, "GVE %p could not free AQ: %s\n",
-		       gve, strerror ( rc ) );
-		/* Leak memory: there is nothing else we can do */
-		admin->cmd = NULL;
-		return rc;
-	}
-
-	return 0;
 }
 
 /**
@@ -591,14 +514,13 @@ static int gve_configure ( struct gve_nic *gve ) {
  * @ret rc		Return status code
  */
 static int gve_deconfigure ( struct gve_nic *gve ) {
-	struct gve_events *events = &gve->events;
 	int rc;
 
 	/* Issue command (with meaningless ID) */
 	if ( ( rc = gve_admin_simple ( gve, GVE_ADMIN_DECONFIGURE,
 				       0 ) ) != 0 ) {
 		/* Leak memory: there is nothing else we can do */
-		events->event = NULL;
+		/////
 		return rc;
 	}
 
@@ -1052,6 +974,13 @@ static int gve_open ( struct net_device *netdev ) {
 	if ( ( rc = gve_alloc_queue ( gve, rx ) ) != 0 )
 		goto err_alloc_rx;
 
+
+ foo:
+
+	/* Configure device resources */
+	if ( ( rc = gve_configure ( gve ) ) != 0 )
+		goto err_configure;
+
 	/* Register transmit queue page list */
 	if ( ( rc = gve_register ( gve, &tx->qpl ) ) != 0 )
 		goto err_register_tx;
@@ -1068,6 +997,16 @@ static int gve_open ( struct net_device *netdev ) {
 	if ( ( rc = gve_create_queue ( gve, rx ) ) != 0 )
 		goto err_create_rx;
 
+	static int x;
+	//
+	if ( 0 && ! x++ ) {
+		gve_reset ( gve );
+		gve_admin_enable ( gve );
+		goto foo;
+	}
+
+
+
 	return 0;
 
 	gve_destroy_queue ( gve, rx );
@@ -1078,6 +1017,8 @@ static int gve_open ( struct net_device *netdev ) {
  err_register_rx:
 	gve_unregister ( gve, &tx->qpl );
  err_register_tx:
+	gve_deconfigure ( gve );
+ err_configure:
 	gve_free_queue ( gve, rx );
  err_alloc_rx:
 	gve_free_queue ( gve, tx );
@@ -1102,6 +1043,9 @@ static void gve_close ( struct net_device *netdev ) {
 	/* Unregister page lists */
 	gve_unregister ( gve, &rx->qpl );
 	gve_unregister ( gve, &tx->qpl );
+
+	/* Deconfigure device */
+	gve_deconfigure ( gve );
 
 	/* Free queues */
 	gve_free_queue ( gve, rx );
@@ -1351,6 +1295,42 @@ static const struct gve_queue_type gve_rx_type = {
 };
 
 /**
+ * Set up admin queue and get device description
+ *
+ * @v netdev		Network device
+ * @ret rc		Return status code
+ */
+static int gve_setup ( struct net_device *netdev ) {
+	struct gve_nic *gve = netdev->priv;
+	unsigned int i;
+	int rc;
+
+	/* Attempt setup a few times, since the device may decide to
+	 * add in a few spurious resets.
+	 */
+	for ( i = 0 ; i < GVE_RESET_MAX_RETRY ; i++ ) {
+
+		/* Reset device */
+		if ( ( rc = gve_reset ( gve ) ) != 0 )
+			continue;
+
+		/* Enable admin queue */
+		gve_admin_enable ( gve );
+
+		/* Fetch MAC address */
+		if ( ( rc = gve_describe ( netdev ) ) != 0 )
+			continue;
+
+		/* Success */
+		return 0;
+	}
+
+	DBGC ( gve, "GVE %p failed to get device description: %s\n",
+	       gve, strerror ( rc ) );
+	return rc;
+}
+
+/**
  * Probe PCI device
  *
  * @v pci		PCI device
@@ -1407,24 +1387,13 @@ static int gve_probe ( struct pci_device *pci ) {
 	dma_set_mask_64bit ( gve->dma );
 	assert ( netdev->dma == NULL );
 
-	/* Reset the NIC */
-	if ( ( rc = gve_reset ( gve ) ) != 0 )
-		goto err_reset;
-
 	/* Allocate admin queue */
 	if ( ( rc = gve_admin_alloc ( gve ) ) != 0 )
 		goto err_admin;
 
-	/* Enable admin queue */
-	gve_admin_enable ( gve );
-
-	/* Fetch MAC address */
-	if ( ( rc = gve_describe ( netdev ) ) != 0 )
-		goto err_describe;
-
-	/* Configure device resources */
-	if ( ( rc = gve_configure ( gve ) ) != 0 )
-		goto err_configure;
+	/* Reset and set up the device */
+	if ( ( rc = gve_setup ( netdev ) ) != 0 )
+		goto err_setup;
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
@@ -1439,13 +1408,10 @@ static int gve_probe ( struct pci_device *pci ) {
 
 	unregister_netdev ( netdev );
  err_register_netdev:
-	gve_deconfigure ( gve );
- err_configure:
- err_describe:
-	gve_admin_disable ( gve );
+ err_setup:
+	gve_reset ( gve );
 	gve_admin_free ( gve );
  err_admin:
- err_reset:
 	iounmap ( gve->db );
  err_db:
 	iounmap ( gve->cfg );
@@ -1468,11 +1434,8 @@ static void gve_remove ( struct pci_device *pci ) {
 	/* Unregister network device */
 	unregister_netdev ( netdev );
 
-	/* Deconfigure device resources */
-	gve_deconfigure ( gve );
-
-	/* Disable admin queue and reset device */
-	gve_admin_disable ( gve );
+	/* Reset device */
+	gve_reset ( gve );
 
 	/* Free admin queue */
 	gve_admin_free ( gve );
