@@ -525,7 +525,7 @@ void x25519_multiply ( const union x25519_oct258 *multiplicand,
 	 * and so the step 3 result is strictly less than 4p, and
 	 * therefore lies within the range [0,4p-1].
 	 */
-	memset ( &step3->value, 0, sizeof ( step3->value ) );
+	bigint_zero ( &step3->value );
 	bigint_grow ( &step2->parts.low_256bit, &result->value );
 	bigint_multiply ( &step2->parts.high_11bit, &x25519_reduce_256,
 			  &step3->product, &tmp.step3.carry.product );

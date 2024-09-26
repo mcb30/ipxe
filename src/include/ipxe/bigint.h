@@ -153,6 +153,16 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 	bigint_max_set_bit_raw ( (value)->element, size ); } )
 
 /**
+ * Zero big integer
+ *
+ * @v value		Big integer to zero
+ */
+#define bigint_zero( value ) do {					\
+	unsigned int size = bigint_size (value);			\
+	bigint_zero_raw ( (value)->element, size );			\
+	} while ( 0 )
+
+/**
  * Grow big integer
  *
  * @v source		Source big integer
@@ -308,6 +318,7 @@ int bigint_bit_is_set_raw ( const bigint_element_t *value0, unsigned int size,
 			    unsigned int bit );
 int bigint_max_set_bit_raw ( const bigint_element_t *value0,
 			     unsigned int size );
+void bigint_zero_raw ( bigint_element_t *value0, unsigned int size );
 void bigint_grow_raw ( const bigint_element_t *source0,
 		       unsigned int source_size, bigint_element_t *dest0,
 		       unsigned int dest_size );

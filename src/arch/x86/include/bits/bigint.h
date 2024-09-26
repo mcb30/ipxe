@@ -241,6 +241,25 @@ bigint_max_set_bit_raw ( const uint32_t *value0, unsigned int size ) {
 }
 
 /**
+ * Zero big integer
+ *
+ * @v value0		Element 0 of big integer
+ * @v size		Number of elements
+ */
+static inline __attribute__ (( always_inline )) void
+bigint_zero_raw ( uint32_t *value0, unsigned int size ) {
+	bigint_t ( size ) __attribute__ (( may_alias )) *value =
+		( ( void * ) value0 );
+	void *discard_D;
+	long discard_c;
+
+	__asm__ __volatile__ ( "rep stosl\n\t"
+			       : "=&D" ( discard_D ), "=&c" ( discard_c ),
+				 "+m" ( *value )
+			       : "0" ( value0 ), "1" ( size ), "a" ( 0 ) );
+}
+
+/**
  * Grow big integer
  *
  * @v source0		Element 0 of source big integer

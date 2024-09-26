@@ -108,8 +108,8 @@ void bigint_multiply_raw ( const bigint_element_t *multiplicand0,
 	unsigned int j;
 
 	/* Zero result and temporary carry space */
-	memset ( result, 0, sizeof ( *result ) );
-	memset ( carry, 0, sizeof ( *carry ) );
+	bigint_zero ( result );
+	bigint_zero ( carry );
 
 	/* Multiply integers one element at a time, adding the double
 	 * element directly into the result and accumulating any

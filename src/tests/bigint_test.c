@@ -127,6 +127,13 @@ int bigint_max_set_bit_sample ( const bigint_element_t *value0,
 	return bigint_max_set_bit ( value );
 }
 
+void bigint_zero_sample ( bigint_element_t *value0, unsigned int size ) {
+	bigint_t ( size ) *value __attribute__ (( may_alias ))
+		= ( ( void * ) value0 );
+
+	bigint_zero ( value );
+}
+
 void bigint_grow_sample ( const bigint_element_t *source0,
 			  unsigned int source_size, bigint_element_t *dest0,
 			  unsigned int dest_size ) {
