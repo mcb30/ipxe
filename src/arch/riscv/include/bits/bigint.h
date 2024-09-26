@@ -378,42 +378,70 @@ bigint_done_raw ( const unsigned long *value0, unsigned int size __unused,
 }
 
 /**
- * Multiply big integer elements
+ * Multiply big integer elements by a scalar and accumulate
  *
- * @v multiplicand	Multiplicand element
- * @v multiplier	Multiplier element
- * @v result		Result element pair
- * @v carry		Carry element
+ * @v multiplicand0	Element 0 of big integer to be multiplied
+ * @v multiplicand_size	Size of big integer to be mulitplied
+ * @v multiplier	Multiplier
+ * @v partial0		Element 0 of partial result
  */
 static inline __attribute__ (( always_inline )) void
-bigint_multiply_one ( const unsigned long multiplicand,
-		      const unsigned long multiplier,
-		      unsigned long *result, unsigned long *carry ) {
+bigint_multiply_partial_raw ( const unsigned long *multiplicand0,
+			      unsigned int multiplicand_size,
+			      const unsigned long multiplier,
+			      unsigned long *partial0 ) {
+	unsigned int partial_size = ( multiplicand_size + 1 );
+	bigint_t ( partial_size ) __attribute__ (( may_alias )) *partial =
+		( ( void * ) partial0 );
+	const unsigned long *multiplicandN =
+		( multiplicand0 + multiplicand_size );
+	unsigned long *discard_multiplicand;
+	unsigned long *discard_partial;
+	unsigned long discard_multiplicand_i;
+	unsigned long discard_partial_i;
 	unsigned long discard_low;
 	unsigned long discard_high;
 	unsigned long discard_carry;
+	unsigned long discard_temp;
 
-	__asm__ __volatile__ ( /* Perform multiplication */
-			       "mulhu %1, %6, %7\n\t"
-			       "mul %0, %6, %7\n\t"
+	__asm__ __volatile__ ( "\n1:\n\t"
+			       /* Load multiplicand[i] and partial[i] */
+			       LOADN " %2, (%0)\n\t"
+			       LOADN " %3, (%1)\n\t"
+			       /* Perform multiplication */
+			       "mulhu %5, %2, %10\n\t"
+			       "mul %4, %2, %10\n\t"
 			       /* Accumulate low half */
-			       "add %3, %3, %0\n\t"
-			       "sltu %2, %3, %0\n\t"
-			       /* Add carry to high half (cannot overflow) */
-			       "add %1, %1, %2\n\t"
-			       /* Accumulate high half */
-			       "add %4, %4, %1\n\t"
-			       "sltu %2, %4, %1\n\t"
-			       /* Accumulate carry (cannot overflow) */
-			       "add %5, %5, %2\n\t"
-			       : "=r" ( discard_low ),
+			       "add %3, %3, %4\n\t"
+			       "sltu %7, %3, %4\n\t"
+			       "add %5, %5, %7\n\t"
+			       /* Accumulate and update running carry */
+			       "add %3, %3, %6\n\t"
+			       "sltu %7, %3, %6\n\t"
+			       "add %6, %5, %7\n\t"
+			       /* Store partial[i] */
+			       STOREN " %3, (%1)\n\t"
+			       /* Loop */
+			       "addi %0, %0, %11\n\t"
+			       "addi %1, %1, %11\n\t"
+			       "bne %0, %9, 1b\n\t"
+			       /* Store final partial[i] */
+			       STOREN " %6, (%1)\n\t"
+			       : "=&r" ( discard_multiplicand ),
+				 "=&r" ( discard_partial ),
+				 "=&r" ( discard_multiplicand_i ),
+				 "=&r" ( discard_partial_i ),
+				 "=&r" ( discard_low ),
 				 "=&r" ( discard_high ),
-				 "=r" ( discard_carry ),
-				 "+r" ( result[0] ),
-				 "+r" ( result[1] ),
-				 "+r" ( *carry )
-			       : "r" ( multiplicand ),
-				 "r" ( multiplier ) );
+				 "=&r" ( discard_carry ),
+				 "=&r" ( discard_temp ),
+				 "+m" ( *partial )
+			       : "r" ( multiplicandN ),
+				 "r" ( multiplier ),
+				 "i" ( sizeof ( unsigned long ) ),
+				 "0" ( multiplicand0 ),
+				 "1" ( partial0 ),
+				 "6" ( 0 ) );
 }
 
 #endif /* _BITS_BIGINT_H */

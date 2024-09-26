@@ -342,33 +342,55 @@ bigint_done_raw ( const uint32_t *value0, unsigned int size __unused,
 }
 
 /**
- * Multiply big integer elements
+ * Multiply big integer elements by a scalar and accumulate
  *
- * @v multiplicand	Multiplicand element
- * @v multiplier	Multiplier element
- * @v result		Result element pair
- * @v carry		Carry element
+ * @v multiplicand0	Element 0 of big integer to be multiplied
+ * @v multiplicand_size	Size of big integer to be mulitplied
+ * @v multiplier	Multiplier
+ * @v partial0		Element 0 of partial result
  */
 static inline __attribute__ (( always_inline )) void
-bigint_multiply_one ( const uint32_t multiplicand, const uint32_t multiplier,
-		      uint32_t *result, uint32_t *carry ) {
+bigint_multiply_partial_raw ( const uint32_t *multiplicand0,
+			      unsigned int multiplicand_size,
+			      const uint32_t multiplier, uint32_t *partial0 ) {
+	unsigned int partial_size = ( multiplicand_size + 1 );
+	const bigint_t ( multiplicand_size ) __attribute__ (( may_alias ))
+		*multiplicand = ( ( const void * ) multiplicand0 );
+	bigint_t ( partial_size ) __attribute__ (( may_alias ))
+		*partial = ( ( void * ) partial0 );
 	uint32_t discard_a;
 	uint32_t discard_d;
+	uint32_t discard_carry;
+	void *discard_S;
+	long discard_c;
 
-	__asm__ __volatile__ ( /* Perform multiplication */
+	__asm__ __volatile__ ( "\n1:\n\t"
+			       /* Fetch multiplicand element and multiply */
+			       "lodsl\n\t"
 			       "mull %6\n\t"
-			       /* Accumulate result */
-			       "addl %0, %2\n\t"
-			       "adcl %1, %3\n\t"
-			       /* Accumulate carry (cannot overflow) */
-			       "adcl $0, %4\n\t"
-			       : "=a" ( discard_a ),
-				 "=d" ( discard_d ),
-				 "+m" ( result[0] ),
-				 "+m" ( result[1] ),
-				 "+m" ( *carry )
-			       : "0" ( multiplicand ),
-				 "g" ( multiplier ) );
+			       /* Add in running carry */
+			       "addl %4, %0\n\t"
+			       "adcl $0, %1\n\t"
+			       /* Accumulate partial result */
+			       "addl %0, -4(%2, %7)\n\t"
+			       "adcl $0, %1\n\t"
+			       /* Preserve running carry and loop */
+			       "movl %1, %4\n\t"
+			       "loop 1b\n\t"
+			       /* Store final partial result element */
+			       "movl %1, (%2, %7)\n\t"
+			       : "=&a" ( discard_a ),
+				 "=&d" ( discard_d ),
+				 "=&S" ( discard_S ),
+				 "=&c" ( discard_c ),
+				 "=&r" ( discard_carry ),
+				 "+m" ( *partial )
+			       : "m" ( multiplier ),
+				 "r" ( ( ( void * ) partial ) -
+				       ( ( void * ) multiplicand ) ),
+				 "2" ( multiplicand0 ),
+				 "3" ( multiplicand_size ),
+				 "4" ( 0 ) );
 }
 
 #endif /* _BITS_BIGINT_H */
