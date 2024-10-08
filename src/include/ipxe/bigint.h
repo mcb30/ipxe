@@ -218,6 +218,28 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 	} while ( 0 )
 
 /**
+ * Normalise big integer
+ *
+ * @v value		Big integer to be reduced
+ * @v msb		Maximum value for MSB after normalisation
+ */
+#define bigint_normalise( value, msb ) ( {				\
+	unsigned int size = bigint_size (value);			\
+	bigint_normalise_raw ( (value)->element, size, (msb) );		\
+	} )
+
+/**
+ * Reduce big integer
+ *
+ * @v value		Big integer to be reduced
+ * @v modulus		Big integer modulus
+ */
+#define bigint_mod( value, modulus ) do {				\
+	unsigned int size = bigint_size (value);			\
+	bigint_mod_raw ( (value)->element, (modulus)->element, size );	\
+	} while ( 0 )
+
+/**
  * Perform modular multiplication of big integers
  *
  * @v multiplicand	Big integer to be multiplied
@@ -339,6 +361,10 @@ void bigint_multiply_raw ( const bigint_element_t *multiplicand0,
 			   const bigint_element_t *multiplier0,
 			   unsigned int multiplier_size,
 			   bigint_element_t *result0 );
+unsigned int bigint_normalise_raw ( bigint_element_t *value0,
+				    unsigned int size, unsigned int msb );
+void bigint_mod_raw ( bigint_element_t *value0, bigint_element_t *modulus0,
+		      unsigned int size );
 void bigint_mod_multiply_raw ( const bigint_element_t *multiplicand0,
 			       const bigint_element_t *multiplier0,
 			       const bigint_element_t *modulus0,
