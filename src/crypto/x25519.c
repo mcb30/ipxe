@@ -311,17 +311,18 @@ static struct x25519_value x25519_generator = {
  *
  */
 static void x25519_init_constants ( void ) {
+	bigint_element_t discard;
 
 	/* Construct constant p */
 	bigint_init ( &x25519_p, x25519_p_raw, sizeof ( x25519_p_raw ) );
 
 	/* Construct constant 2p */
 	bigint_copy ( &x25519_p, &x25519_2p );
-	bigint_add ( &x25519_p, &x25519_2p );
+	bigint_add ( &x25519_p, &x25519_2p, &discard );
 
 	/* Construct constant 4p */
 	bigint_copy ( &x25519_2p, &x25519_4p );
-	bigint_add ( &x25519_2p, &x25519_4p );
+	bigint_add ( &x25519_2p, &x25519_4p, &discard );
 
 	/* Construct reduction constant */
 	bigint_init ( &x25519_reduce_256, x25519_reduce_256_raw,
@@ -348,6 +349,7 @@ static inline __attribute__ (( always_inline )) void
 x25519_add ( const union x25519_quad257 *augend,
 	     const union x25519_quad257 *addend,
 	     union x25519_oct258 *result ) {
+	bigint_element_t discard;
 	int copy;
 
 	/* Copy augend if necessary */
@@ -367,7 +369,7 @@ x25519_add ( const union x25519_quad257 *augend,
 	 * therefore a valid X25519 unsigned 258-bit integer, as
 	 * required.
 	 */
-	bigint_add ( &addend->value, &result->value );
+	bigint_add ( &addend->value, &result->value, &discard );
 }
 
 /**
@@ -381,6 +383,7 @@ static inline __attribute__ (( always_inline )) void
 x25519_subtract ( const union x25519_quad257 *minuend,
 		  const union x25519_quad257 *subtrahend,
 		  union x25519_oct258 *result ) {
+	bigint_element_t discard;
 	int copy;
 
 	/* Copy minuend if necessary */
@@ -400,7 +403,7 @@ x25519_subtract ( const union x25519_quad257 *minuend,
 	 * the result is therefore not yet a valid X25519 unsigned
 	 * 258-bit integer.
 	 */
-	bigint_subtract ( &subtrahend->value, &result->value );
+	bigint_subtract ( &subtrahend->value, &result->value, &discard );
 
 	/* Add constant multiple of field prime p
 	 *
@@ -412,7 +415,7 @@ x25519_subtract ( const union x25519_quad257 *minuend,
 	 * therefore now a valid X25519 unsigned 258-bit integer, as
 	 * required.
 	 */
-	bigint_add ( &x25519_4p, &result->value );
+	bigint_add ( &x25519_4p, &result->value, &discard );
 }
 
 /**
@@ -429,6 +432,7 @@ void x25519_multiply ( const union x25519_oct258 *multiplicand,
 	union x25519_multiply_step1 *step1 = &tmp.step1;
 	union x25519_multiply_step2 *step2 = &tmp.step2;
 	union x25519_multiply_step3 *step3 = &tmp.step3;
+	bigint_element_t discard;
 
 	/* Step 1: perform raw multiplication
 	 *
@@ -466,7 +470,7 @@ void x25519_multiply ( const union x25519_oct258 *multiplicand,
 	bigint_grow ( &step1->parts.low_256bit, &result->value );
 	bigint_multiply ( &step1->parts.high_260bit, &x25519_reduce_256,
 			  &step2->product );
-	bigint_add ( &result->value, &step2->value );
+	bigint_add ( &result->value, &step2->value, &discard );
 
 	/* Step 3: reduce high-order 267-256=11 bits of step 2 result
 	 *
@@ -504,7 +508,7 @@ void x25519_multiply ( const union x25519_oct258 *multiplicand,
 	bigint_grow ( &step2->parts.low_256bit, &result->value );
 	bigint_multiply ( &step2->parts.high_11bit, &x25519_reduce_256,
 			  &step3->product );
-	bigint_add ( &step3->value, &result->value );
+	bigint_add ( &step3->value, &result->value, &discard );
 
 	/* Step 1 calculates the product of the input operands, and
 	 * each subsequent step reduces the number of bits in the
@@ -563,7 +567,7 @@ void x25519_invert ( const union x25519_oct258 *invertend,
  * @v value		Big integer to be subtracted from, if possible
  */
 static void x25519_reduce_by ( const x25519_t *subtrahend, x25519_t *value ) {
-	unsigned int max_bit = ( ( 8 * sizeof ( *value ) ) - 1 );
+	bigint_element_t carry;
 	x25519_t tmp;
 
 	/* Conditionally subtract subtrahend
@@ -572,8 +576,8 @@ static void x25519_reduce_by ( const x25519_t *subtrahend, x25519_t *value ) {
 	 * time) if the subtraction underflows.
 	 */
 	bigint_copy ( value, &tmp );
-	bigint_subtract ( subtrahend, value );
-	bigint_swap ( value, &tmp, bigint_bit_is_set ( value, max_bit ) );
+	bigint_subtract ( subtrahend, value, &carry );
+	bigint_swap ( value, &tmp, carry );
 }
 
 /**

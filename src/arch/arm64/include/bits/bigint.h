@@ -43,10 +43,11 @@ bigint_init_raw ( uint64_t *value0, unsigned int size,
  * @v addend0		Element 0 of big integer to add
  * @v value0		Element 0 of big integer to be added to
  * @v size		Number of elements
+ * @v carry		Carry out
  */
 static inline __attribute__ (( always_inline )) void
 bigint_add_raw ( const uint64_t *addend0, uint64_t *value0,
-		 unsigned int size ) {
+		 unsigned int size, uint64_t *carry ) {
 	bigint_t ( size ) __attribute__ (( may_alias )) *value =
 		( ( void * ) value0 );
 	uint64_t *discard_addend;
@@ -63,11 +64,13 @@ bigint_add_raw ( const uint64_t *addend0, uint64_t *value0,
 			       "str %4, [%1], #8\n\t"
 			       "sub %w2, %w2, #1\n\t"
 			       "cbnz %w2, 1b\n\t"
+			       "cset %5, cs\n\t"
 			       : "=r" ( discard_addend ),
 				 "=r" ( discard_value ),
 				 "=r" ( discard_size ),
 				 "=r" ( discard_addend_i ),
 				 "=r" ( discard_value_i ),
+				 "=r" ( *carry ),
 				 "+m" ( *value )
 			       : "0" ( addend0 ), "1" ( value0 ), "2" ( size )
 			       : "cc" );
@@ -79,10 +82,11 @@ bigint_add_raw ( const uint64_t *addend0, uint64_t *value0,
  * @v subtrahend0	Element 0 of big integer to subtract
  * @v value0		Element 0 of big integer to be subtracted from
  * @v size		Number of elements
+ * @v carry		Carry out
  */
 static inline __attribute__ (( always_inline )) void
 bigint_subtract_raw ( const uint64_t *subtrahend0, uint64_t *value0,
-		      unsigned int size ) {
+		      unsigned int size, uint64_t *carry ) {
 	bigint_t ( size ) __attribute__ (( may_alias )) *value =
 		( ( void * ) value0 );
 	uint64_t *discard_subtrahend;
@@ -99,11 +103,13 @@ bigint_subtract_raw ( const uint64_t *subtrahend0, uint64_t *value0,
 			       "str %4, [%1], #8\n\t"
 			       "sub %w2, %w2, #1\n\t"
 			       "cbnz %w2, 1b\n\t"
+			       "cset %5, cc\n\t"
 			       : "=r" ( discard_subtrahend ),
 				 "=r" ( discard_value ),
 				 "=r" ( discard_size ),
 				 "=r" ( discard_subtrahend_i ),
 				 "=r" ( discard_value_i ),
+				 "=r" ( *carry ),
 				 "+m" ( *value )
 			       : "0" ( subtrahend0 ), "1" ( value0 ),
 				 "2" ( size )

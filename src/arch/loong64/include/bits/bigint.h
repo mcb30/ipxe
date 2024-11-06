@@ -43,17 +43,17 @@ bigint_init_raw ( uint64_t *value0, unsigned int size,
  * @v addend0		Element 0 of big integer to add
  * @v value0		Element 0 of big integer to be added to
  * @v size		Number of elements
+ * @v carry		Carry out
  */
 static inline __attribute__ (( always_inline )) void
 bigint_add_raw ( const uint64_t *addend0, uint64_t *value0,
-		 unsigned int size ) {
+		 unsigned int size, uint64_t *carry ) {
 	bigint_t ( size ) __attribute__ (( may_alias )) *value =
 		( ( void * ) value0 );
 	uint64_t *discard_addend;
 	uint64_t *discard_value;
 	uint64_t discard_addend_i;
 	uint64_t discard_value_i;
-	uint64_t discard_carry;
 	uint64_t discard_temp;
 	unsigned int discard_size;
 
@@ -62,11 +62,11 @@ bigint_add_raw ( const uint64_t *addend0, uint64_t *value0,
 			       "ld.d %3, %0, 0\n\t"
 			       "ld.d %4, %1, 0\n\t"
 			       /* Add carry flag and addend */
-			       "add.d %4, %4, %5\n\t"
-			       "sltu %6, %4, %5\n\t"
+			       "add.d %4, %4, %6\n\t"
+			       "sltu %5, %4, %6\n\t"
 			       "add.d %4, %4, %3\n\t"
-			       "sltu %5, %4, %3\n\t"
-			       "or %5, %5, %6\n\t"
+			       "sltu %6, %4, %3\n\t"
+			       "or %6, %5, %6\n\t"
 			       /* Store value[i] */
 			       "st.d %4, %1, 0\n\t"
 			       /* Loop */
@@ -79,11 +79,11 @@ bigint_add_raw ( const uint64_t *addend0, uint64_t *value0,
 				 "=r" ( discard_size ),
 				 "=r" ( discard_addend_i ),
 				 "=r" ( discard_value_i ),
-				 "=r" ( discard_carry ),
 				 "=r" ( discard_temp ),
+				 "=r" ( *carry ),
 				 "+m" ( *value )
 			       : "0" ( addend0 ), "1" ( value0 ),
-				 "2" ( size ), "5" ( 0 ) );
+				 "2" ( size ), "6" ( 0 ) );
 }
 
 /**
@@ -92,17 +92,17 @@ bigint_add_raw ( const uint64_t *addend0, uint64_t *value0,
  * @v subtrahend0	Element 0 of big integer to subtract
  * @v value0		Element 0 of big integer to be subtracted from
  * @v size		Number of elements
+ * @v carry		Carry out
  */
 static inline __attribute__ (( always_inline )) void
 bigint_subtract_raw ( const uint64_t *subtrahend0, uint64_t *value0,
-		      unsigned int size ) {
+		      unsigned int size, uint64_t *carry ) {
 	bigint_t ( size ) __attribute__ (( may_alias )) *value =
 		( ( void * ) value0 );
 	uint64_t *discard_subtrahend;
 	uint64_t *discard_value;
 	uint64_t discard_subtrahend_i;
 	uint64_t discard_value_i;
-	uint64_t discard_carry;
 	uint64_t discard_temp;
 	unsigned int discard_size;
 
@@ -111,11 +111,11 @@ bigint_subtract_raw ( const uint64_t *subtrahend0, uint64_t *value0,
 			       "ld.d %3, %0, 0\n\t"
 			       "ld.d %4, %1, 0\n\t"
 			       /* Subtract carry flag and subtrahend */
-			       "sltu %6, %4, %5\n\t"
-			       "sub.d %4, %4, %5\n\t"
-			       "sltu %5, %4, %3\n\t"
+			       "sltu %5, %4, %6\n\t"
+			       "sub.d %4, %4, %6\n\t"
+			       "sltu %6, %4, %3\n\t"
 			       "sub.d %4, %4, %3\n\t"
-			       "or %5, %5, %6\n\t"
+			       "or %6, %5, %6\n\t"
 			       /* Store value[i] */
 			       "st.d %4, %1, 0\n\t"
 			       /* Loop */
@@ -128,11 +128,11 @@ bigint_subtract_raw ( const uint64_t *subtrahend0, uint64_t *value0,
 				 "=r" ( discard_size ),
 				 "=r" ( discard_subtrahend_i ),
 				 "=r" ( discard_value_i ),
-				 "=r" ( discard_carry ),
 				 "=r" ( discard_temp ),
+				 "=r" ( *carry ),
 				 "+m" ( *value )
 			       : "0" ( subtrahend0 ), "1" ( value0 ),
-				 "2" ( size ), "5" ( 0 ) );
+				 "2" ( size ), "6" ( 0 ) );
 }
 
 /**

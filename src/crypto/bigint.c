@@ -164,6 +164,7 @@ void bigint_reduce_raw ( const bigint_element_t *minuend0,
 	const unsigned int width = ( 8 * sizeof ( bigint_element_t ) );
 	const bigint_element_t msb_mask = ( 1UL << ( width - 1 ) );
 	bigint_element_t *element;
+	bigint_element_t discard;
 	unsigned int minuend_max;
 	unsigned int modulus_max;
 	unsigned int subshift;
@@ -285,9 +286,10 @@ void bigint_reduce_raw ( const bigint_element_t *minuend0,
 	 */
 	for ( msb = 0 ; ( msb || ( shift >= 0 ) ) ; shift-- ) {
 		if ( msb ) {
-			bigint_add ( &temp->modulus, &temp->minuend );
+			bigint_add ( &temp->modulus, &temp->minuend, &discard );
 		} else {
-			bigint_subtract ( &temp->modulus, &temp->minuend );
+			bigint_subtract ( &temp->modulus, &temp->minuend,
+					  &discard );
 		}
 		msb = ( temp->minuend.element[ minuend_size - 1 ] & msb_mask );
 		if ( shift > 0 )
@@ -324,6 +326,7 @@ void bigint_mod_invert_raw ( const bigint_element_t *invertend0,
 		bigint_t ( size ) residue;
 	} *temp = tmp;
 	const unsigned int width = ( 8 * sizeof ( bigint_element_t ) );
+	bigint_element_t discard;
 	unsigned int i;
 
 	/* Sanity check */
@@ -353,7 +356,7 @@ void bigint_mod_invert_raw ( const bigint_element_t *invertend0,
 		if ( temp->residue.element[0] & 1 ) {
 			inverse->element[ i / width ] |=
 				( 1UL << ( i % width ) );
-			bigint_add ( invertend, &temp->residue );
+			bigint_add ( invertend, &temp->residue, &discard );
 		}
 		bigint_shr ( &temp->residue );
 	}

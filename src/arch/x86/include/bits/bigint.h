@@ -52,15 +52,15 @@ bigint_init_raw ( uint32_t *value0, unsigned int size,
  * @v addend0		Element 0 of big integer to add
  * @v value0		Element 0 of big integer to be added to
  * @v size		Number of elements
+ * @v carry		Carry out
  */
 static inline __attribute__ (( always_inline )) void
 bigint_add_raw ( const uint32_t *addend0, uint32_t *value0,
-		 unsigned int size ) {
+		 unsigned int size, uint32_t *carry ) {
 	bigint_t ( size ) __attribute__ (( may_alias )) *value =
 		( ( void * ) value0 );
 	long index;
 	void *discard_S;
-	long discard_c;
 
 	__asm__ __volatile__ ( "xor %0, %0\n\t" /* Zero %0 and clear CF */
 			       "\n1:\n\t"
@@ -68,8 +68,9 @@ bigint_add_raw ( const uint32_t *addend0, uint32_t *value0,
 			       "adcl %%eax, (%4,%0,4)\n\t"
 			       "inc %0\n\t" /* Does not affect CF */
 			       "loop 1b\n\t"
+			       "setc %b2\n\t"
 			       : "=&r" ( index ), "=&S" ( discard_S ),
-				 "=&c" ( discard_c ), "+m" ( *value )
+				 "=&c" ( *carry ), "+m" ( *value )
 			       : "r" ( value0 ), "1" ( addend0 ), "2" ( size )
 			       : "eax" );
 }
@@ -80,15 +81,15 @@ bigint_add_raw ( const uint32_t *addend0, uint32_t *value0,
  * @v subtrahend0	Element 0 of big integer to subtract
  * @v value0		Element 0 of big integer to be subtracted from
  * @v size		Number of elements
+ * @v carry		Carry out
  */
 static inline __attribute__ (( always_inline )) void
 bigint_subtract_raw ( const uint32_t *subtrahend0, uint32_t *value0,
-		      unsigned int size ) {
+		      unsigned int size, uint32_t *carry ) {
 	bigint_t ( size ) __attribute__ (( may_alias )) *value =
 		( ( void * ) value0 );
 	long index;
 	void *discard_S;
-	long discard_c;
 
 	__asm__ __volatile__ ( "xor %0, %0\n\t" /* Zero %0 and clear CF */
 			       "\n1:\n\t"
@@ -96,8 +97,9 @@ bigint_subtract_raw ( const uint32_t *subtrahend0, uint32_t *value0,
 			       "sbbl %%eax, (%4,%0,4)\n\t"
 			       "inc %0\n\t" /* Does not affect CF */
 			       "loop 1b\n\t"
+			       "setc %b2\n\t"
 			       : "=&r" ( index ), "=&S" ( discard_S ),
-				 "=&c" ( discard_c ), "+m" ( *value )
+				 "=&c" ( *carry ), "+m" ( *value )
 			       : "r" ( value0 ), "1" ( subtrahend0 ),
 				 "2" ( size )
 			       : "eax" );
