@@ -746,8 +746,7 @@ void bigint_mod_exp_sample ( const bigint_element_t *base0,
 	bigint_t ( size ) modulus_temp;					\
 	bigint_t ( exponent_size ) exponent_temp;			\
 	bigint_t ( size ) result_temp;					\
-	size_t tmp_len = bigint_mod_exp_tmp_len ( &modulus_temp,	\
-						  &exponent_temp );	\
+	size_t tmp_len = bigint_mod_exp_tmp_len ( &modulus_temp );	\
 	uint8_t tmp[tmp_len];						\
 	{} /* Fix emacs alignment */					\
 									\
