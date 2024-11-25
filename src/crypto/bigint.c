@@ -481,7 +481,7 @@ void bigint_mod_multiply_raw ( const bigint_element_t *multiplicand0,
 }
 
 /**
- * Perform modular exponentiation of big integers
+ * Perform modular exponentiation of big integers with odd modulus
  *
  * @v base0		Element 0 of big integer base
  * @v modulus0		Element 0 of big integer modulus
@@ -512,6 +512,8 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 		uint8_t mod_multiply[mod_multiply_len];
 	} *temp = tmp;
 	static const uint8_t start[1] = { 0x01 };
+
+	assert ( modulus->element[0] & 1 );
 
 	memcpy ( &temp->base, base, sizeof ( temp->base ) );
 	memcpy ( &temp->exponent, exponent, sizeof ( temp->exponent ) );
