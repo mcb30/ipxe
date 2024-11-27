@@ -428,7 +428,7 @@ void bigint_montgomery_raw ( const bigint_element_t *modulus0,
 }
 
 /**
- * Perform modular exponentiation of big integers with odd modulus
+ * Perform modular exponentiation of big integers
  *
  * @v base0		Element 0 of big integer base
  * @v modulus0		Element 0 of big integer modulus
@@ -468,7 +468,6 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 
 	/* Sanity check */
 	assert ( sizeof ( *temp ) == bigint_mod_exp_tmp_len ( modulus ) );
-	assert ( modulus->element[0] & 1 );
 
 	/* Calculate inverse of modulus modulo element size */
 	bigint_mod_invert ( modulus, &modinv );
