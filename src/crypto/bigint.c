@@ -452,6 +452,7 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 		*exponent = ( ( const void * ) exponent0 );
 	bigint_t ( size ) __attribute__ (( may_alias )) *result =
 		( ( void * ) result0 );
+	const unsigned int width = ( 8 * sizeof ( bigint_element_t ) );
 	struct {
 		union {
 			bigint_t ( 2 * size ) padded_modulus;
@@ -465,7 +466,10 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 			bigint_t ( size ) low;
 		} product;
 	} *temp = tmp;
+	const uint8_t one[1] = { 1 };
 	bigint_t ( 1 ) modinv;
+	bigint_element_t submask;
+	unsigned int subsize;
 	unsigned int scale;
 	unsigned int max;
 	unsigned int bit;
@@ -485,6 +489,10 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 	      scale++ ) {
 		bigint_shr ( &temp->modulus );
 	}
+	subsize = ( ( scale + width - 1 ) / width );
+	submask = ( ( 1UL << ( scale % width ) ) - 1 );
+	if ( ! submask )
+		submask = ~submask;
 
 	/* Calculate inverse of (scaled) modulus N modulo element size */
 	bigint_mod_invert ( &temp->modulus, &modinv );
@@ -504,7 +512,7 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 	bigint_montgomery ( &temp->modulus, &modinv, &temp->product.full,
 			    &temp->stash );
 
-	/* Perform exponentiation by squaring */
+	/* Calculate x1 = base^exponent modulo N */
 	max = bigint_max_set_bit ( exponent );
 	for ( bit = 1 ; bit <= max ; bit++ ) {
 
@@ -527,4 +535,58 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 	bigint_grow ( result, &temp->product.full );
 	bigint_montgomery ( &temp->modulus, &modinv, &temp->product.full,
 			    result );
+
+	/* Handle even moduli via Garner's algorithm */
+	if ( subsize ) {
+		const bigint_t ( subsize ) __attribute__ (( may_alias ))
+			*subbase = ( ( const void * ) base );
+		bigint_t ( subsize ) __attribute__ (( may_alias ))
+			*submodulus = ( ( void * ) &temp->modulus );
+		bigint_t ( subsize ) __attribute__ (( may_alias ))
+			*substash = ( ( void * ) &temp->stash );
+		bigint_t ( subsize ) __attribute__ (( may_alias ))
+			*subresult = ( ( void * ) result );
+		union {
+			bigint_t ( 2 * subsize ) full;
+			bigint_t ( subsize ) low;
+		} __attribute__ (( may_alias ))
+			*subproduct = ( ( void * ) &temp->product.full );
+
+		/* Calculate x2 = base^exponent modulo 2^k */
+		bigint_init ( &temp->stash, one, sizeof ( one ) );
+		for ( bit = 1 ; bit <= max ; bit++ ) {
+
+			/* Square (and reduce) */
+			bigint_multiply ( substash, substash,
+					  &subproduct->full );
+			bigint_copy ( &subproduct->low, substash );
+
+			/* Multiply (and reduce) */
+			bigint_multiply ( subbase, substash,
+					  &subproduct->full );
+
+			/* Conditionally swap the multiplied result */
+			bigint_swap ( substash, &subproduct->low,
+				      bigint_bit_is_set ( exponent,
+							  ( max - bit ) ) );
+		}
+
+		/* Calculate N^-1 modulo 2^k */
+		bigint_mod_invert ( submodulus, &subproduct->low );
+		bigint_copy ( &subproduct->low, submodulus );
+
+		/* Calculate y = (x2 - x1) * N^-1 modulo 2^k */
+		bigint_subtract ( subresult, substash );
+		bigint_multiply ( substash, submodulus, &subproduct->full );
+		bigint_copy ( &subproduct->low, substash );
+		substash->element[ subsize - 1 ] &= submask;
+
+		/* Reconstruct N */
+		bigint_mod_invert ( submodulus, &subproduct->low );
+		bigint_copy ( &subproduct->low, submodulus );
+
+		/* Calculate x = x1 + N * y */
+		bigint_multiply ( &temp->modulus, substash, &subproduct->full );
+		bigint_add ( &subproduct->low, result );
+	}
 }
