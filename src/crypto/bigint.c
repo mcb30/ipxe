@@ -454,56 +454,77 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 		( ( void * ) result0 );
 	struct {
 		union {
-			bigint_t ( 2 * size ) full;
-			bigint_t ( size ) low;
-		} x;
+			bigint_t ( 2 * size ) padded_modulus;
+			struct {
+				bigint_t ( size ) modulus;
+				bigint_t ( size ) stash;
+			};
+		};
 		union {
 			bigint_t ( 2 * size ) full;
 			bigint_t ( size ) low;
-		} y;
+		} product;
 	} *temp = tmp;
 	bigint_t ( 1 ) modinv;
+	unsigned int scale;
 	unsigned int max;
 	unsigned int bit;
 
 	/* Sanity check */
 	assert ( sizeof ( *temp ) == bigint_mod_exp_tmp_len ( modulus ) );
 
-	/* Calculate inverse of modulus modulo element size */
-	bigint_mod_invert ( modulus, &modinv );
+	/* Handle degenerate case of zero modulus */
+	if ( ! bigint_max_set_bit ( modulus ) ) {
+		memset ( result, 0, sizeof ( *result ) );
+		return;
+	}
 
-	/* Calculate y = R^2 mod N via direct reduction of (R^2 - N) */
-	bigint_grow ( modulus, &temp->x.full );
-	memset ( &temp->y.full, 0, sizeof ( temp->y.full ) );
-	bigint_subtract ( &temp->x.full, &temp->y.full );
-	bigint_reduce ( &temp->x.full, &temp->y.full );
+	/* Factor modulus as (N * 2^scale) where N is odd */
+	bigint_grow ( modulus, &temp->padded_modulus );
+	for ( scale = 0 ; ( ! bigint_bit_is_set ( &temp->modulus, 0 ) ) ;
+	      scale++ ) {
+		bigint_shr ( &temp->modulus );
+	}
 
-	/* Convert x = Montgomery(base, R^2 mod N) */
-	bigint_multiply ( base, &temp->y.low, &temp->x.full );
-	bigint_montgomery ( modulus, &modinv, &temp->x.full, &temp->x.low );
+	/* Calculate inverse of (scaled) modulus N modulo element size */
+	bigint_mod_invert ( &temp->modulus, &modinv );
+
+	/* Calculate R^2 mod N via direct reduction of (R^2 - N) */
+	memset ( &temp->product.full, 0, sizeof ( temp->product.full ) );
+	bigint_subtract ( &temp->padded_modulus, &temp->product.full );
+	bigint_reduce ( &temp->padded_modulus, &temp->product.full );
+	bigint_copy ( &temp->product.low, &temp->stash );
 
 	/* Initialise result = Montgomery(1, R^2 mod N) */
-	bigint_montgomery ( modulus, &modinv, &temp->y.full, result );
+	bigint_montgomery ( &temp->modulus, &modinv,
+			    &temp->product.full, result );
+
+	/* Convert base into Montgomery form */
+	bigint_multiply ( base, &temp->stash, &temp->product.full );
+	bigint_montgomery ( &temp->modulus, &modinv, &temp->product.full,
+			    &temp->stash );
 
 	/* Perform exponentiation by squaring */
 	max = bigint_max_set_bit ( exponent );
 	for ( bit = 1 ; bit <= max ; bit++ ) {
 
 		/* Square (and reduce) */
-		bigint_multiply ( result, result, &temp->y.full );
-		bigint_montgomery ( modulus, &modinv, &temp->y.full, result );
+		bigint_multiply ( result, result, &temp->product.full );
+		bigint_montgomery ( &temp->modulus, &modinv,
+				    &temp->product.full, result );
 
 		/* Multiply (and reduce) */
-		bigint_multiply ( &temp->x.low, result, &temp->y.full );
-		bigint_montgomery ( modulus, &modinv, &temp->y.full,
-				    &temp->y.low );
+		bigint_multiply ( &temp->stash, result, &temp->product.full );
+		bigint_montgomery ( &temp->modulus, &modinv,
+				    &temp->product.full, &temp->product.low );
 
 		/* Conditionally swap the multiplied result */
-		bigint_swap ( result, &temp->y.low,
+		bigint_swap ( result, &temp->product.low,
 			      bigint_bit_is_set ( exponent, ( max - bit ) ) );
 	}
 
 	/* Convert back out of Montgomery form */
-	bigint_grow ( result, &temp->y.full );
-	bigint_montgomery ( modulus, &modinv, &temp->y.full, result );
+	bigint_grow ( result, &temp->product.full );
+	bigint_montgomery ( &temp->modulus, &modinv, &temp->product.full,
+			    result );
 }
