@@ -296,8 +296,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define bigint_mod_exp_tmp_len( modulus ) ( {				\
 	unsigned int size = bigint_size (modulus);			\
 	sizeof ( struct {						\
-		bigint_t ( 2 * size ) x;				\
-		bigint_t ( 2 * size ) y;				\
+		bigint_t ( size ) temp[4];				\
 	} ); } )
 
 #include <bits/bigint.h>

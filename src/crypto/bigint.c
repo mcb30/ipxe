@@ -497,7 +497,7 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 	/* Calculate inverse of (scaled) modulus N modulo element size */
 	bigint_mod_invert ( &temp->modulus, &modinv );
 
-	/* Calculate R^2 mod N via direct reduction of (R^2 - N) */
+	/* Calculate (R^2 mod N) via direct reduction of (R^2 - N) */
 	memset ( &temp->product.full, 0, sizeof ( temp->product.full ) );
 	bigint_subtract ( &temp->padded_modulus, &temp->product.full );
 	bigint_reduce ( &temp->padded_modulus, &temp->product.full );
