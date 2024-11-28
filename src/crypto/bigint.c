@@ -553,7 +553,7 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 			*subproduct = ( ( void * ) &temp->product.full );
 
 		/* Calculate x2 = base^exponent modulo 2^k */
-		bigint_init ( &temp->stash, one, sizeof ( one ) );
+		bigint_init ( substash, one, sizeof ( one ) );
 		for ( bit = 1 ; bit <= max ; bit++ ) {
 
 			/* Square (and reduce) */
@@ -578,15 +578,16 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 		/* Calculate y = (x2 - x1) * N^-1 modulo 2^k */
 		bigint_subtract ( subresult, substash );
 		bigint_multiply ( substash, submodulus, &subproduct->full );
-		bigint_copy ( &subproduct->low, substash );
-		substash->element[ subsize - 1 ] &= submask;
+		subproduct->low.element[ subsize - 1 ] &= submask;
+		bigint_grow ( &subproduct->low, &temp->stash );
 
 		/* Reconstruct N */
 		bigint_mod_invert ( submodulus, &subproduct->low );
 		bigint_copy ( &subproduct->low, submodulus );
 
 		/* Calculate x = x1 + N * y */
-		bigint_multiply ( &temp->modulus, substash, &subproduct->full );
-		bigint_add ( &subproduct->low, result );
+		bigint_multiply ( &temp->modulus, &temp->stash,
+				  &temp->product.full );
+		bigint_add ( &temp->product.low, result );
 	}
 }
