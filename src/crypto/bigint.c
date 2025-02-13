@@ -325,27 +325,113 @@ void bigint_reduce_raw ( bigint_element_t *modulus0, bigint_element_t *value0,
 }
 
 /**
- * Reduce supremum of big integer representation
+ * Reduce big integer R^2 modulo N
  *
  * @v modulus0		Element 0 of big integer modulus
  * @v result0		Element 0 of big integer to hold result
- * @v size		Number of elements in modulus and value
+ * @v size		Number of elements in modulus and result
  *
- * Reduce the value 2^k (where k is the bit width of the big integer
- * representation) modulo the specified modulus.
+ * Reduce the value R^2 modulo N, where R=2^n and n is the number of
+ * bits in the representation of the modulus N, including any leading
+ * zero bits.
  */
-void bigint_reduce_supremum_raw ( bigint_element_t *modulus0,
-				  bigint_element_t *result0,
-				  unsigned int size ) {
-	bigint_t ( size ) __attribute__ (( may_alias ))
-		*modulus = ( ( void * ) modulus0 );
+void bigint_reduce_square_raw ( const bigint_element_t *modulus0,
+				bigint_element_t *result0,
+				unsigned int size ) {
+	const bigint_t ( size ) __attribute__ (( may_alias ))
+		*modulus = ( ( const void * ) modulus0 );
 	bigint_t ( size ) __attribute__ (( may_alias ))
 		*result = ( ( void * ) result0 );
+	const unsigned int width = ( 8 * sizeof ( bigint_element_t ) );
+	static const uint8_t one[1] = { 1 };
+	int shift;
+	int carry;
+	int sign;
+	int msb;
 
-	/* Calculate (2^k) mod N via direct reduction of (2^k - N) mod N */
-	memset ( result, 0, sizeof ( *result ) );
-	bigint_subtract ( modulus, result );
-	bigint_reduce ( modulus, result );
+	/* Start profiling */
+	profile_start ( &bigint_mod_profiler );
+
+	/* We have the constants:
+	 *
+	 *    N = modulus
+	 *
+	 *    n = number of bits in the modulus (including any leading zeros)
+	 *
+	 *    R = 2^n
+	 *
+	 * Let r be the extension of the n-bit result register by a
+	 * separate two's complement sign bit, such that -R <= r < R,
+	 * and define:
+	 *
+	 *    x = r * 2^k
+	 *
+	 * as the value being reduced modulo N, where k is a
+	 * non-negative integer bit shift.
+	 *
+	 * We want to reduce the initial value R^2=2^(2n), which we
+	 * may represent using r=1 and k=2n.
+	 *
+	 * We then iterate over decrementing k, maintaining the loop
+	 * invariant:
+	 *
+	 *    -N <= r < N
+	 *
+	 * On each iteration, we double r and then either subtract N
+	 * (if r is currently non-negative) or add N (if r is
+	 * currently negative) to preserve the loop invariant:
+	 *
+	 *      0 <= r < N    =>   r' = 2r - N    =>   -N <= r' < N
+	 *     -N <= r < 0    =>   r' = 2r + N    =>   -N <= r' < N
+	 *
+	 * Note that doubling the n-bit result register will create a
+	 * value of n+1 bits: this extra bit needs to be handled
+	 * separately during the calculation.
+	 *
+	 * Note also that since N may use all n bits, the most
+	 * significant bit of the n-bit result register is not a valid
+	 * two's complement sign bit for r: the extra sign bit
+	 * therefore also needs to be handled separately.
+	 *
+	 * Once we reach k=0, we have x=r and therefore:
+	 *
+	 *    -N <= x < N
+	 *
+	 * After this last loop iteration (with k=0), we may need to
+	 * add a single multiple of N to ensure that x is positive,
+	 * i.e. lies within the range 0 <= x < N.  To allow for
+	 * reusing the (inlined) expansion of bigint_add(), we achieve
+	 * this via a potential additional loop iteration that
+	 * performs the addition and is then guaranteed to terminate
+	 * (since the result will be positive).
+	 */
+
+	/* Initialise x=R^2 */
+	bigint_init ( result, one, sizeof ( one ) );
+	shift = ( 2 * size * width );
+	sign = 0;
+
+	/* Iterate as described above */
+	while ( ( --shift >= 0 ) || sign ) {
+		if ( shift >= 0 ) {
+			msb = bigint_shl ( result );
+		} else {
+			msb = sign;
+		}
+		if ( sign ) {
+			carry = bigint_add ( modulus, result );
+		} else {
+			carry = bigint_subtract ( modulus, result );
+		}
+		assert ( ( sign == msb ) || carry );
+		sign = ( msb ^ carry );
+	}
+
+	/* Sanity check */
+	assert ( ! bigint_is_geq ( result, modulus ) );
+
+	/* Stop profiling */
+	profile_stop ( &bigint_mod_profiler );
 }
 
 /**
@@ -805,12 +891,9 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 		( ( void * ) result0 );
 	const unsigned int width = ( 8 * sizeof ( bigint_element_t ) );
 	struct {
-		union {
-			bigint_t ( 2 * size ) padded_modulus;
-			struct {
-				bigint_t ( size ) modulus;
-				bigint_t ( size ) stash;
-			};
+		struct {
+			bigint_t ( size ) modulus;
+			bigint_t ( size ) stash;
 		};
 		union {
 			bigint_t ( 2 * size ) full;
@@ -833,7 +916,7 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 	}
 
 	/* Factor modulus as (N * 2^scale) where N is odd */
-	bigint_grow ( modulus, &temp->padded_modulus );
+	bigint_copy ( modulus, &temp->modulus );
 	for ( scale = 0 ; ( ! bigint_bit_is_set ( &temp->modulus, 0 ) ) ;
 	      scale++ ) {
 		bigint_shr ( &temp->modulus );
@@ -844,10 +927,10 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 		submask = ~submask;
 
 	/* Calculate (R^2 mod N) */
-	bigint_reduce_supremum ( &temp->padded_modulus, &temp->product.full );
-	bigint_copy ( &temp->product.low, &temp->stash );
+	bigint_reduce_square ( &temp->modulus, &temp->stash );
 
 	/* Initialise result = Montgomery(1, R^2 mod N) */
+	bigint_grow ( &temp->stash, &temp->product.full );
 	bigint_montgomery ( &temp->modulus, &temp->product.full, result );
 
 	/* Convert base into Montgomery form */
