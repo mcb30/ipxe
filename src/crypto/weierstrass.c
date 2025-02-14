@@ -203,7 +203,7 @@ static void weierstrass_init ( struct weierstrass_curve *curve ) {
 	       curve->name, bigint_ntoa ( prime ) );
 
 	/* Calculate Montgomery constant R^2 mod N */
-	bigint_reduce_square ( prime, square );
+	bigint_reduce ( prime, square );
 	DBGC ( curve, "WEIERSTRASS %s R^2 = %s mod N\n",
 	       curve->name, bigint_ntoa ( square ) );
 

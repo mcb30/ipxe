@@ -27,17 +27,12 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
-#include <ipxe/profile.h>
 #include <ipxe/bigint.h>
 
 /** @file
  *
  * Big integer support
  */
-
-/** Modular direct reduction profiler */
-static struct profiler bigint_mod_profiler __profiler =
-	{ .name = "bigint_mod" };
 
 /** Minimum number of least significant bytes included in transcription */
 #define BIGINT_NTOA_LSB_MIN 16
@@ -180,151 +175,6 @@ void bigint_multiply_raw ( const bigint_element_t *multiplicand0,
 }
 
 /**
- * Reduce big integer
- *
- * @v modulus0		Element 0 of big integer modulus
- * @v value0		Element 0 of big integer to be reduced
- * @v size		Number of elements in modulus and value
- */
-void bigint_reduce_raw ( bigint_element_t *modulus0, bigint_element_t *value0,
-			 unsigned int size ) {
-	bigint_t ( size ) __attribute__ (( may_alias ))
-		*modulus = ( ( void * ) modulus0 );
-	bigint_t ( size ) __attribute__ (( may_alias ))
-		*value = ( ( void * ) value0 );
-	const unsigned int width = ( 8 * sizeof ( bigint_element_t ) );
-	bigint_element_t *element;
-	unsigned int modulus_max;
-	unsigned int value_max;
-	unsigned int subshift;
-	int offset;
-	int shift;
-	int msb;
-	int i;
-
-	/* Start profiling */
-	profile_start ( &bigint_mod_profiler );
-
-	/* Normalise the modulus
-	 *
-	 * Scale the modulus by shifting left such that both modulus
-	 * "m" and value "x" have the same most significant set bit.
-	 * (If this is not possible, then the value is already less
-	 * than the modulus, and we may therefore skip reduction
-	 * completely.)
-	 */
-	value_max = bigint_max_set_bit ( value );
-	modulus_max = bigint_max_set_bit ( modulus );
-	shift = ( value_max - modulus_max );
-	if ( shift < 0 )
-		goto skip;
-	subshift = ( shift & ( width - 1 ) );
-	offset = ( shift / width );
-	element = modulus->element;
-	for ( i = ( ( value_max - 1 ) / width ) ; ; i-- ) {
-		element[i] = ( element[ i - offset ] << subshift );
-		if ( i <= offset )
-			break;
-		if ( subshift ) {
-			element[i] |= ( element[ i - offset - 1 ]
-					>> ( width - subshift ) );
-		}
-	}
-	for ( i-- ; i >= 0 ; i-- )
-		element[i] = 0;
-
-	/* Reduce the value "x" by iteratively adding or subtracting
-	 * the scaled modulus "m".
-	 *
-	 * On each loop iteration, we maintain the invariant:
-	 *
-	 *    -2m <= x < 2m
-	 *
-	 * If x is positive, we obtain the new value x' by
-	 * subtracting m, otherwise we add m:
-	 *
-	 *      0 <= x < 2m   =>   x' := x - m   =>   -m <= x' < m
-	 *    -2m <= x < 0    =>   x' := x + m   =>   -m <= x' < m
-	 *
-	 * and then halve the modulus (by shifting right):
-	 *
-	 *      m' = m/2
-	 *
-	 * We therefore end up with:
-	 *
-	 *     -m <= x' < m   =>   -2m' <= x' < 2m'
-	 *
-	 * i.e. we have preseved the invariant while reducing the
-	 * bounds on x' by one power of two.
-	 *
-	 * The issue remains of how to determine on each iteration
-	 * whether or not x is currently positive, given that both
-	 * input values are unsigned big integers that may use all
-	 * available bits (including the MSB).
-	 *
-	 * On the first loop iteration, we may simply assume that x is
-	 * positive, since it is unmodified from the input value and
-	 * so is positive by definition (even if the MSB is set).  We
-	 * therefore unconditionally perform a subtraction on the
-	 * first loop iteration.
-	 *
-	 * Let k be the MSB after normalisation.  We then have:
-	 *
-	 *    2^k <= m < 2^(k+1)
-	 *    2^k <= x < 2^(k+1)
-	 *
-	 * On the first loop iteration, we therefore have:
-	 *
-	 *     x' = (x - m)
-	 *        < 2^(k+1) - 2^k
-	 *        < 2^k
-	 *
-	 * Any positive value of x' therefore has its MSB set to zero,
-	 * and so we may validly treat the MSB of x' as a sign bit at
-	 * the end of the first loop iteration.
-	 *
-	 * On all subsequent loop iterations, the starting value m is
-	 * guaranteed to have its MSB set to zero (since it has
-	 * already been shifted right at least once).  Since we know
-	 * from above that we preserve the loop invariant:
-	 *
-	 *     -m <= x' < m
-	 *
-	 * we immediately know that any positive value of x' also has
-	 * its MSB set to zero, and so we may validly treat the MSB of
-	 * x' as a sign bit at the end of all subsequent loop
-	 * iterations.
-	 *
-	 * After the last loop iteration (when m' has been shifted
-	 * back down to the original value of the modulus), we may
-	 * need to add a single multiple of m' to ensure that x' is
-	 * positive, i.e. lies within the range 0 <= x' < m'.  To
-	 * allow for reusing the (inlined) expansion of
-	 * bigint_subtract(), we achieve this via a potential
-	 * additional loop iteration that performs the addition and is
-	 * then guaranteed to terminate (since the result will be
-	 * positive).
-	 */
-	for ( msb = 0 ; ( msb || ( shift >= 0 ) ) ; shift-- ) {
-		if ( msb ) {
-			bigint_add ( modulus, value );
-		} else {
-			bigint_subtract ( modulus, value );
-		}
-		msb = bigint_msb_is_set ( value );
-		if ( shift > 0 )
-			bigint_shr ( modulus );
-	}
-
- skip:
-	/* Sanity check */
-	assert ( ! bigint_is_geq ( value, modulus ) );
-
-	/* Stop profiling */
-	profile_stop ( &bigint_mod_profiler );
-}
-
-/**
  * Reduce big integer R^2 modulo N
  *
  * @v modulus0		Element 0 of big integer modulus
@@ -335,22 +185,18 @@ void bigint_reduce_raw ( bigint_element_t *modulus0, bigint_element_t *value0,
  * bits in the representation of the modulus N, including any leading
  * zero bits.
  */
-void bigint_reduce_square_raw ( const bigint_element_t *modulus0,
-				bigint_element_t *result0,
-				unsigned int size ) {
+void bigint_reduce_raw ( const bigint_element_t *modulus0,
+			 bigint_element_t *result0, unsigned int size ) {
 	const bigint_t ( size ) __attribute__ (( may_alias ))
 		*modulus = ( ( const void * ) modulus0 );
 	bigint_t ( size ) __attribute__ (( may_alias ))
 		*result = ( ( void * ) result0 );
 	const unsigned int width = ( 8 * sizeof ( bigint_element_t ) );
 	static const uint8_t one[1] = { 1 };
-	int shift;
+	unsigned int shift;
 	int carry;
 	int sign;
 	int msb;
-
-	/* Start profiling */
-	profile_start ( &bigint_mod_profiler );
 
 	/* We have the constants:
 	 *
@@ -377,21 +223,30 @@ void bigint_reduce_square_raw ( const bigint_element_t *modulus0,
 	 *
 	 *    -N <= r < N
 	 *
-	 * On each iteration, we double r and then either subtract N
-	 * (if r is currently non-negative) or add N (if r is
-	 * currently negative) to preserve the loop invariant:
+	 * On each iteration we must first double r, to compensate for
+	 * having decremented k:
 	 *
-	 *      0 <= r < N    =>   r' = 2r - N    =>   -N <= r' < N
-	 *     -N <= r < 0    =>   r' = 2r + N    =>   -N <= r' < N
+	 *    k' = k - 1
+	 *
+	 *    r' = 2r
+	 *
+	 *    x = r * 2^k = 2r * 2^(k-1) = r' * 2^k'
 	 *
 	 * Note that doubling the n-bit result register will create a
 	 * value of n+1 bits: this extra bit needs to be handled
 	 * separately during the calculation.
 	 *
-	 * Note also that since N may use all n bits, the most
-	 * significant bit of the n-bit result register is not a valid
-	 * two's complement sign bit for r: the extra sign bit
-	 * therefore also needs to be handled separately.
+	 * We then subtract N (if r is currently non-negative) or add
+	 * N (if r is currently negative) to restore the loop
+	 * invariant:
+	 *
+	 *      0 <= r < N    =>   r" = 2r - N    =>   -N <= r" < N
+	 *     -N <= r < 0    =>   r" = 2r + N    =>   -N <= r" < N
+	 *
+	 * Note that since N may use all n bits, the most significant
+	 * bit of the n-bit result register is not a valid two's
+	 * complement sign bit for r: the extra sign bit therefore
+	 * also needs to be handled separately.
 	 *
 	 * Once we reach k=0, we have x=r and therefore:
 	 *
@@ -399,11 +254,7 @@ void bigint_reduce_square_raw ( const bigint_element_t *modulus0,
 	 *
 	 * After this last loop iteration (with k=0), we may need to
 	 * add a single multiple of N to ensure that x is positive,
-	 * i.e. lies within the range 0 <= x < N.  To allow for
-	 * reusing the (inlined) expansion of bigint_add(), we achieve
-	 * this via a potential additional loop iteration that
-	 * performs the addition and is then guaranteed to terminate
-	 * (since the result will be positive).
+	 * i.e. lies within the range 0 <= x < N.
 	 */
 
 	/* Initialise x=R^2 */
@@ -412,26 +263,37 @@ void bigint_reduce_square_raw ( const bigint_element_t *modulus0,
 	sign = 0;
 
 	/* Iterate as described above */
-	while ( ( --shift >= 0 ) || sign ) {
-		if ( shift >= 0 ) {
-			msb = bigint_shl ( result );
-		} else {
-			msb = sign;
-		}
+	while ( shift-- ) {
+
+		/* Calculate 2r, storing extra bit separately */
+		msb = bigint_shl ( result );
+
+		/* Add or subtract N according to current sign */
 		if ( sign ) {
 			carry = bigint_add ( modulus, result );
 		} else {
 			carry = bigint_subtract ( modulus, result );
 		}
+
+		/* Calculate new sign of result
+		 *
+		 * We know the result lies in the range -N <= r < N
+		 * and so the tuple (old sign, msb, carry) cannot ever
+		 * take the values (0, 1, 0) or (1, 0, 0).  We can
+		 * therefore treat these as don't-care inputs, which
+		 * allows us to simplify the boolean expression by
+		 * ignoring the old sign completely.
+		 */
 		assert ( ( sign == msb ) || carry );
 		sign = ( msb ^ carry );
 	}
 
+	/* Add N to make result positive if necessary */
+	if ( sign )
+		bigint_add ( modulus, result );
+
 	/* Sanity check */
 	assert ( ! bigint_is_geq ( result, modulus ) );
-
-	/* Stop profiling */
-	profile_stop ( &bigint_mod_profiler );
 }
 
 /**
@@ -927,7 +789,7 @@ void bigint_mod_exp_raw ( const bigint_element_t *base0,
 		submask = ~submask;
 
 	/* Calculate (R^2 mod N) */
-	bigint_reduce_square ( &temp->modulus, &temp->stash );
+	bigint_reduce ( &temp->modulus, &temp->stash );
 
 	/* Initialise result = Montgomery(1, R^2 mod N) */
 	bigint_grow ( &temp->stash, &temp->product.full );

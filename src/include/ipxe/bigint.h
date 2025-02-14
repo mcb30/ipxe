@@ -243,27 +243,15 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 	} while ( 0 )
 
 /**
- * Reduce big integer modulo N
- *
- * @v modulus		Big integer modulus
- * @v value		Big integer to be reduced
- */
-#define bigint_reduce( modulus, value ) do {				\
-	unsigned int size = bigint_size (modulus);			\
-	bigint_reduce_raw ( (modulus)->element, (value)->element,	\
-			    size );					\
-	} while ( 0 )
-
-/**
  * Reduce big integer R^2 modulo N
  *
  * @v modulus		Big integer modulus
  * @v result		Big integer to hold result
  */
-#define bigint_reduce_square( modulus, result ) do {			\
+#define bigint_reduce( modulus, result ) do {				\
 	unsigned int size = bigint_size (modulus);			\
-	bigint_reduce_square_raw ( (modulus)->element,			\
-				   (result)->element, size );		\
+	bigint_reduce_raw ( (modulus)->element, (result)->element,	\
+			    size );					\
 	} while ( 0 )
 
 /**
@@ -442,10 +430,8 @@ void bigint_multiply_raw ( const bigint_element_t *multiplicand0,
 			   const bigint_element_t *multiplier0,
 			   unsigned int multiplier_size,
 			   bigint_element_t *result0 );
-void bigint_reduce_raw ( bigint_element_t *modulus0, bigint_element_t *value0,
-			 unsigned int size );
-void bigint_reduce_square_raw ( const bigint_element_t *modulus0,
-				bigint_element_t *value0, unsigned int size );
+void bigint_reduce_raw ( const bigint_element_t *modulus0,
+			 bigint_element_t *result0, unsigned int size );
 void bigint_mod_invert_raw ( const bigint_element_t *invertend0,
 			     bigint_element_t *inverse0, unsigned int size );
 int bigint_montgomery_relaxed_raw ( const bigint_element_t *modulus0,
