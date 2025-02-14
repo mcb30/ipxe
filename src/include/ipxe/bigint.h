@@ -147,6 +147,28 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 			    size ); } )
 
 /**
+ * Set bit in big integer
+ *
+ * @v value		Big integer
+ * @v bit		Bit to set
+ */
+#define bigint_set_bit( value, bit ) do {				\
+	unsigned int size = bigint_size (value);			\
+	bigint_set_bit_raw ( (value)->element, size, bit );		\
+	} while ( 0 )
+
+/**
+ * Clear bit in big integer
+ *
+ * @v value		Big integer
+ * @v bit		Bit to set
+ */
+#define bigint_clear_bit( value, bit ) do {				\
+	unsigned int size = bigint_size (value);			\
+	bigint_clear_bit_raw ( (value)->element, size, bit );		\
+	} while ( 0 )
+
+/**
  * Test if bit is set in big integer
  *
  * @v value		Big integer
@@ -356,6 +378,42 @@ typedef void ( bigint_ladder_op_t ) ( const bigint_element_t *operand0,
 				      bigint_element_t *result0,
 				      unsigned int size, const void *ctx,
 				      void *tmp );
+
+/**
+ * Set bit in big integer
+ *
+ * @v value0		Element 0 of big integer
+ * @v size		Number of elements
+ * @v bit		Bit to set
+ */
+static inline __attribute__ (( always_inline )) void
+bigint_set_bit_raw ( bigint_element_t *value0, unsigned int size,
+		     unsigned int bit ) {
+	bigint_t ( size ) __attribute__ (( may_alias )) *value =
+		( ( void * ) value0 );
+	unsigned int index = ( bit / ( 8 * sizeof ( value->element[0] ) ) );
+	unsigned int subindex = ( bit % ( 8 * sizeof ( value->element[0] ) ) );
+
+	value->element[index] |= ( 1UL << subindex );
+}
+
+/**
+ * Clear bit in big integer
+ *
+ * @v value0		Element 0 of big integer
+ * @v size		Number of elements
+ * @v bit		Bit to clear
+ */
+static inline __attribute__ (( always_inline )) void
+bigint_clear_bit_raw ( bigint_element_t *value0, unsigned int size,
+		       unsigned int bit ) {
+	bigint_t ( size ) __attribute__ (( may_alias )) *value =
+		( ( void * ) value0 );
+	unsigned int index = ( bit / ( 8 * sizeof ( value->element[0] ) ) );
+	unsigned int subindex = ( bit % ( 8 * sizeof ( value->element[0] ) ) );
+
+	value->element[index] &= ~( 1UL << subindex );
+}
 
 /**
  * Test if bit is set in big integer

@@ -192,11 +192,11 @@ void bigint_reduce_raw ( const bigint_element_t *modulus0,
 	bigint_t ( size ) __attribute__ (( may_alias ))
 		*result = ( ( void * ) result0 );
 	const unsigned int width = ( 8 * sizeof ( bigint_element_t ) );
-	static const uint8_t one[1] = { 1 };
 	unsigned int shift;
-	int carry;
+	int max;
 	int sign;
 	int msb;
+	int carry;
 
 	/* We have the constants:
 	 *
@@ -216,7 +216,7 @@ void bigint_reduce_raw ( const bigint_element_t *modulus0,
 	 * non-negative integer bit shift.
 	 *
 	 * We want to reduce the initial value R^2=2^(2n), which we
-	 * may represent using r=1 and k=2n.
+	 * may trivially represent using r=1 and k=2n.
 	 *
 	 * We then iterate over decrementing k, maintaining the loop
 	 * invariant:
@@ -255,11 +255,23 @@ void bigint_reduce_raw ( const bigint_element_t *modulus0,
 	 * After this last loop iteration (with k=0), we may need to
 	 * add a single multiple of N to ensure that x is positive,
 	 * i.e. lies within the range 0 <= x < N.
+	 *
+	 * Since neither the modulus nor the value R^2 are secret, we
+	 * may elide approximately half of the total number of
+	 * iterations by constructing the initial representation of
+	 * R^2 as r=2^m and k=2n-m, where m is the most significant
+	 * bit set in the modulus.
 	 */
 
 	/* Initialise x=R^2 */
-	bigint_init ( result, one, sizeof ( one ) );
-	shift = ( 2 * size * width );
+	memset ( result, 0, sizeof ( *result ) );
+	max = ( bigint_max_set_bit ( modulus ) - 1 );
+	if ( max <= 0 ) {
+		/* Degenerate case of N=0 or N=1: return a zero result */
+		return;
+	}
+	bigint_set_bit ( result, max );
+	shift = ( ( 2 * size * width ) - max );
 	sign = 0;
 
 	/* Iterate as described above */
