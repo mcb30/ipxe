@@ -259,14 +259,13 @@ void bigint_reduce_raw ( const bigint_element_t *modulus0,
 	 * Since neither the modulus nor the value R^2 are secret, we
 	 * may elide approximately half of the total number of
 	 * iterations by constructing the initial representation of
-	 * R^2 as r=2^m and k=2n-m, where m is the most significant
-	 * bit set in the modulus.
+	 * R^2 as r=2^m and k=2n-m.
 	 */
 
 	/* Initialise x=R^2 */
 	memset ( result, 0, sizeof ( *result ) );
-	max = ( bigint_max_set_bit ( modulus ) - 1 );
-	if ( max <= 0 ) {
+	max = ( bigint_max_set_bit ( modulus ) - 2 );
+	if ( max < 0 ) {
 		/* Degenerate case of N=0 or N=1: return a zero result */
 		return;
 	}
