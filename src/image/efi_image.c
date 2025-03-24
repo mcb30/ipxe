@@ -258,14 +258,28 @@ static int efi_image_exec ( struct image *image ) {
 	loaded->LoadOptionsSize =
 		( ( wcslen ( cmdline ) + 1 /* NUL */ ) * sizeof ( wchar_t ) );
 
+	//
+	netdev_close ( snpdev->netdev );
+
 	/* Release network devices for use via SNP */
 	efi_snp_release();
 
 	/* Wrap calls made by the loaded image (for debugging) */
-	efi_wrap_image ( handle );
+	static int x;
+	if ( x++ )
+		efi_wrap_image ( handle );
 
 	/* Reset console since image will probably use it */
 	console_reset();
+
+	//
+	DBGC ( image, "*** before ConnectController()\n" );
+	DBGC_EFI_OPENERS ( snpdev, snpdev->handle, &efi_nii31_protocol_guid );
+	DBGC_EFI_OPENERS ( snpdev, snpdev->handle, &efi_nii_protocol_guid );
+	bs->ConnectController ( snpdev->handle, NULL, NULL, TRUE );
+	DBGC ( image, "*** after ConnectController()\n" );
+	DBGC_EFI_OPENERS ( snpdev, snpdev->handle, &efi_nii31_protocol_guid );
+	DBGC_EFI_OPENERS ( snpdev, snpdev->handle, &efi_nii_protocol_guid );
 
 	/* Start the image */
 	if ( ( efirc = bs->StartImage ( handle, NULL, NULL ) ) != 0 ) {
