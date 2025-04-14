@@ -1100,3 +1100,7 @@ REQUIRING_SYMBOL ( fdt_describe );
 
 /* Drag in device tree configuration */
 REQUIRE_OBJECT ( config_fdt );
+
+
+//
+REQUIRE_OBJECT ( devtree );
