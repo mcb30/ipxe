@@ -384,6 +384,9 @@ static int snpnet_open ( struct net_device *netdev ) {
 		/* Ignore error */
 	}
 
+	//
+	return 0;
+
 	/* Initialise NIC, retrying multiple times if link stays down */
 	for ( retry = 0 ; ; ) {
 
@@ -400,6 +403,11 @@ static int snpnet_open ( struct net_device *netdev ) {
 		/* Stop if we have link up (or no link detection capability) */
 		if ( ( ! mode->MediaPresentSupported ) || mode->MediaPresent )
 			break;
+
+		//
+		/* Stop if we are not allowed to shut down */
+		//if ( snp->insomniac )
+		//	break;
 
 		/* Stop if we have exceeded our retry count.  This is
 		 * not a failure; it is plausible that we genuinely do
@@ -455,8 +463,11 @@ static void snpnet_close ( struct net_device *netdev ) {
 	EFI_STATUS efirc;
 	int rc;
 
-	/* Shut down NIC (unless whole system shutdown is in progress) */
+	/* Shut down NIC (unless whole system shutdown is in progress,
+	 * or device is insomniac).
+	 */
 	if ( ( ! efi_shutdown_in_progress ) &&
+	     ( ! netdev_insomniac ( netdev ) ) &&
 	     ( ( efirc = snp->snp->Shutdown ( snp->snp ) ) != 0 ) ) {
 		rc = -EEFI ( efirc );
 		DBGC ( snp, "SNP %s could not shut down: %s\n",
@@ -529,6 +540,57 @@ int snpnet_supported ( EFI_HANDLE device, EFI_GUID *protocol ) {
 }
 
 /**
+ * Check if device must be insomniac
+ *
+ * @v device		EFI device handle
+ * @v is_insomniac	Device must be insomniac
+ */
+static int snpnet_is_insomniac ( EFI_HANDLE device ) {
+	int rc;
+
+	/* Check for wireless devices
+	 *
+	 * The UEFI model for wireless network configuration is
+	 * somewhat underdefined.  At the time of writing, the EDK2
+	 * "UEFI WiFi Connection Manager" driver provides only one way
+	 * to configure wireless network credentials, which is to
+	 * enter them interactively via an HII form.  Credentials are
+	 * not stored (or exposed via any protocol interface), and so
+	 * any temporary disconnection from the wireless network will
+	 * inevitably leave the interface in an unusable state that
+	 * cannot be recovered without user intervention.
+	 *
+	 * Experimentation shows that at least some wireless network
+	 * drivers will disconnect from the wireless network when the
+	 * SNP Shutdown() method is called, or if the device is not
+	 * polled sufficiently frequently to maintain its association
+	 * to the network.  We therefore inhibit calls to Shutdown()
+	 * and Stop() for any such SNP protocol interfaces, and mark
+	 * our network device as insomniac so that it will be polled
+	 * even when closed.
+	 */
+	if ( ( rc = efi_test ( device, &efi_wifi2_protocol_guid ) ) == 0 ) {
+		DBGC ( device, "SNP %s is wireless: assuming insomniac\n",
+		       efi_handle_name ( device ) );
+		return 1;
+	}
+
+	return 0;
+}
+
+/**
+ * Ignore shutdown attempt
+ *
+ * @v snp		SNP interface
+ * @ret efirc		EFI status code
+ */
+static EFI_STATUS EFIAPI
+snpnet_do_nothing ( EFI_SIMPLE_NETWORK_PROTOCOL *snp __unused ) {
+
+	return 0;
+}
+
+/**
  * Exclude existing drivers
  *
  * @v device		EFI device handle
@@ -536,16 +598,46 @@ int snpnet_supported ( EFI_HANDLE device, EFI_GUID *protocol ) {
  */
 int snpnet_exclude ( EFI_HANDLE device ) {
 	EFI_GUID *protocol = &efi_simple_network_protocol_guid;
+	EFI_SIMPLE_NETWORK_PROTOCOL *interface;
+	EFI_SIMPLE_NETWORK_SHUTDOWN shutdown;
+	EFI_SIMPLE_NETWORK_STOP stop;
+	int insomniac;
 	int rc;
+
+	/* Open interface for ephemeral use */
+	if ( ( rc = efi_open ( device, protocol, &interface ) ) != 0 ) {
+		DBGC ( device, "SNP %s cannot open SNP protocol before "
+		       "excluding: %s\n", efi_handle_name ( device ),
+		       strerror ( rc ) );
+		goto err_interface;
+	}
+	shutdown = interface->Shutdown;
+	stop = interface->Stop;
+
+	/* Check if this is a device that must not ever be shut down */
+	insomniac = snpnet_is_insomniac ( device );
+
+	/* Patch protocol interface, if applicable */
+	if ( insomniac ) {
+		interface->Shutdown = snpnet_do_nothing;
+		interface->Stop = snpnet_do_nothing;
+	}
 
 	/* Exclude existing SNP drivers */
 	if ( ( rc = efi_driver_exclude ( device, protocol ) ) != 0 ) {
 		DBGC ( device, "SNP %s could not exclude drivers: %s\n",
 		       efi_handle_name ( device ), strerror ( rc ) );
-		return rc;
+		goto err_exclude;
 	}
 
-	return 0;
+ err_exclude:
+	/* Restore protocol interface, if applicable */
+	if ( insomniac ) {
+		interface->Shutdown = shutdown;
+		interface->Stop = stop;
+	}
+ err_interface:
+	return rc;
 }
 
 /**
@@ -595,7 +687,11 @@ int snpnet_start ( struct efi_device *efidev ) {
 	INIT_LIST_HEAD ( &snp->dev.children );
 	netdev->dev = &snp->dev;
 
-	/* Bring to the Started state */
+	/* Check if device is insomniac */
+	if ( snpnet_is_insomniac ( device ) )
+		netdev->state |= NETDEV_INSOMNIAC;
+
+	/* Bring to the correct state for a closed interface */
 	if ( ( mode->State == EfiSimpleNetworkStopped ) &&
 	     ( ( efirc = snp->snp->Start ( snp->snp ) ) != 0 ) ) {
 		rc = -EEFI ( efirc );
@@ -604,6 +700,7 @@ int snpnet_start ( struct efi_device *efidev ) {
 		goto err_start;
 	}
 	if ( ( mode->State == EfiSimpleNetworkInitialized ) &&
+	     ( ! netdev_insomniac ( netdev ) ) &&
 	     ( ( efirc = snp->snp->Shutdown ( snp->snp ) ) != 0 ) ) {
 		rc = -EEFI ( efirc );
 		DBGC ( device, "SNP %s could not shut down: %s\n",
