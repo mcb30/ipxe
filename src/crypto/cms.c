@@ -1051,6 +1051,12 @@ int cms_decrypt ( struct cms_message *cms, struct image *image,
 		rc = -ENOTTY;
 		goto err_no_cipher;
 	}
+	if ( ! ( image->flags & IMAGE_MODIFIABLE ) ) {
+		DBGC ( cms, "CMS %p cannot decrypt to read-only image %s\n",
+		       cms, image->name );
+		rc = -ENOTTY;
+		goto err_readonly;
+	}
 
 	/* Check block size */
 	if ( ( image->len & ( cipher->blocksize - 1 ) ) != 0 ) {
@@ -1145,6 +1151,7 @@ int cms_decrypt ( struct cms_message *cms, struct image *image,
 	image->flags = original_flags;
  err_cipher:
  err_blocksize:
+ err_readonly:
  err_no_cipher:
 	return rc;
 }

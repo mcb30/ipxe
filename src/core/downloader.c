@@ -263,6 +263,11 @@ int create_downloader ( struct interface *job, struct image *image ) {
 	struct downloader *downloader;
 	int rc;
 
+	/* Sanity checks */
+	assert ( image->flags & IMAGE_MODIFIABLE );
+	assert ( image->data == NULL );
+	assert ( image->len == 0 );
+
 	/* Allocate and initialise structure */
 	downloader = zalloc ( sizeof ( *downloader ) );
 	if ( ! downloader )

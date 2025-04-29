@@ -82,6 +82,8 @@ static void free_image ( struct refcnt *refcnt ) {
 	struct image_tag *tag;
 
 	DBGC ( image, "IMAGE %s freed\n", image->name );
+
+	assert ( image->flags & IMAGE_MODIFIABLE );
 	for_each_table_entry ( tag, IMAGE_TAGS ) {
 		if ( tag->image == image )
 			tag->image = NULL;
@@ -108,6 +110,7 @@ struct image * alloc_image ( struct uri *uri ) {
 	image = zalloc ( sizeof ( *image ) );
 	if ( ! image )
 		goto err_alloc;
+	image->flags = IMAGE_MODIFIABLE;
 
 	/* Initialise image */
 	ref_init ( &image->refcnt, free_image );
@@ -132,6 +135,10 @@ struct image * alloc_image ( struct uri *uri ) {
 int image_set_uri ( struct image *image, struct uri *uri ) {
 	const char *name;
 	int rc;
+
+	/* Check that image is modifiable */
+	if ( ! ( image->flags & IMAGE_MODIFIABLE ) )
+		return -ENOTTY;
 
 	/* Set name, if image does not already have one */
 	if ( ! ( image->name && image->name[0] ) ) {
@@ -159,6 +166,10 @@ int image_set_uri ( struct image *image, struct uri *uri ) {
  */
 int image_set_name ( struct image *image, const char *name ) {
 	char *name_copy;
+
+	/* Check that image is modifiable */
+	if ( ! ( image->flags & IMAGE_MODIFIABLE ) )
+		return -ENOTTY;
 
 	/* Duplicate name */
 	name_copy = strdup ( name );
@@ -200,6 +211,11 @@ char * image_strip_suffix ( struct image *image ) {
  */
 int image_set_cmdline ( struct image *image, const char *cmdline ) {
 
+	/* Check that image is modifiable */
+	if ( ! ( image->flags & IMAGE_MODIFIABLE ) )
+		return -ENOTTY;
+
+	/* Duplicate command line and replace existing command line */
 	free ( image->cmdline );
 	image->cmdline = NULL;
 	if ( cmdline ) {
@@ -207,6 +223,7 @@ int image_set_cmdline ( struct image *image, const char *cmdline ) {
 		if ( ! image->cmdline )
 			return -ENOMEM;
 	}
+
 	return 0;
 }
 
@@ -219,6 +236,10 @@ int image_set_cmdline ( struct image *image, const char *cmdline ) {
  */
 int image_set_len ( struct image *image, size_t len ) {
 	void *new;
+
+	/* Check that image is modifiable */
+	if ( ! ( image->flags & IMAGE_MODIFIABLE ) )
+		return -ENOTTY;
 
 	/* (Re)allocate image data */
 	new = urealloc ( image->data, len );
@@ -244,6 +265,7 @@ int image_set_data ( struct image *image, const void *data, size_t len ) {
 	/* Set image length */
 	if ( ( rc = image_set_len ( image, len ) ) != 0 )
 		return rc;
+	assert ( image->flags & IMAGE_MODIFIABLE );
 
 	/* Copy in new image data */
 	memcpy ( image->data, data, len );

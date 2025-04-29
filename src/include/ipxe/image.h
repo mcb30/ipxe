@@ -72,6 +72,9 @@ struct image {
 /** Image will be hidden from enumeration */
 #define IMAGE_HIDDEN 0x0008
 
+/** Image is modifiable */
+#define IMAGE_MODIFIABLE 0x0010
+
 /** An executable image type */
 struct image_type {
 	/** Name of this image type */

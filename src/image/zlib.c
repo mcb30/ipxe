@@ -51,6 +51,9 @@ int zlib_deflate ( enum deflate_format format, const void *data, size_t len,
 	struct deflate_chunk out;
 	int rc;
 
+	/* Sanity check */
+	assert ( extracted->flags & IMAGE_MODIFIABLE );
+
 	/* Allocate and initialise decompressor */
 	deflate = zalloc ( sizeof ( *deflate ) );
 	if ( ! deflate ) {
