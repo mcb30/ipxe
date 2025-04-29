@@ -245,7 +245,7 @@ static int efi_image_exec ( struct image *image ) {
 	/* Attempt loading image */
 	handle = NULL;
 	if ( ( efirc = bs->LoadImage ( FALSE, efi_image_handle, path,
-				       exec->data, exec->len,
+				       ( ( void * ) exec->data ), exec->len,
 				       &handle ) ) != 0 ) {
 		/* Not an EFI image */
 		rc = -EEFI_LOAD ( efirc );
@@ -379,7 +379,7 @@ static int efi_image_probe ( struct image *image ) {
 	/* Attempt loading image */
 	handle = NULL;
 	if ( ( efirc = bs->LoadImage ( FALSE, efi_image_handle, &empty_path,
-				       image->data, image->len,
+				       ( ( void * ) image->data ), image->len,
 				       &handle ) ) != 0 ) {
 		/* Not an EFI image */
 		rc = -EEFI_LOAD ( efirc );

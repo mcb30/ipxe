@@ -91,7 +91,7 @@ static void free_image ( struct refcnt *refcnt ) {
 	free ( image->name );
 	free ( image->cmdline );
 	uri_put ( image->uri );
-	ufree ( image->data );
+	ufree ( image->rwdata );
 	image_put ( image->replacement );
 	free ( image );
 }
@@ -242,10 +242,10 @@ int image_set_len ( struct image *image, size_t len ) {
 		return -ENOTTY;
 
 	/* (Re)allocate image data */
-	new = urealloc ( image->data, len );
+	new = urealloc ( image->rwdata, len );
 	if ( ! new )
 		return -ENOMEM;
-	image->data = new;
+	image->rwdata = new;
 	image->len = len;
 
 	return 0;
@@ -268,7 +268,7 @@ int image_set_data ( struct image *image, const void *data, size_t len ) {
 	assert ( image->flags & IMAGE_MODIFIABLE );
 
 	/* Copy in new image data */
-	memcpy ( image->data, data, len );
+	memcpy ( image->rwdata, data, len );
 
 	return 0;
 }

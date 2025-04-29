@@ -38,7 +38,15 @@ struct image {
 	/** Command line to pass to image */
 	char *cmdline;
 	/** Raw file image */
-	void *data;
+	union {
+		/** Raw file image (read-only) */
+		const void *data;
+		/** Raw file image (modifiable)
+		 *
+		 * Valid only if the @c IMAGE_MODIFIABLE flag is set.
+		 */
+		void *rwdata;
+	};
 	/** Length of raw file image */
 	size_t len;
 

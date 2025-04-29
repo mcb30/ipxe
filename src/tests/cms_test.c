@@ -85,7 +85,7 @@ struct cms_test_keypair {
 		.image = {						\
 			.refcnt = REF_INIT ( ref_no_free ),		\
 			.name = #NAME,					\
-			.data = ( userptr_t ) ( NAME ## _data ),	\
+			.data = NAME ## _data,				\
 			.len = sizeof ( NAME ## _data ),		\
 		},							\
 	}
@@ -98,7 +98,7 @@ struct cms_test_keypair {
 			.refcnt = REF_INIT ( ref_no_free ),		\
 			.name = #NAME,					\
 			.flags = IMAGE_MODIFIABLE,			\
-			.data = ( userptr_t ) ( NAME ## _data ),	\
+			.rwdata = NAME ## _data,			\
 			.len = sizeof ( NAME ## _data ),		\
 		},							\
 	}
@@ -111,7 +111,7 @@ struct cms_test_keypair {
 			.refcnt = REF_INIT ( ref_no_free ),		\
 			.name = #NAME,					\
 			.type = &der_image_type,			\
-			.data = ( userptr_t ) ( NAME ## _data ),	\
+			.data = NAME ## _data,				\
 			.len = sizeof ( NAME ## _data ),		\
 		},							\
 	}
@@ -1650,16 +1650,9 @@ static time_t test_expired = 1375573111ULL; /* Sat Aug  3 23:38:31 2013 */
  */
 static void cms_message_okx ( struct cms_test_message *msg,
 			      const char *file, unsigned int line ) {
-	const void *data = ( ( void * ) msg->image.data );
-
-	/* Fix up image data pointer */
-	msg->image.data = virt_to_user ( data );
 
 	/* Check ability to parse message */
 	okx ( cms_message ( &msg->image, &msg->cms ) == 0, file, line );
-
-	/* Reset image data pointer */
-	msg->image.data = ( ( userptr_t ) data );
 }
 #define cms_message_ok( msg ) \
 	cms_message_okx ( msg, __FILE__, __LINE__ )
@@ -1703,10 +1696,6 @@ static void cms_verify_okx ( struct cms_test_message *msg,
 			     time_t time, struct x509_chain *store,
 			     struct x509_root *root, const char *file,
 			     unsigned int line ) {
-	const void *data = ( ( void * ) img->image.data );
-
-	/* Fix up image data pointer */
-	img->image.data = virt_to_user ( data );
 
 	/* Invalidate any certificates from previous tests */
 	x509_invalidate_chain ( msg->cms->certificates );
@@ -1715,9 +1704,6 @@ static void cms_verify_okx ( struct cms_test_message *msg,
 	okx ( cms_verify ( msg->cms, &img->image, name, time, store,
 			   root ) == 0, file, line );
 	okx ( img->image.flags & IMAGE_TRUSTED, file, line );
-
-	/* Reset image data pointer */
-	img->image.data = ( ( userptr_t ) data );
 }
 #define cms_verify_ok( msg, img, name, time, store, root )		\
 	cms_verify_okx ( msg, img, name, time, store, root,		\
@@ -1740,10 +1726,6 @@ static void cms_verify_fail_okx ( struct cms_test_message *msg,
 				  time_t time, struct x509_chain *store,
 				  struct x509_root *root, const char *file,
 				  unsigned int line ) {
-	const void *data = ( ( void * ) img->image.data );
-
-	/* Fix up image data pointer */
-	img->image.data = virt_to_user ( data );
 
 	/* Invalidate any certificates from previous tests */
 	x509_invalidate_chain ( msg->cms->certificates );
@@ -1752,9 +1734,6 @@ static void cms_verify_fail_okx ( struct cms_test_message *msg,
 	okx ( cms_verify ( msg->cms, &img->image, name, time, store,
 			   root ) != 0, file, line );
 	okx ( ! ( img->image.flags & IMAGE_TRUSTED ), file, line );
-
-	/* Reset image data pointer */
-	img->image.data = ( ( userptr_t ) data );
 }
 #define cms_verify_fail_ok( msg, img, name, time, store, root )	\
 	cms_verify_fail_okx ( msg, img, name, time, store, root,	\
@@ -1775,10 +1754,6 @@ static void cms_decrypt_okx ( struct cms_test_image *img,
 			      struct cms_test_keypair *keypair,
 			      struct cms_test_image *expected,
 			      const char *file, unsigned int line ) {
-	const void *data = ( ( void * ) img->image.data );
-
-	/* Fix up image data pointer */
-	img->image.data = virt_to_user ( data );
 
 	/* Check ability to decrypt image */
 	okx ( cms_decrypt ( envelope->cms, &img->image, NULL,
