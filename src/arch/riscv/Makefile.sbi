@@ -4,8 +4,8 @@
 # only for data values.  Runtime relocations are applied by the
 # prefix code.
 #
-CFLAGS		+= -mcmodel=medany -fpie
-LDFLAGS		+= -pie --no-dynamic-linker
+CFLAGS		+= -mcmodel=medany #-fpie
+#LDFLAGS		+= -pie --no-dynamic-linker
 
 # Linker script
 #

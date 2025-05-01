@@ -73,9 +73,30 @@ _sbi_start:
 	mv	s1, a1
 	progress "\nSBI->iPXE"
 
+	//
+	li	a0, 4096
+	sub	a0, s1, a0
+	call	setup_paging
+
+
+	progress "\nHanging..."
+1:	j	1b
+
+
 	/* Apply dynamic relocations */
-	call	apply_relocs
+	//call	apply_relocs
 	progress " .reloc"
+
+	la	t0, 1f
+	LOADN	t0, (t0)
+	jr	t0
+1:	.dword	2f
+2:
+
+	nop
+	nop
+	nop
+1:	j	1b
 
 	/* Zero the bss */
 	la	t0, _bss
