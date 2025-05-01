@@ -244,7 +244,7 @@ setup_paging_64:
 
 	/* Construct PTE[511] as next level page table pointer */
 	srli	t1, a0, 2
-	ori	t1, t1, ( PTE_D | PTE_A | PTE_V )
+	ori	t1, t1, PTE_V
 	STOREN	t1, -8(t3)
 
 	/* Construct PTE[344+] to cover iPXE itself */

@@ -79,9 +79,6 @@ _sbi_start:
 	call	setup_paging
 
 
-	progress "\nHanging..."
-1:	j	1b
-
 
 	/* Apply dynamic relocations */
 	//call	apply_relocs
@@ -92,11 +89,6 @@ _sbi_start:
 	jr	t0
 1:	.dword	2f
 2:
-
-	nop
-	nop
-	nop
-1:	j	1b
 
 	/* Zero the bss */
 	la	t0, _bss
