@@ -297,9 +297,7 @@ setup_paging_64_loop:
 	ori	t0, t0, PTE_V
 	STOREN	t0, -PTE_SIZE(a3)
 
-	/* Identify starting PTE for iPXE virtual address map
-	 *
-	 */
+	/* Calculate PTE[x] address for iPXE virtual address map */
 	la	t0, prefix_virt
 	LOADN	t0, (t0)
 	srli	t0, t0, VPN1_LSB
@@ -307,7 +305,7 @@ setup_paging_64_loop:
 	slli	t0, t0, PTE_SIZE_LOG2
 	add	a3, a2, t0
 
-	/* Calculate stride for iPXE virtual address map
+	/* Calculate PTE stride for iPXE virtual address map
 	 *
 	 * PPN[1] LSB is PTE bit 19 in all paging modes, and so the
 	 * stride is always ( 1 << 19 )
@@ -315,8 +313,7 @@ setup_paging_64_loop:
 	li	a4, 1
 	slli	a4, a4, PTE_PPN1_LSB
 
-
-	/* Construct PTE[344+] for iPXE virtual address map */
+	/* Construct PTE[x-y] for iPXE virtual address map */
 	la	t0, _prefix
 	srli	t0, t0, PTE_PPN_SHIFT
 	ori	t0, t0, ( PTE_D | PTE_A | PTE_X | PTE_W | PTE_R | PTE_V )
