@@ -76,9 +76,8 @@ _sbi_start:
 	//
 	li	a0, 4096
 	sub	a0, s1, a0
+	mv	a3, a0
 	call	setup_paging
-
-
 
 	/* Apply dynamic relocations */
 	//call	apply_relocs
@@ -89,6 +88,14 @@ _sbi_start:
 	jr	t0
 1:	.dword	2f
 2:
+
+	// call fdt_parse with temporary stack
+	addi	a0, a3, -256
+	mv	a1, s1
+	li	a2, -1
+	mv	sp, a0
+	call	fdt_parse
+
 
 	/* Zero the bss */
 	la	t0, _bss
