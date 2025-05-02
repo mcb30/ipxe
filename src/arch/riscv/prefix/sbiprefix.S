@@ -77,17 +77,11 @@ _sbi_start:
 	li	a0, 4096
 	sub	a0, s1, a0
 	mv	a3, a0
-	call	setup_paging
+	call	enable_paging
 
 	/* Apply dynamic relocations */
 	//call	apply_relocs
 	progress " .reloc"
-
-	la	t0, 1f
-	LOADN	t0, (t0)
-	jr	t0
-1:	.dword	2f
-2:
 
 	// call fdt_parse with temporary stack
 	addi	a0, a3, -256

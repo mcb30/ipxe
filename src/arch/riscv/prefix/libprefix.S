@@ -118,7 +118,8 @@ reloc_base:
  *
  * Returns:
  *
- *   a0 - Paging level enabled (0=no paging)
+ *   a0 - Selected paging mode (0=no paging)
+ *   pc - Updated to a virtual address if paging enabled
  *
  */
 
@@ -160,8 +161,8 @@ reloc_base:
 /** Page table entry physical page address shift */
 #define PTE_PPN_SHIFT ( PAGE_SHIFT - PTE_PPN0_LSB )
 
-	.globl	setup_paging
-	.equ	setup_paging, _C2 ( setup_paging_, __riscv_xlen )
+	.globl	enable_paging
+	.equ	enable_paging, _C2 ( enable_paging_, __riscv_xlen )
 
 /*****************************************************************************
  *
@@ -183,7 +184,8 @@ reloc_base:
  *
  * Returns:
  *
- *   a0 - Paging is enabled (0=no paging)
+ *   a0 - Selected paging mode (0=no paging)
+ *   pc - Updated to a virtual address if paging enabled
  *
  * A 4kB 64-bit page table contains 512 8-byte PTEs.  We choose to use
  * these as:
@@ -247,8 +249,8 @@ reloc_base:
 #define SATP64_MODE_SV48	9	/**< Four-level paging (Sv48) */
 #define SATP64_MODE_SV39	8	/**< Three-level paging (Sv39) */
 
-	.section ".prefix.setup_paging_64", "ax", @progbits
-setup_paging_64:
+	.section ".prefix.enable_paging_64", "ax", @progbits
+enable_paging_64:
 	/* Register usage:
 	 *
 	 * a0 - return value (enabled paging level)
@@ -259,7 +261,7 @@ setup_paging_64:
 	 */
 	mv	a2, a0
 	li	a1, SATP64_MODE_SV57
-setup_paging_64_loop:
+enable_paging_64_loop:
 
 	/* Calculate PTE stride for identity map at this paging level
 	 *
@@ -337,11 +339,20 @@ setup_paging_64_loop:
 	beq	a0, a1, 1f
 	addi	a1, a1, -1
 	li	t0, SATP64_MODE_SV39
-	bge	a1, t0, setup_paging_64_loop
+	bge	a1, t0, enable_paging_64_loop
+	j	enable_paging_64_done
 1:
-	/* Return enabled paging level (if any) */
+	/* Adjust return address to a virtual address */
+	la	t0, _prefix
+	sub	ra, ra, t0
+	la	t0, prefix_virt
+	LOADN	t0, (t0)
+	add	ra, ra, t0
+
+enable_paging_64_done:
+	/* Return, with or without paging enabled */
 	ret
-	.size	setup_paging_64, . - setup_paging_64
+	.size	enable_paging_64, . - enable_paging_64
 
 	/* Link-time address of _prefix */
 	.section ".rodata.prefix_virt", "a", @progbits
