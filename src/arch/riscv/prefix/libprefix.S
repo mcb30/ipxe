@@ -128,8 +128,11 @@ reloc_base:
 /** Page size */
 #define PAGE_SIZE ( 1 << PAGE_SHIFT )
 
+/** Size of a page table entry (log2) */
+#define PTE_SIZE_LOG2 ( ( __riscv_xlen / 32 ) + 1 )
+
 /** Size of a page table entry */
-#define PTE_SIZE ( __riscv_xlen / 8 )
+#define PTE_SIZE ( 1 << PTE_SIZE_LOG2 )
 
 /** Number of page table entries */
 #define PTE_COUNT ( PAGE_SIZE / PTE_SIZE )
@@ -142,11 +145,20 @@ reloc_base:
 #define PTE_A		0x00000040	/**< Page has been accessed */
 #define PTE_D		0x00000080	/**< Page is dirty */
 
-/** Page table entry physical page number LSB */
-#define PTE_PPN_LSB 10
+#define PTE_PPN4_LSB	46		/**< PPN[4] LSB (Sv57) */
+#define PTE_PPN3_LSB	37		/**< PPN[3] LSB (Sv57 and Sv48) */
+#define PTE_PPN2_LSB	28		/**< PPN[2] LSB (all levels) */
+#define PTE_PPN1_LSB	19		/**< PPN[1] LSB (all levels) */
+#define PTE_PPN0_LSB	10		/**< PPN[0] LSB (all levels) */
+
+#define VPN4_LSB	48		/**< VPN[4] LSB (Sv57) */
+#define VPN3_LSB	39		/**< VPN[3] LSB (Sv57 and Sv48) */
+#define VPN2_LSB	30		/**< VPN[2] LSB (all levels) */
+#define VPN1_LSB	21		/**< VPN[1] LSB (all levels) */
+#define VPN0_LSB	12		/**< VPN[0] LSB (all levels) */
 
 /** Page table entry physical page address shift */
-#define PTE_PPN_SHIFT ( PAGE_SHIFT - PTE_PPN_LSB )
+#define PTE_PPN_SHIFT ( PAGE_SHIFT - PTE_PPN0_LSB )
 
 	.globl	setup_paging
 	.equ	setup_paging, _C2 ( setup_paging_, __riscv_xlen )
@@ -193,19 +205,25 @@ reloc_base:
  *      higher bits set, and so cannot identity-map to a 55-bit
  *      physical address).
  *
- *    - PTE[344-510 (max)] : Virtual address map for iPXE
+ *    - PTE[x-y] : Virtual address map for iPXE
  *
  *      These are 2MB "megapages" used to map the link-time virtual
- *      address range used by iPXE itself.  We choose a link-time
- *      starting address of 0xffffffffeb000000, which breaks down as:
+ *      address range used by iPXE itself.  We can use any 2MB-aligned
+ *      range within 0xffffffffe0000000-0xffffffffffc00000, which
+ *      breaks down as:
  *
- *         VPN[4] = 511 (in Sv57, must be all-ones in Sv48 and Sv39)
- *         VPN[3] = 511 (in Sv57 and Sv48, must be all-ones in Sv39)
- *         VPN[2] = 511 (in all paging levels)
- *         VPN[1] = 344 (in all paging levels)
- *         VPN[0] = 0   (in all paging levels)
+ *         VPN[4] = 511     (in Sv57, must be all-ones in Sv48 and Sv39)
+ *         VPN[3] = 511     (in Sv57 and Sv48, must be all-ones in Sv39)
+ *         VPN[2] = 511     (in all paging levels)
+ *         VPN[1] = 256-510 (in all paging levels)
+ *         VPN[0] = 0       (in all paging levels)
  *
  *      In most builds, only a single 2MB "megapage" will be needed.
+ *      We choose a link-time starting address of 0xffffffffeb000000
+ *      within the permitted range, since the "eb" pattern is fairly
+ *      distinctive and so makes it easy to visually identify any
+ *      addresses originating from within iPXE's virtual address
+ *      space.
  *
  *    - PTE[511] : Recursive next level page table pointer
  *
@@ -237,7 +255,7 @@ setup_paging_64:
 	 * a1 - currently attempted paging level
 	 * a2 - page table base address
 	 * a3 - PTE pointer
-	 *
+	 * a4 - PTE stride
 	 */
 	mv	a2, a0
 	li	a1, SATP64_MODE_SV57
@@ -249,23 +267,23 @@ setup_paging_64_loop:
 	 * a1 ==  9 == Sv48: PPN[3] LSB is PTE bit 37  =>  stride := 1 << 37
 	 * a1 ==  8 == Sv39: PPN[2] LSB is PTE bit 28  =>  stride := 1 << 28
 	 *
-	 * and so we calculate stride t0 := ( 1 << ( 9 * a1 - 44 ) )
+	 * and so we calculate stride a4 := ( 1 << ( 9 * a1 - 44 ) )
 	 */
-	slli	t0, a1, 3
-	add	t0, t0, a1
-	addi	t0, t0, -44
-	li	t1, 1
-	sll	t0, t1, t0
+	slli	a4, a1, 3
+	add	a4, a4, a1
+	addi	a4, a4, -44
+	li	t0, 1
+	sll	a4, t0, a4
 
 	/* Construct PTE[0-255] for identity map */
 	mv	a3, a2
+	li	t0, ( PTE_COUNT / 2 )
 	li	t1, ( PTE_D | PTE_A | PTE_X | PTE_W | PTE_R | PTE_V )
-	li	t2, ( PTE_COUNT / 2 )
 1:	STOREN	t1, (a3)
 	addi	a3, a3, PTE_SIZE
-	add	t1, t1, t0
-	addi	t2, t2, -1
-	bgtz	t2, 1b
+	add	t1, t1, a4
+	addi	t0, t0, -1
+	bgtz	t0, 1b
 
 	/* Zero PTE[256-511] */
 	li	t0, ( PTE_COUNT / 2 )
@@ -279,25 +297,35 @@ setup_paging_64_loop:
 	ori	t0, t0, PTE_V
 	STOREN	t0, -PTE_SIZE(a3)
 
+	/* Identify starting PTE for iPXE virtual address map
+	 *
+	 */
+	la	t0, prefix_virt
+	LOADN	t0, (t0)
+	srli	t0, t0, VPN1_LSB
+	andi	t0, t0, ( PTE_COUNT - 1 )
+	slli	t0, t0, PTE_SIZE_LOG2
+	add	a3, a2, t0
+
 	/* Calculate stride for iPXE virtual address map
 	 *
 	 * PPN[1] LSB is PTE bit 19 in all paging modes, and so the
 	 * stride is always ( 1 << 19 )
 	 */
-	li	t0, 1
-	slli	t0, t0, 19
+	li	a4, 1
+	slli	a4, a4, PTE_PPN1_LSB
+
 
 	/* Construct PTE[344+] for iPXE virtual address map */
-	addi	a3, a3, -( ( PTE_COUNT - 344 ) * PTE_SIZE )
-	la	t1, _prefix
+	la	t0, _prefix
+	srli	t0, t0, PTE_PPN_SHIFT
+	ori	t0, t0, ( PTE_D | PTE_A | PTE_X | PTE_W | PTE_R | PTE_V )
+	la	t1, _ebss
 	srli	t1, t1, PTE_PPN_SHIFT
-	ori	t1, t1, ( PTE_D | PTE_A | PTE_X | PTE_W | PTE_R | PTE_V )
-	la	t2, _ebss
-	srli	t2, t2, PTE_PPN_SHIFT
-1:	STOREN	t1, (a3)
+1:	STOREN	t0, (a3)
 	addi	a3, a3, PTE_SIZE
-	add	t1, t1, t0
-	ble	t1, t2, 1b
+	add	t0, t0, a4
+	ble	t0, t1, 1b
 
 	/* Attempt to enable paging, and read back active paging level */
 	slli	t0, a1, SATP64_MODE_SHIFT
@@ -317,3 +345,9 @@ setup_paging_64_loop:
 	/* Return enabled paging level (if any) */
 	ret
 	.size	setup_paging_64, . - setup_paging_64
+
+	/* Link-time address of _prefix */
+	.section ".rodata.prefix_virt", "a", @progbits
+prefix_virt:
+	.dword	_prefix
+	.size	prefix_virt, . - prefix_virt
