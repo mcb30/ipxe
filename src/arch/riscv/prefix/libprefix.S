@@ -122,12 +122,31 @@ reloc_base:
  *
  */
 
+/** Number of bits in a page offset */
+#define PAGE_SHIFT 12
+
+/** Page size */
+#define PAGE_SIZE ( 1 << PAGE_SHIFT )
+
+/** Size of a page table entry */
+#define PTE_SIZE ( __riscv_xlen / 8 )
+
+/** Number of page table entries */
+#define PTE_COUNT ( PAGE_SIZE / PTE_SIZE )
+
+/* Page table entry flags */
 #define PTE_V		0x00000001	/**< Page table entry is valid */
 #define PTE_R		0x00000002	/**< Page is readable */
 #define PTE_W		0x00000004	/**< Page is writable */
 #define PTE_X		0x00000008	/**< Page is executable */
 #define PTE_A		0x00000040	/**< Page has been accessed */
 #define PTE_D		0x00000080	/**< Page is dirty */
+
+/** Page table entry physical page number LSB */
+#define PTE_PPN_LSB 10
+
+/** Page table entry physical page address shift */
+#define PTE_PPN_SHIFT ( PAGE_SHIFT - PTE_PPN_LSB )
 
 	.globl	setup_paging
 	.equ	setup_paging, _C2 ( setup_paging_, __riscv_xlen )
@@ -202,9 +221,13 @@ reloc_base:
  *      use only a single physical 4kB page table.
  */
 
-#define PG64_SV57	10	/**< Five-level paging (Sv57) */
-#define PG64_SV48	9	/**< Four-level paging (Sv48) */
-#define PG64_SV39	8	/**< Three-level paging (Sv39) */
+/** Bit shift for paging mode */
+#define SATP64_MODE_SHIFT	60
+
+/* Paging modes */
+#define SATP64_MODE_SV57	10	/**< Five-level paging (Sv57) */
+#define SATP64_MODE_SV48	9	/**< Four-level paging (Sv48) */
+#define SATP64_MODE_SV39	8	/**< Three-level paging (Sv39) */
 
 	.section ".prefix.setup_paging_64", "ax", @progbits
 setup_paging_64:
@@ -217,14 +240,14 @@ setup_paging_64:
 	 *
 	 */
 	mv	a2, a0
-	li	a1, PG64_SV57
+	li	a1, SATP64_MODE_SV57
 setup_paging_64_loop:
 
 	/* Calculate PTE stride for identity map at this paging level
 	 *
-	 * a1 == 10 == Sv57: PPN[4] LSB is bit 46  =>  stride := 1 << 46
-	 * a1 ==  9 == Sv48: PPN[3] LSB is bit 37  =>  stride := 1 << 37
-	 * a1 ==  8 == Sv39: PPN[2] LSB is bit 28  =>  stride := 1 << 28
+	 * a1 == 10 == Sv57: PPN[4] LSB is PTE bit 46  =>  stride := 1 << 46
+	 * a1 ==  9 == Sv48: PPN[3] LSB is PTE bit 37  =>  stride := 1 << 37
+	 * a1 ==  8 == Sv39: PPN[2] LSB is PTE bit 28  =>  stride := 1 << 28
 	 *
 	 * and so we calculate stride t0 := ( 1 << ( 9 * a1 - 44 ) )
 	 */
@@ -237,52 +260,58 @@ setup_paging_64_loop:
 	/* Construct PTE[0-255] for identity map */
 	mv	a3, a2
 	li	t1, ( PTE_D | PTE_A | PTE_X | PTE_W | PTE_R | PTE_V )
-	li	t2, 256
+	li	t2, ( PTE_COUNT / 2 )
 1:	STOREN	t1, (a3)
+	addi	a3, a3, PTE_SIZE
 	add	t1, t1, t0
-	addi	a3, a3, 8
 	addi	t2, t2, -1
 	bgtz	t2, 1b
 
 	/* Zero PTE[256-511] */
-	li	t0, 256
+	li	t0, ( PTE_COUNT / 2 )
 1:	STOREN	zero, (a3)
-	addi	a3, a3, 8
+	addi	a3, a3, PTE_SIZE
 	addi	t0, t0, -1
 	bgtz	t0, 1b
 
 	/* Construct PTE[511] as next level page table pointer */
-	srli	t0, a2, 2
+	srli	t0, a2, PTE_PPN_SHIFT
 	ori	t0, t0, PTE_V
-	STOREN	t0, -8(a3)
+	STOREN	t0, -PTE_SIZE(a3)
 
-	/* Construct PTE[344+] to cover iPXE itself */
-	addi	a3, a3, -( ( 512 - 344 ) * 8 )
+	/* Calculate stride for iPXE virtual address map
+	 *
+	 * PPN[1] LSB is PTE bit 19 in all paging modes, and so the
+	 * stride is always ( 1 << 19 )
+	 */
+	li	t0, 1
+	slli	t0, t0, 19
+
+	/* Construct PTE[344+] for iPXE virtual address map */
+	addi	a3, a3, -( ( PTE_COUNT - 344 ) * PTE_SIZE )
 	la	t1, _prefix
-	srli	t1, t1, 2
+	srli	t1, t1, PTE_PPN_SHIFT
 	ori	t1, t1, ( PTE_D | PTE_A | PTE_X | PTE_W | PTE_R | PTE_V )
 	la	t2, _ebss
-	srli	t2, t2, 2
-	li	t4, 1
-	slli	t4, t4, 19
+	srli	t2, t2, PTE_PPN_SHIFT
 1:	STOREN	t1, (a3)
-	addi	a3, a3, 8
-	add	t1, t1, t4
+	addi	a3, a3, PTE_SIZE
+	add	t1, t1, t0
 	ble	t1, t2, 1b
 
 	/* Attempt to enable paging, and read back active paging level */
-	slli	t0, a1, 60
-	srli	t1, a2, 12
+	slli	t0, a1, SATP64_MODE_SHIFT
+	srli	t1, a2, PAGE_SHIFT
 	or	t0, t0, t1
 	csrrw	zero, satp, t0
 	sfence.vma
 	csrrw	a0, satp, t0
-	srli	a0, a0, 60
+	srli	a0, a0, SATP64_MODE_SHIFT
 
 	/* Loop until we successfully enable paging, or run out of levels */
 	beq	a0, a1, 1f
 	addi	a1, a1, -1
-	li	t0, PG64_SV39
+	li	t0, SATP64_MODE_SV39
 	bge	a1, t0, setup_paging_64_loop
 1:
 	/* Return enabled paging level (if any) */
