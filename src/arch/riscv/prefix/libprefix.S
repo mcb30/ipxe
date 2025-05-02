@@ -180,11 +180,11 @@ reloc_base:
  *      address range used by iPXE itself.  We choose a link-time
  *      starting address of 0xffffffffeb000000, which breaks down as:
  *
- *         VPN[4] = 511 (in Sv57)
- *         VPN[3] = 511 (in Sv57 and Sv48)
- *         VPN[2] = 511 (in Sv57, Sv48, and Sv39)
- *         VPN[1] = 344
- *         VPN[0] = 0
+ *         VPN[4] = 511 (in Sv57, must be all-ones in Sv48 and Sv39)
+ *         VPN[3] = 511 (in Sv57 and Sv48, must be all-ones in Sv39)
+ *         VPN[2] = 511 (in all paging levels)
+ *         VPN[1] = 344 (in all paging levels)
+ *         VPN[0] = 0   (in all paging levels)
  *
  *      In most builds, only a single 2MB "megapage" will be needed.
  *
@@ -199,7 +199,7 @@ reloc_base:
  *
  *      This recursive usage creates some duplicate mappings within
  *      unused portions of the virtual address space, but allows us to
- *      use only a single 4kB page table.
+ *      use only a single physical 4kB page table.
  */
 
 #define PG64_SV57	10	/**< Five-level paging (Sv57) */
@@ -210,45 +210,54 @@ reloc_base:
 setup_paging_64:
 	/* Register usage:
 	 *
-	 * t0 - currently attempted paging level
-	 *
+	 * a0 - return value (enabled paging level)
+	 * a1 - currently attempted paging level
+	 * a2 - page table base address
+	 * a3 - PTE pointer
 	 *
 	 */
+	mv	a2, a0
+	li	a1, PG64_SV57
+setup_paging_64_loop:
 
-	/* t0 := SvXX = attempted paging level (starting with Sv57) */
-	li	t0, PG64_SV57
-1:
-	/* t1 := PTE stride for identity map */
-	slli	t1, t0, 3	/* t1 := ( 9 * SvXX - 44 ) */
-	add	t1, t0, t1
-	addi	t1, t1, -44
-	li	t2, 1		/* t1 := ( 1 << ( 9 * SvXX - 44 ) ) */
-	sll	t1, t2, t1	/*     = PTE stride at level SvXX   */
+	/* Calculate PTE stride for identity map at this paging level
+	 *
+	 * a1 == 10 == Sv57: PPN[4] LSB is bit 46  =>  stride := 1 << 46
+	 * a1 ==  9 == Sv48: PPN[3] LSB is bit 37  =>  stride := 1 << 37
+	 * a1 ==  8 == Sv39: PPN[2] LSB is bit 28  =>  stride := 1 << 28
+	 *
+	 * and so we calculate stride t0 := ( 1 << ( 9 * a1 - 44 ) )
+	 */
+	slli	t0, a1, 3
+	add	t0, t0, a1
+	addi	t0, t0, -44
+	li	t1, 1
+	sll	t0, t1, t0
 
 	/* Construct PTE[0-255] for identity map */
-	li	t2, ( PTE_D | PTE_A | PTE_X | PTE_W | PTE_R | PTE_V )
-	mv	t3, a0
-	li	t4, 256
-2:	STOREN	t2, (t3)
-	add	t2, t2, t1
-	addi	t3, t3, 8
-	addi	t4, t4, -1
-	bgtz	t4, 2b
+	mv	a3, a2
+	li	t1, ( PTE_D | PTE_A | PTE_X | PTE_W | PTE_R | PTE_V )
+	li	t2, 256
+1:	STOREN	t1, (a3)
+	add	t1, t1, t0
+	addi	a3, a3, 8
+	addi	t2, t2, -1
+	bgtz	t2, 1b
 
-	/* Zero remaining PTEs */
-	li	t4, 256
-3:	STOREN	zero, (t3)
-	addi	t3, t3, 8
-	addi	t4, t4, -1
-	bgtz	t4, 3b
+	/* Zero PTE[256-511] */
+	li	t0, 256
+1:	STOREN	zero, (a3)
+	addi	a3, a3, 8
+	addi	t0, t0, -1
+	bgtz	t0, 1b
 
 	/* Construct PTE[511] as next level page table pointer */
-	srli	t1, a0, 2
-	ori	t1, t1, PTE_V
-	STOREN	t1, -8(t3)
+	srli	t0, a2, 2
+	ori	t0, t0, PTE_V
+	STOREN	t0, -8(a3)
 
 	/* Construct PTE[344+] to cover iPXE itself */
-	addi	t3, t3, -( ( 512 - 344 ) * 8 )
+	addi	a3, a3, -( ( 512 - 344 ) * 8 )
 	la	t1, _prefix
 	srli	t1, t1, 2
 	ori	t1, t1, ( PTE_D | PTE_A | PTE_X | PTE_W | PTE_R | PTE_V )
@@ -256,29 +265,26 @@ setup_paging_64:
 	srli	t2, t2, 2
 	li	t4, 1
 	slli	t4, t4, 19
-4:	STOREN	t1, (t3)
-	addi	t3, t3, 8
+1:	STOREN	t1, (a3)
+	addi	a3, a3, 8
 	add	t1, t1, t4
-	ble	t1, t2, 4b
+	ble	t1, t2, 1b
 
-	/* Construct SATP */
-	slli	t1, t0, 60
-	srli	t2, a0, 12
-	or	t1, t1, t2
-	csrrw	zero, satp, t1
+	/* Attempt to enable paging, and read back active paging level */
+	slli	t0, a1, 60
+	srli	t1, a2, 12
+	or	t0, t0, t1
+	csrrw	zero, satp, t0
 	sfence.vma
+	csrrw	a0, satp, t0
+	srli	a0, a0, 60
 
-	/* Read back SATP to see if this paging level was supported */
-	csrrw	t1, satp, t1
-	srli	t1, t1, 60
-	beq	t0, t1, 99f
-
-	/* Try next paging level */
-	addi	t0, t0, -1
-	li	t2, PG64_SV39
-	bge	t0, t2, 1b
-
-99:	/* Return enabled paging level (if any) */
-	mv	a0, t1
+	/* Loop until we successfully enable paging, or run out of levels */
+	beq	a0, a1, 1f
+	addi	a1, a1, -1
+	li	t0, PG64_SV39
+	bge	a1, t0, setup_paging_64_loop
+1:
+	/* Return enabled paging level (if any) */
 	ret
 	.size	setup_paging_64, . - setup_paging_64
