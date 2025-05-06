@@ -489,6 +489,16 @@ enable_paging_64:
 	 * a4 - PTE stride
 	 */
 	progress " paging:"
+	print_hex_addr _prefix
+	progress ":"
+	print_hex_reg a0
+	progress ":"
+	print_hex_reg a0, 32
+	progress ":"
+	print_hex_reg a0, 24
+	progress ":"
+	print_hex_reg a0, 16
+	progress ":"
 	mv	a2, a0
 	li	a1, SATP_MODE_SV57
 enable_paging_64_loop:
@@ -632,6 +642,16 @@ enable_paging_32:
 	 * a4 - saved content of temporarily modified PTE
 	 */
 	progress " paging:"
+	print_hex_addr _prefix
+	progress ":"
+	print_hex_reg a0
+	progress ":"
+	print_hex_reg a0, 32
+	progress ":"
+	print_hex_reg a0, 24
+	progress ":"
+	print_hex_reg a0, 16
+	progress ":"
 	mv	a2, a0
 
 	/* Calculate virtual address offset */
