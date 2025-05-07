@@ -493,12 +493,6 @@ enable_paging_64:
 	progress ":"
 	print_hex_reg a0
 	progress ":"
-	print_hex_reg a0, 32
-	progress ":"
-	print_hex_reg a0, 24
-	progress ":"
-	print_hex_reg a0, 16
-	progress ":"
 	mv	a2, a0
 	li	a1, SATP_MODE_SV57
 enable_paging_64_loop:
@@ -720,6 +714,110 @@ enable_paging_32_done:
 	/* Ensure that transition code did not cross an alignment boundary */
 	.section ".bss.enable_paging_32_xcheck", "aw", @nobits
 	.org	. + enable_paging_32_xalign - enable_paging_32_xlen
+
+/*****************************************************************************
+ *
+ * Install iPXE
+ *
+ *****************************************************************************
+ *
+ * Install iPXE to a suitable location in memory.
+ *
+ * This function must be called with virtual addresses valid for C
+ * code to be called (e.g. from having enabled paging, or from having
+ * applied relocations).  It requires a temporary stack pointer (which
+ * is permitted to overlap .bss), but will return with the internal
+ * stack pointer set up.
+ *
+ * Parameters:
+ *
+ *   a0 - Boot hart ID
+ *   a1 - System FDT physical address
+ *   a2 - Current virtual address offset
+ *
+ * Returns: none
+ *
+ */
+
+	/* Stack frame */
+	.struct 0
+install_stack_ra:	.space ( __riscv_xlen / 8 )
+install_stack_s0:	.space ( __riscv_xlen / 8 )
+install_stack_s1:	.space ( __riscv_xlen / 8 )
+install_stack_s2:	.space ( __riscv_xlen / 8 )
+	.balign	16
+install_stack_len:
+	.previous
+
+	.section ".prefix.install", "ax", @progbits
+	.globl	install
+install:
+	/* Register usage:
+	 *
+	 * s0 - boot hart ID
+	 * s1 - system FDT physical address
+	 * s2 - virtual address offset
+	 */
+	addi	sp, sp, -install_stack_len
+	STOREN	ra, install_stack_ra(sp)
+	STOREN	s0, install_stack_s0(sp)
+	STOREN	s1, install_stack_s1(sp)
+	STOREN	s2, install_stack_s2(sp)
+	mv	s0, a0
+	mv	s1, a1
+	mv	s2, a2
+	progress " install"
+
+	/* The runtime environment is now suitable for calling C code,
+	 * provided that:
+	 *
+	 * - the C code does not attempt to write to any static variables
+	 *
+	 * - the C code does not rely upon .bss having been zeroed.
+	 *
+	 * We may therefore use C code to parse the FDT, obtain the
+	 * system memory map, and find a suitable address to which to
+	 * physically relocate iPXE.
+	 */
+
+	/* Retrieve saved registers from the temporary stack */
+	LOADN	ra, install_stack_ra(sp)
+	LOADN	a0, install_stack_s0(sp)
+	LOADN	a1, install_stack_s1(sp)
+	LOADN	a2, install_stack_s2(sp)
+
+	/* Zero the .bss section (which may overlap the temporary stack) */
+	la	t0, _bss
+	la	t1, _ebss
+1:	STOREN	zero, (t0)
+	addi	t0, t0, ( __riscv_xlen / 8 )
+	blt	t0, t1, 1b
+
+	/* Switch to internal stack */
+	la	sp, ( _estack - install_stack_len )
+	STOREN	ra, install_stack_ra(sp)
+	STOREN	a0, install_stack_s0(sp)
+	STOREN	a1, install_stack_s1(sp)
+	STOREN	a2, install_stack_s2(sp)
+
+	/* Store boot hart */
+	la	t0, boot_hart
+	STOREN	s0, (t0)
+
+	/* Register system device tree */
+	la	a0, sysfdt
+	sub	a1, s1, s2
+	li	a2, -1
+	call	fdt_parse
+
+	/* Restore callee-saved registers and return */
+	LOADN	s2, install_stack_s2(sp)
+	LOADN	s1, install_stack_s1(sp)
+	LOADN	s0, install_stack_s0(sp)
+	LOADN	ra, install_stack_ra(sp)
+	progress "\n\n"
+	ret
+	.size	install, . - install
 
 /*****************************************************************************
  *
