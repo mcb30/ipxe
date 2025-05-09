@@ -62,9 +62,52 @@ _sbi_start:
 	mv	s1, a1
 	progress "\nSBI->iPXE"
 
+	//
+	li	a0, 4096
+	sub	a0, s1, a0
+	mv	s3, a0
+	call	enable_paging
+#if __riscv_xlen == 32
+	sub	s1, s1, a0
+#endif
+
+	//
+	call	disable_paging
+	call	disable_paging
+	mv	a0, s3
+	call	enable_paging
+	call	disable_paging
+	mv	a0, s3
+	call	enable_paging
+	call	disable_paging
+	mv	a0, s3
+	call	enable_paging
+	call	disable_paging
+
 	/* Apply dynamic relocations */
 	call	apply_relocs
 	progress " .reloc"
+
+	//
+	mv	sp, s3
+	mv	a0, s1
+	mv	a1, s1
+	la	a2, _prefix
+	li	a3, 0xffffffff
+	call	fdt_relocate
+
+	.globl	_max_align
+	.equ	_max_align, 0x200000
+
+	// call fdt_parse with temporary stack
+	j	1f
+	addi	a0, s3, -256
+	mv	a1, s1
+	li	a2, -1
+	mv	sp, a0
+	call	fdt_parse
+1:
+
 
 	/* Zero the bss */
 	la	t0, _bss
