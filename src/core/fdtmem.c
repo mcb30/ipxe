@@ -299,7 +299,6 @@ physaddr_t fdtmem_relocate ( struct fdt_header *hdr, size_t limit ) {
 	/* Determine required length */
 	assert ( memsz > 0 );
 	assert ( ( memsz % FDT_MAX_ALIGN ) == 0 );
-	assert ( ( fdt.len % FDT_MAX_ALIGN ) == 0 );
 	len = ( memsz + fdt.len );
 	assert ( len > 0 );
 	DBGC ( colour, "FDTMEM requires %#zx + %#zx => %#zx bytes for "
