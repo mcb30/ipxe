@@ -977,8 +977,18 @@ install:
 	li	a2, -1
 	call	fdt_parse
 
+	.globl	break_here
+break_here:
+
+	/// need to return to virtual address!
+
+
 	/* Return to caller (in new copy) */
 	add	ra, s2, s5
+
+	//
+	sub	ra, ra, tp
+
 	ret
 	.size	install, . - install
 
