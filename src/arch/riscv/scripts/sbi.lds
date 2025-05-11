@@ -53,6 +53,8 @@ SECTIONS {
 	KEEP(*(.provided.*))
 	*(.got)
 	*(.got.plt)
+	/* Align to allow for easy copying by prefix code */
+	. = ALIGN ( 16 );
 	_edata = .;
     }
 

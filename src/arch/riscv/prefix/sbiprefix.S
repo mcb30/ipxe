@@ -32,6 +32,9 @@
 	.section ".note.GNU-stack", "", @progbits
 	.text
 
+/* Page size */
+#define PAGE_SIZE 4096
+
 /* ELF machine type */
 #define EM_RISCV 243
 
@@ -57,6 +60,42 @@ progress_\@:
 	.org 0
 	.globl	_sbi_start
 _sbi_start:
+	/* Entry point */
+	progress "\nSBI->iPXE"
+
+	/* Identify temporary page table and stack space
+	 *
+	 * Assume that there is sufficient writable memory (~8kB)
+	 * directly below the device tree.
+	 */
+	li	t0, ~( PAGE_SIZE - 1 )
+	and	sp, a1, t0
+	li	t0, PAGE_SIZE
+	sub	sp, sp, t0
+	mv	a2, sp
+
+	/* Install iPXE */
+	call	install
+
+	/* Call main program */
+	progress "\n\n"
+	call	main
+
+	/* We have no return path, since the M-mode SBI implementation
+	 * will have jumped to us by setting our start address in MEPC
+	 * and issuing an MRET instruction.
+	 *
+	 * Attempt a system reset, since there is nothing else we can
+	 * viably do at this point.
+	 */
+	j	reset_system
+	.size	_sbi_start, . - _sbi_start
+
+
+
+
+
+
 	/* Initialise virtual address offset */
 	mv	tp, zero
 

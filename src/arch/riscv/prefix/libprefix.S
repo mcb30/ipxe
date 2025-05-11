@@ -409,6 +409,16 @@ paging_mode_names:
 	.globl	_max_align
 	.equ	_max_align, ( 1 << VPN1_LSB )
 
+	/* Space for page table
+	 *
+	 * This can be used only once .bss is known to be writable.
+	 */
+	.section ".bss.page_table", "a", @nobits
+	.balign	PAGE_SIZE
+page_table:
+	.space	PAGE_SIZE
+	.size	page_table, . - page_table
+
 /*****************************************************************************
  *
  * Disable paging
@@ -850,6 +860,127 @@ disable_paging_32_xstart:
 	/* Ensure that transition code did not cross an alignment boundary */
 	.section ".bss.disable_paging_32_xcheck", "aw", @nobits
 	.org	. + disable_paging_32_xalign - disable_paging_32_xlen
+
+/*****************************************************************************
+ *
+ * Convert physical address to virtual address
+ *
+ *****************************************************************************
+ *
+ */
+
+	.macro	phys_to_virt reg
+#if __riscv_xlen == 32
+	sub	\reg, \reg, tp
+#endif
+	.endm
+
+/*****************************************************************************
+ *
+ * Install iPXE to a suitable runtime address
+ *
+ *****************************************************************************
+ *
+ * Identify a suitable runtime address for iPXE, relocate there, and
+ * set up for running normal C code.
+ *
+ * A valid temporary stack pointer is required.  A 4kB space for a
+ * temporary page table may be provided, and must be provided if the
+ * iPXE image is running from read-only memory.
+ *
+ * Note that this function does not preserve the callee-save registers.
+ *
+ * Parameters:
+ *
+ *   a0 - Boot hart ID
+ *   a1 - Device tree physical address
+ *   a2 - Optional temporary page table space (4kB, aligned to a 4kB boundary)
+ *   sp - Valid temporary stack pointer
+ *
+ * Returns:
+ *
+ *   pc - Updated to be within the relocated iPXE
+ *   sp - Top of internal stack
+ *   tp - Virtual address offset
+ *
+ */
+
+	.section ".prefix.install", "ax", @progbits
+	.globl	install
+install:
+	/* Register usage:
+	 *
+	 * s0 - boot hart ID
+	 * s1 - device tree physical address
+	 * s2 - saved return address
+	 * s3 - accessible physical address limit
+	 * s4 - relocation physical address
+	 * s5 - relocation offset
+	 * tp - virtual address offset
+	 */
+	progress "install"
+	mv	s0, a0
+	mv	s1, a1
+	mv	s2, ra
+
+	/* Initialise virtual address offset */
+	mv	tp, zero
+
+	/* Attempt to enable paging, if we have temporary page table space */
+	mv	a0, a2
+	beqz	a2, 1f
+	call	enable_paging
+1:
+
+	///
+	mv	s3, zero
+
+	/* Apply relocations, if still needed after enabling paging */
+	call	apply_relocs
+
+	/* Find a suitable address for relocation (using temporary stack) */
+	mv	a0, s1
+	phys_to_virt a0
+	mv	a1, s3
+	phys_to_virt sp
+	call	fdtmem_relocate
+	mv	s4, a0
+
+	/* Disable paging */
+	call	disable_paging
+
+	/* Determine relocation offset */
+	la	s5, _prefix
+	sub	s5, s4, s5
+
+	/* Jump to relocated copy */
+	la	t0, 1f
+	add	t0, t0, s5
+	jr	t0
+1:
+	/* Re-enable paging */
+	la	a0, page_table
+	call	enable_paging
+
+	/* Reapply relocations, if still needed after enabling paging */
+	call	apply_relocs
+
+	/* Load stack pointer */
+	la	sp, _estack
+
+	/* Store boot hart */
+	STOREN	s0, boot_hart, t0
+
+	/* Register copy of device tree as system device tree */
+	la	a0, sysfdt
+	la	a1, _end
+	li	a2, -1
+	call	fdt_parse
+
+	/* Return to caller (in new copy) */
+	add	ra, s2, s5
+	ret
+	.size	install, . - install
 
 /*****************************************************************************
  *
