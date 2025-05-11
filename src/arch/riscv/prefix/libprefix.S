@@ -419,6 +419,11 @@ page_table:
 	.space	PAGE_SIZE
 	.size	page_table, . - page_table
 
+	/* Convert physical address to virtual address */
+	.macro	phys_to_virt reg
+	_C2 ( phys_to_virt_, __riscv_xlen ) \reg
+	.endm
+
 /*****************************************************************************
  *
  * Disable paging
@@ -626,6 +631,11 @@ enable_paging_64_loop:
 	ret
 	.size	enable_paging_64, . - enable_paging_64
 
+	/* Convert 64-bit physical address to virtual address */
+	.macro	phys_to_virt_64 reg
+	/* Nothing to do */
+	.endm
+
 /*****************************************************************************
  *
  * Disable 64-bit paging
@@ -788,6 +798,11 @@ enable_paging_32_xstart:
 	.section ".bss.enable_paging_32_xcheck", "aw", @nobits
 	.org	. + enable_paging_32_xalign - enable_paging_32_xlen
 
+	/* Convert 32-bit physical address to virtual address */
+	.macro	phys_to_virt_32 reg
+	sub	\reg, \reg, tp
+	.endm
+
 /*****************************************************************************
  *
  * Disable 32-bit paging
@@ -860,20 +875,6 @@ disable_paging_32_xstart:
 	/* Ensure that transition code did not cross an alignment boundary */
 	.section ".bss.disable_paging_32_xcheck", "aw", @nobits
 	.org	. + disable_paging_32_xalign - disable_paging_32_xlen
-
-/*****************************************************************************
- *
- * Convert physical address to virtual address
- *
- *****************************************************************************
- *
- */
-
-	.macro	phys_to_virt reg
-#if __riscv_xlen == 32
-	sub	\reg, \reg, tp
-#endif
-	.endm
 
 /*****************************************************************************
  *
@@ -977,18 +978,9 @@ install:
 	li	a2, -1
 	call	fdt_parse
 
-	.globl	break_here
-break_here:
-
-	/// need to return to virtual address!
-
-
-	/* Return to caller (in new copy) */
+	/* Return to a virtual address in the relocated copy */
 	add	ra, s2, s5
-
-	//
 	sub	ra, ra, tp
-
 	ret
 	.size	install, . - install
 
