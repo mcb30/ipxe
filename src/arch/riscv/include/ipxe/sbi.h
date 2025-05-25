@@ -191,6 +191,7 @@ sbi_legacy_ecall_1 ( int fid, unsigned long p0 ) {
 /** Legacy extensions */
 #define SBI_LEGACY_PUTCHAR 0x01		/**< Console Put Character */
 #define SBI_LEGACY_GETCHAR 0x02		/**< Console Get Character */
+#define SBI_LEGACY_SHUTDOWN 0x08	/**< System Shutdown */
 
 /** System reset extension */
 #define SBI_SRST SBI_EID ( 'S', 'R', 'S', 'T' )

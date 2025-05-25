@@ -1141,6 +1141,9 @@ install:
 #define SBI_SRST_SYSTEM_RESET 0x00
 #define SBI_RESET_COLD 0x00000001
 
+/* SBI legacy shutdown */
+#define SBI_LEGACY_SHUTDOWN 0x08
+
 	.section ".prefix.reset_system", "ax", @progbits
 	.globl	reset_system
 reset_system:
@@ -1153,9 +1156,14 @@ reset_system:
 	li	a0, SBI_RESET_COLD
 	mv	a1, zero
 	ecall
+	progress "(reset failed)\n"
+
+	/* Attempt legacy shutdown */
+	li	a7, SBI_LEGACY_SHUTDOWN
+	ecall
+	progress "(legacy shutdown failed)\n"
 
 	/* If reset failed, lock the system */
-	progress "(reset failed)\n"
 1:	wfi
 	j	1b
 	.size	reset_system, . - reset_system
