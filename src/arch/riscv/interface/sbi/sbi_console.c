@@ -54,8 +54,11 @@ static void sbi_putchar ( int character ) {
 
 	/* Write byte to console */
 	ret = sbi_ecall_1 ( SBI_DBCN, SBI_DBCN_WRITE_BYTE, character );
-	if ( ret.error )
-		sbi_ecall_1 ( SBI_LEGACY_PUTCHAR, 0, character );
+	if ( ! ret.error )
+		return;
+
+	/* Debug extension not supported: try legacy method */
+	sbi_legacy_ecall_1 ( SBI_LEGACY_PUTCHAR, character );
 }
 
 /**
@@ -85,6 +88,7 @@ static int sbi_getchar ( void ) {
  */
 static int sbi_iskey ( void ) {
 	struct sbi_return ret;
+	long key;
 
 	/* Do nothing if we already have a buffered character */
 	if ( sbi_console_input )
@@ -94,11 +98,18 @@ static int sbi_iskey ( void ) {
 	ret = sbi_ecall_3 ( SBI_DBCN, SBI_DBCN_READ,
 			    sizeof ( sbi_console_input ),
 			    virt_to_phys ( &sbi_console_input ), 0 );
-	if ( ret.error )
-		return 0;
+	if ( ! ret.error )
+		return ret.value;
 
-	/* Return number of characters read and buffered */
-	return ret.value;
+	/* Debug extension not supported: try legacy method */
+	key = sbi_legacy_ecall_0 ( SBI_LEGACY_GETCHAR );
+	if ( key > 0 ) {
+		sbi_console_input = key;
+		return key;
+	}
+
+	/* No character available */
+	return 0;
 }
 
 /** SBI console */
