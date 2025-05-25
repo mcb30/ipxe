@@ -151,6 +151,9 @@ sbi_ecall_3 ( int eid, int fid, unsigned long p0, unsigned long p1,
 /** Convert an SBI error code to an iPXE status code */
 #define ESBI( error ) EPLATFORM ( EINFO_EPLATFORM, error )
 
+/** Legacy extensions */
+#define SBI_LEGACY_PUTCHAR 0x00000001	/**< Console Put Character */
+
 /** System reset extension */
 #define SBI_SRST SBI_EID ( 'S', 'R', 'S', 'T' )
 #define SBI_SRST_SYSTEM_RESET 0x00	/**< Reset system */

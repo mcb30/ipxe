@@ -50,9 +50,12 @@ static unsigned char sbi_console_input;
  * @v character		Character to be printed
  */
 static void sbi_putchar ( int character ) {
+	struct sbi_return ret;
 
 	/* Write byte to console */
-	sbi_ecall_1 ( SBI_DBCN, SBI_DBCN_WRITE_BYTE, character );
+	ret = sbi_ecall_1 ( SBI_DBCN, SBI_DBCN_WRITE_BYTE, character );
+	if ( ret.error )
+		sbi_ecall_1 ( SBI_LEGACY_PUTCHAR, 0, character );
 }
 
 /**
