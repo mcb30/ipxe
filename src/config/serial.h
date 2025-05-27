@@ -28,8 +28,10 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #endif
 
 /* Early UART configuration (for bare metal prefix debugging only) */
-//#define EARLY_UART_MODEL	8250
-//#define EARLY_UART_REG_BASE	0x10000000
+#define EARLY_UART_MODEL	8250
+#define EARLY_UART_REG_BASE	0x10000000
+//#define EARLY_UART_MODEL	sifive
+//#define EARLY_UART_REG_BASE	0x10010000
 //#define EARLY_UART_REG_SHIFT	0
 
 #include <config/named.h>

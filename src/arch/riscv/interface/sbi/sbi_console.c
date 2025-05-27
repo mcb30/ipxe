@@ -52,6 +52,14 @@ static unsigned char sbi_console_input;
 static void sbi_putchar ( int character ) {
 	struct sbi_return ret;
 
+	long satp;
+	__asm__ ( "csrr %0, satp" : "=r" ( satp ) );
+	if ( ! satp ) {
+		volatile uint8_t *uart = ( ( void * ) 0xffe7014000 );
+		uart[0] = character;
+		while ( ! ( uart[20] & 0x20 ) ) {}
+	}
+
 	/* Write byte to console */
 	ret = sbi_ecall_1 ( SBI_DBCN, SBI_DBCN_WRITE_BYTE, character );
 	if ( ! ret.error )
