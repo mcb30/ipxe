@@ -841,7 +841,7 @@ enable_paging_64_loop:
 	/* Construct PTE[0-255] for identity map */
 	mv	a3, a0
 	li	t0, ( PTE_COUNT / 2 )
-	li	t1, PTE_LEAF
+	li	t1, PTE_LEAF | ( 1 << 61 ) | ( 1 << 62 )
 1:	STOREN	t1, (a3)
 	addi	a3, a3, PTE_SIZE
 	add	t1, t1, a4
@@ -887,6 +887,8 @@ enable_paging_64_loop:
 	la	t0, _prefix
 	srli	t0, t0, PTE_PPN_SHIFT
 	ori	t0, t0, PTE_LEAF
+	li	t1, ( 1 << 61 ) | ( 1 << 62 )
+	or	t0, t0, t1
 	la	t1, _ebss
 	srli	t1, t1, PTE_PPN_SHIFT
 1:	STOREN	t0, (a3)
@@ -1248,6 +1250,13 @@ install:
 	mv	s1, a1
 	mv	s2, ra
 	la	s3, _edata
+
+	//
+	progress " vendor:"
+	li	a7, 0x10
+	li	a6, 0x04
+	ecall
+	print_hex_reg a1
 
 	/* Attempt to enable paging, if we have temporary page table space */
 	mv	a0, a2
