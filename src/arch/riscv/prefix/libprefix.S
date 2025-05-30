@@ -460,6 +460,9 @@ print_hex_value_alt:
 	.section ".prefix.apply_relocs", "ax", @progbits
 	.globl	apply_relocs
 apply_relocs:
+	progress "foo"
+	auipc	a0, 0
+	ret
 	/* Register usage:
 	 *
 	 * a0 - current relocation record pointer
@@ -470,9 +473,13 @@ apply_relocs:
 	 */
 	la	a1, _prefix
 
+	progress " wtf"
+
 	/* Calculate relocation addend */
 	LOADN	a2, prefix_virt
 	sub	a2, a1, a2
+
+		progress " wtf2"
 
 	/* Skip applying relocations if addend is zero */
 	beqz	a2, apply_relocs_done
@@ -1251,9 +1258,48 @@ install:
 	call	enable_paging
 1:	addi	s4, a0, -1
 
+	progress " ip:"
+	la	t0, 1f
+1:	print_hex_reg t0
+
+
+	progress " call:"
+	call	1f
+1:	print_hex_reg ra
+
 	/* Apply relocations, if still needed after enabling paging */
 	mv	a0, s3
 	call	apply_relocs
+
+	addi	a0, t1, -1
+	progress " msg-1:"
+	print_hex_reg a0
+	print_hex_reg a0
+
+	progress " byte:"
+	lbu	a1, (a0)
+	print_hex_reg a1, bits=8
+	//jal	t0, print_message_alt
+
+
+#if 1
+	la	s0, _prefix + 0x55a00
+	li	s1, 1
+1:	progress "\r\nbyte "
+	print_hex_reg s0
+	progress " = "
+	lbu	a0, (s0)
+	print_hex_reg a0, bits=8
+	add	s0, s0, s1
+	j	1b
+#endif
+
+
+
+
+	progress " reloc'd"
+	print_hex_reg a0
+99:	j	99b
 
 	/* Find a suitable address for relocation (using temporary stack) */
 	phys_to_virt a0, s1

@@ -54,8 +54,8 @@ static void sbi_putchar ( int character ) {
 
 	long satp;
 	__asm__ ( "csrr %0, satp" : "=r" ( satp ) );
-	if ( ! satp ) {
-		volatile uint8_t *uart = ( ( void * ) 0xffe7014000 );
+	if ( 0 && ! satp ) {
+		volatile uint8_t *uart = ( ( void * ) 0xffffffffeae14000ULL );
 		uart[0] = character;
 		while ( ! ( uart[20] & 0x20 ) ) {}
 	}
