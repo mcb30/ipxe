@@ -291,10 +291,12 @@ print_message_alt:
 	addi	t1, t1, 1
 	beqz	a0, 2f
 	print_char_uart
+#if 0
 	print_char_dbcn
 	beqz	a0, 1b
 	lbu	a0, -1(t1)
 	print_char_legacy
+#endif
 	j	1b
 2:
 	/* Restore registers and return (via alternate link register) */
@@ -904,19 +906,25 @@ enable_paging_64_loop:
 	sfence.vma
 	csrr	a2, satp
 	srli	a2, a2, SATP_MODE_SHIFT
-
-	//
-	mv	a2, zero
-
 	bnez	a2, 1f
 	csrw	satp, zero
 	sfence.vma
 1:
 
-	//
+
+	csrr	a2, satp
+
+
+	// disable paging
+	csrw	satp, zero
+	sfence.vma
+
 	progress " satp:"
-	csrr	t0, satp
-	print_hex_reg t0
+	print_hex_reg a2
+
+	// report paging disabled
+	mv	a2, zero
+
 
 	/* Loop until we successfully enable paging, or run out of levels */
 	beq	a2, a1, 1f
