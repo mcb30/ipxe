@@ -911,16 +911,22 @@ enable_paging_64_loop:
 	sfence.vma
 1:
 
+	// Following code will also be tried with paging enabled:
 
+	// can read CSR
 	csrr	a2, satp
+	early_uart_reg_base a2
+	li	t0, 0x2a
+	sb	t0, (a2)
 
 
 	// disable paging
 	csrw	satp, zero
 	sfence.vma
 
-	progress " satp:"
+	progress "<"
 	print_hex_reg a2
+	progress ">"
 
 	// report paging disabled
 	mv	a2, zero
