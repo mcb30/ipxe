@@ -596,10 +596,10 @@ static struct net_device_operations cgem_operations = {
  * Probe devicetree device
  *
  * @v dt		Devicetree device
- * @v offset		Starting node offset
+ * @v node		Devicetree node
  * @ret rc		Return status code
  */
-static int cgem_probe ( struct dt_device *dt, unsigned int offset ) {
+static int cgem_probe ( struct dt_device *dt, const struct fdt_token *node ) {
 	struct net_device *netdev;
 	struct cgem_nic *cgem;
 	union cgem_mac mac;
@@ -626,7 +626,7 @@ static int cgem_probe ( struct dt_device *dt, unsigned int offset ) {
 	cgem_init_ring ( &cgem->rx, CGEM_NUM_RX_DESC, CGEM_RXQBASE );
 
 	/* Map registers */
-	cgem->regs = dt_ioremap ( dt, offset, CGEM_REG_IDX, CGEM_REG_LEN );
+	cgem->regs = dt_ioremap ( dt, node, CGEM_REG_IDX, CGEM_REG_LEN );
 	if ( ! cgem->regs ) {
 		rc = -ENODEV;
 		goto err_ioremap;
@@ -641,7 +641,7 @@ static int cgem_probe ( struct dt_device *dt, unsigned int offset ) {
 		goto err_init_phy;
 
 	/* Fetch devicetree MAC address */
-	if ( ( rc = fdt_mac ( &sysfdt, offset, netdev ) ) != 0 ) {
+	if ( ( rc = fdt_mac ( node, netdev ) ) != 0 ) {
 		DBGC ( cgem, "CGEM %s could not fetch MAC: %s\n",
 		       cgem->name, strerror ( rc ) );
 		goto err_mac;

@@ -84,6 +84,32 @@ struct fdt_reservation {
 	uint64_t size;
 } __attribute__ (( packed ));
 
+/** A device tree token descriptor */
+struct fdt_token {
+	/** Device tree */
+	struct fdt *fdt;
+	/** Offset within structure block */
+	unsigned int offset;
+	/** Next offset within structure block */
+	unsigned int next;
+	/** Node or property name (if applicable)
+	 *
+	 * Note that this pointer will be invalidated by any operation
+	 * that modifies the device tree.
+	 */
+	const char *name;
+	/** Property data (if applicable)
+	 *
+	 * Note that this pointer will be invalidated by any operation
+	 * that modifies the device tree.
+	 */
+	const void *data;
+	/** Length of property data (if applicable) */
+	size_t len;
+	/** Depth (after processing this token) */
+	int depth;
+};
+
 /** A device tree */
 struct fdt {
 	/** Tree data */
@@ -107,6 +133,8 @@ struct fdt {
 	size_t strings_len;
 	/** Offset to memory reservation block */
 	unsigned int reservations;
+	/** Root node */
+	const struct fdt_token root;
 	/** Reallocate device tree
 	 *
 	 * @v fdt		Device tree
@@ -114,22 +142,6 @@ struct fdt {
 	 * @ret rc		Return status code
 	 */
 	int ( * realloc ) ( struct fdt *fdt, size_t len );
-};
-
-/** A device tree token descriptor */
-struct fdt_descriptor {
-	/** Offset within structure block */
-	unsigned int offset;
-	/** Next offset within structure block */
-	unsigned int next;
-	/** Node or property name (if applicable) */
-	const char *name;
-	/** Property data (if applicable) */
-	const void *data;
-	/** Length of property data (if applicable) */
-	size_t len;
-	/** Depth change */
-	int depth;
 };
 
 /** A device tree region cell size specification */
@@ -168,35 +180,71 @@ fdt_reservations ( struct fdt *fdt ) {
 	for ( rsv = fdt_reservations ( (fdt) ) ;		\
 	      ( (rsv)->start || (rsv)->size ) ; rsv++ )
 
-extern int fdt_describe ( struct fdt *fdt, unsigned int offset,
-			  struct fdt_descriptor *desc );
+/**
+ * Initialise a subordinate token descriptor for iteration
+ *
+ * @v node		Device tree node
+ * @v desc		Subordinate token descriptor to fill in
+ */
+static inline void fdt_fork ( const struct fdt_token *node,
+			      struct fdt_token *desc ) {
+
+	/* Fill in fields required by fdt_next() */
+	desc->fdt = node->fdt;
+	desc->next = node->next;
+	desc->depth = node->depth;
+}
+
+/**
+ * Check if token is a node
+ *
+ * @v desc		Token descriptor
+ * @ret is_node		Token represents the start of a node
+ */
+static inline int fdt_is_node ( const struct fdt_token *desc ) {
+
+	return ( desc->name && ( ! desc->data ) );
+}
+
+/**
+ * Check if token is a child node
+ *
+ * @v desc		Token descriptor
+ * @v depth		Parent node depth
+ * @ret is_child	Token represents a child node
+ */
+static inline int fdt_is_child ( const struct fdt_token *desc, int depth ) {
+
+	return ( fdt_is_node ( desc ) && ( desc->depth == ( depth + 1 ) ) );
+}
+
+extern int fdt_next ( struct fdt_token *desc );
 extern int fdt_path ( struct fdt *fdt, const char *path,
-		      unsigned int *offset );
+		      struct fdt_token *node );
 extern int fdt_alias ( struct fdt *fdt, const char *name,
-		       unsigned int *offset );
-extern const char * fdt_strings ( struct fdt *fdt, unsigned int offset,
+		       struct fdt_token *node );
+extern const char * fdt_strings ( const struct fdt_token *node,
 				  const char *name, unsigned int *count );
-extern const char * fdt_string ( struct fdt *fdt, unsigned int offset,
-				 const char *name );
-extern int fdt_cells ( struct fdt *fdt, unsigned int offset, const char *name,
+extern const char * fdt_string (  const struct fdt_token *node,
+				  const char *name );
+extern int fdt_cells ( const struct fdt_token *node, const char *name,
 		       unsigned int index, unsigned int count,
 		       uint64_t *value );
-extern int fdt_u64 ( struct fdt *fdt, unsigned int offset, const char *name,
+extern int fdt_u64 ( const struct fdt_token *node, const char *name,
 		     uint64_t *value );
-extern int fdt_u32 ( struct fdt *fdt, unsigned int offset, const char *name,
+extern int fdt_u32 ( const struct fdt_token *node, const char *name,
 		     uint32_t *value );
-extern void fdt_reg_cells ( struct fdt *fdt, unsigned int offset,
+extern void fdt_reg_cells ( const struct fdt_token *node,
 			    struct fdt_reg_cells *regs );
-extern int fdt_reg_count ( struct fdt *fdt, unsigned int offset,
+extern int fdt_reg_count ( const struct fdt_token *node,
 			   struct fdt_reg_cells *regs );
-extern int fdt_reg_address ( struct fdt *fdt, unsigned int offset,
+extern int fdt_reg_address ( const struct fdt_token *node,
 			     struct fdt_reg_cells *regs, unsigned int index,
 			     uint64_t *address );
-extern int fdt_reg_size ( struct fdt *fdt, unsigned int offset,
+extern int fdt_reg_size ( const struct fdt_token *node,
 			  struct fdt_reg_cells *regs, unsigned int index,
 			  uint64_t *size );
-extern int fdt_mac ( struct fdt *fdt, unsigned int offset,
-		     struct net_device *netdev );
+extern int fdt_mac ( const struct fdt_token *node, struct net_device *netdev );
 extern int fdt_parse ( struct fdt *fdt, struct fdt_header *hdr,
 		       size_t max_len );
 extern int fdt_create ( struct fdt_header **hdr, const char *cmdline,

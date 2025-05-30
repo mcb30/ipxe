@@ -66,50 +66,43 @@ static physaddr_t fdtmem_max;
  * Update memory region descriptor based on device tree node
  *
  * @v region		Memory region of interest to be updated
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Device tree node
  * @v match		Required device type (or NULL)
  * @v flags		Region flags
  * @ret rc		Return status code
  */
-static int fdtmem_update_node ( struct memmap_region *region, struct fdt *fdt,
-				unsigned int offset, const char *match,
-				unsigned int flags ) {
-	struct fdt_descriptor desc;
+static int fdtmem_update_node ( struct memmap_region *region,
+				const struct fdt_token *node,
+				const char *match, unsigned int flags ) {
+	struct fdt_token desc;
 	struct fdt_reg_cells regs;
 	const char *devtype;
 	uint64_t start;
 	uint64_t size;
-	int depth;
 	int count;
 	int index;
 	int rc;
 
 	/* Parse region cell sizes */
-	fdt_reg_cells ( fdt, offset, &regs );
+	fdt_reg_cells ( node, &regs );
 
 	/* Scan through reservations */
-	for ( depth = -1 ; ; depth += desc.depth, offset = desc.next ) {
+	for ( fdt_fork ( node, &desc ) ; desc.depth >= node->depth ; ) {
 
 		/* Describe token */
-		if ( ( rc = fdt_describe ( fdt, offset, &desc ) ) != 0 ) {
+		if ( ( rc = fdt_next ( &desc ) ) != 0 ) {
 			DBGC ( region, "FDTMEM has malformed node: %s\n",
 			       strerror ( rc ) );
 			return rc;
 		}
 
-		/* Terminate when we exit this node */
-		if ( ( depth == 0 ) && ( desc.depth < 0 ) )
-			break;
-
 		/* Ignore any non-immediate child nodes */
-		if ( ! ( ( depth == 0 ) && desc.name && ( ! desc.data ) ) )
+		if ( ! fdt_is_child ( &desc, node->depth ) )
 			continue;
 
 		/* Ignore any non-matching children */
 		if ( match ) {
-			devtype = fdt_string ( fdt, desc.offset,
-					       "device_type" );
+			devtype = fdt_string ( &desc, "device_type" );
 			if ( ! devtype )
 				continue;
 			if ( strcmp ( devtype, match ) != 0 )
@@ -117,7 +110,7 @@ static int fdtmem_update_node ( struct memmap_region *region, struct fdt *fdt,
 		}
 
 		/* Count regions */
-		count = fdt_reg_count ( fdt, desc.offset, &regs );
+		count = fdt_reg_count ( &desc, &regs );
 		if ( count < 0 ) {
 			if ( flags & MEMMAP_FL_RESERVED ) {
 				/* Assume this is a non-fixed reservation */
@@ -133,15 +126,15 @@ static int fdtmem_update_node ( struct memmap_region *region, struct fdt *fdt,
 		for ( index = 0 ; index < count ; index++ ) {
 
 			/* Get region starting address and size */
-			if ( ( rc = fdt_reg_address ( fdt, desc.offset, &regs,
-						      index, &start ) ) != 0 ){
+			if ( ( rc = fdt_reg_address ( &desc, &regs, index,
+						      &start ) ) != 0 ) {
 				DBGC ( region, "FDTMEM %s region %d has "
 				       "malformed start address: %s\n",
 				       desc.name, index, strerror ( rc ) );
 				break;
 			}
-			if ( ( rc = fdt_reg_size ( fdt, desc.offset, &regs,
-						   index, &size ) ) != 0 ) {
+			if ( ( rc = fdt_reg_size ( &desc, &regs, index,
+						   &size ) ) != 0 ) {
 				DBGC ( region, "FDTMEM %s region %d has "
 				       "malformed size: %s\n",
 				       desc.name, index, strerror ( rc ) );
@@ -167,11 +160,11 @@ static int fdtmem_update_node ( struct memmap_region *region, struct fdt *fdt,
 static int fdtmem_update_tree ( struct memmap_region *region,
 				struct fdt *fdt ) {
 	const struct fdt_reservation *rsv;
-	unsigned int offset;
+	struct fdt_token node;
 	int rc;
 
 	/* Update based on memory regions in the root node */
-	if ( ( rc = fdtmem_update_node ( region, fdt, 0, "memory",
+	if ( ( rc = fdtmem_update_node ( region, &fdt->root, "memory",
 					 MEMMAP_FL_MEMORY ) ) != 0 )
 		return rc;
 
@@ -183,14 +176,14 @@ static int fdtmem_update_tree ( struct memmap_region *region,
 	}
 
 	/* Locate reserved-memory node */
-	if ( ( rc = fdt_path ( fdt, "/reserved-memory", &offset ) ) != 0 ) {
+	if ( ( rc = fdt_path ( fdt, "/reserved-memory", &node ) ) != 0 ) {
 		DBGC ( region, "FDTMEM could not locate /reserved-memory: "
 		       "%s\n", strerror ( rc ) );
 		return rc;
 	}
 
 	/* Update based on memory regions in the reserved-memory node */
-	if ( ( rc = fdtmem_update_node ( region, fdt, offset, NULL,
+	if ( ( rc = fdtmem_update_node ( region, &node, NULL,
 					 MEMMAP_FL_RESERVED ) ) != 0 )
 		return rc;
 

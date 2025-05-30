@@ -42,10 +42,10 @@ struct dt_driver {
 	 * Probe device
 	 *
 	 * @v dt		Devicetree device
-	 * @v offset		Starting node offset
+	 * @v node		Devicetree node
 	 * @ret rc		Return status code
 	 */
-	int ( * probe ) ( struct dt_device *dt, unsigned int offset );
+	int ( * probe ) ( struct dt_device *dt, const struct fdt_token *node );
 	/**
 	 * Remove device
 	 *
@@ -80,7 +80,7 @@ static inline void * dt_get_drvdata ( struct dt_device *dt ) {
 	return dt->priv;
 }
 
-extern void * dt_ioremap ( struct dt_device *dt, unsigned int offset,
+extern void * dt_ioremap ( struct dt_device *dt, const struct fdt_token *node,
 			   unsigned int index, size_t len );
 
 #endif /* _IPXE_DEVTREE_H */

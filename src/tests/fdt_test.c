@@ -161,15 +161,14 @@ static const uint8_t sifive_u[] = {
  *
  */
 static void fdt_test_exec ( void ) {
-	struct fdt_descriptor desc;
 	struct fdt_header *hdr;
+	struct fdt_token node;
 	struct fdt fdt;
 	const char *string;
 	struct image *image;
 	uint32_t u32;
 	uint64_t u64;
 	unsigned int count;
-	unsigned int offset;
 
 	/* Verify parsing */
 	hdr = ( ( struct fdt_header * ) sifive_u );
@@ -178,90 +177,92 @@ static void fdt_test_exec ( void ) {
 	ok ( fdt_parse ( &fdt, hdr, ( sizeof ( sifive_u ) - 1 ) ) != 0 );
 	ok ( fdt_parse ( &fdt, hdr, -1UL ) == 0 );
 	ok ( fdt.len == sizeof ( sifive_u ) );
+	ok ( fdt.root.offset == 0 );
+	ok ( fdt.root.depth == 1 );
 	ok ( fdt_parse ( &fdt, hdr, sizeof ( sifive_u ) ) == 0 );
 	ok ( fdt.len == sizeof ( sifive_u ) );
+	ok ( fdt.root.offset == 0 );
+	ok ( fdt.root.depth == 1 );
 
 	/* Verify string properties */
-	ok ( ( string = fdt_string ( &fdt, 0, "model" ) ) != NULL );
+	ok ( ( string = fdt_string ( &fdt.root, "model" ) ) != NULL );
 	ok ( strcmp ( string, "SiFive HiFive Unleashed A00" ) == 0 );
-	ok ( ( string = fdt_string ( &fdt, 0, "nonexistent" ) ) == NULL );
+	ok ( ( string = fdt_string ( &fdt.root, "nonexistent" ) ) == NULL );
 
 	/* Verify string list properties */
-	ok ( ( string = fdt_strings ( &fdt, 0, "model", &count ) ) != NULL );
+	ok ( ( string = fdt_strings ( &fdt.root, "model", &count ) ) != NULL );
 	ok ( count == 1 );
 	ok ( memcmp ( string, "SiFive HiFive Unleashed A00", 28 ) == 0 );
-	ok ( ( string = fdt_strings ( &fdt, 0, "compatible",
+	ok ( ( string = fdt_strings ( &fdt.root, "compatible",
 				      &count ) ) != NULL );
 	ok ( count == 2 );
 	ok ( memcmp ( string, "sifive,hifive-unleashed-a00\0"
 		      "sifive,hifive-unleashed", 52 ) == 0 );
-	ok ( ( string = fdt_strings ( &fdt, 0, "nonexistent",
+	ok ( ( string = fdt_strings ( &fdt.root, "nonexistent",
 				      &count ) ) == NULL );
 	ok ( count == 0 );
 
 	/* Verify path lookup */
-	ok ( fdt_path ( &fdt, "", &offset ) == 0 );
-	ok ( offset == 0 );
-	ok ( fdt_path ( &fdt, "/", &offset ) == 0 );
-	ok ( offset == 0 );
+	ok ( fdt_path ( &fdt, "", &node ) == 0 );
+	ok ( node.offset == 0 );
+	ok ( fdt_path ( &fdt, "/", &node ) == 0 );
+	ok ( node.offset == 0 );
 	ok ( fdt_path ( &fdt, "/cpus/cpu@0/interrupt-controller",
-			&offset ) == 0 );
-	ok ( ( string = fdt_string ( &fdt, offset, "compatible" ) ) != NULL );
+			&node ) == 0 );
+	ok ( ( string = fdt_string ( &node, "compatible" ) ) != NULL );
 	ok ( strcmp ( string, "riscv,cpu-intc" ) == 0 );
-	ok ( fdt_path ( &fdt, "//soc/serial@10010000//", &offset ) == 0 );
-	ok ( ( string = fdt_string ( &fdt, offset, "compatible" ) ) != NULL );
+	ok ( fdt_path ( &fdt, "//soc/serial@10010000//", &node ) == 0 );
+	ok ( ( string = fdt_string ( &node, "compatible" ) ) != NULL );
 	ok ( strcmp ( string, "sifive,uart0" ) == 0 );
-	ok ( fdt_path ( &fdt, "/nonexistent", &offset ) != 0 );
-	ok ( fdt_path ( &fdt, "/cpus/nonexistent", &offset ) != 0 );
+	ok ( fdt_path ( &fdt, "/nonexistent", &node ) != 0 );
+	ok ( fdt_path ( &fdt, "/cpus/nonexistent", &node ) != 0 );
 
 	/* Verify 64-bit integer properties */
-	ok ( fdt_u64 ( &fdt, 0, "#address-cells", &u64 ) == 0 );
+	ok ( fdt_u64 ( &fdt.root, "#address-cells", &u64 ) == 0 );
 	ok ( u64 == 2 );
-	ok ( fdt_path ( &fdt, "/soc/ethernet@10090000", &offset ) == 0 );
-	ok ( fdt_u64 ( &fdt, offset, "max-speed", &u64 ) == 0 );
+	ok ( fdt_path ( &fdt, "/soc/ethernet@10090000", &node ) == 0 );
+	ok ( fdt_u64 ( &node, "max-speed", &u64 ) == 0 );
 	ok ( u64 == 10000000000ULL );
-	ok ( fdt_u64 ( &fdt, offset, "#nonexistent", &u64 ) != 0 );
+	ok ( fdt_u64 ( &node, "#nonexistent", &u64 ) != 0 );
 
 	/* Verify 32-bit integer properties */
-	ok ( fdt_u32 ( &fdt, 0, "#address-cells", &u32 ) == 0 );
+	ok ( fdt_u32 ( &fdt.root, "#address-cells", &u32 ) == 0 );
 	ok ( u32 == 2 );
-	ok ( fdt_u32 ( &fdt, 0, "#nonexistent", &u32 ) != 0 );
-	ok ( fdt_path ( &fdt, "/soc/ethernet@10090000", &offset ) == 0 );
-	ok ( fdt_u32 ( &fdt, offset, "max-speed", &u32 ) != 0 );
+	ok ( fdt_u32 ( &fdt.root, "#nonexistent", &u32 ) != 0 );
+	ok ( fdt_path ( &fdt, "/soc/ethernet@10090000", &node ) == 0 );
+	ok ( fdt_u32 ( &node, "max-speed", &u32 ) != 0 );
 
 	/* Verify cell properties */
-	ok ( fdt_path ( &fdt, "/soc/ethernet@10090000", &offset ) == 0 );
-	ok ( fdt_cells ( &fdt, offset, "reg", 4, 2, &u64 ) == 0 );
+	ok ( fdt_path ( &fdt, "/soc/ethernet@10090000", &node ) == 0 );
+	ok ( fdt_cells ( &node, "reg", 4, 2, &u64 ) == 0 );
 	ok ( u64 == 0x100a0000 );
-	ok ( fdt_cells ( &fdt, offset, "reg", 6, 2, &u64 ) == 0 );
+	ok ( fdt_cells ( &node, "reg", 6, 2, &u64 ) == 0 );
 	ok ( u64 == 0x1000 );
-	ok ( fdt_cells ( &fdt, offset, "reg", 0, 2, &u64 ) == 0 );
+	ok ( fdt_cells ( &node, "reg", 0, 2, &u64 ) == 0 );
 	ok ( u64 == 0x10090000 );
-	ok ( fdt_cells ( &fdt, offset, "reg", 6, 0, &u64 ) == 0 );
+	ok ( fdt_cells ( &node, "reg", 6, 0, &u64 ) == 0 );
 	ok ( u64 == 0x1000 );
-	ok ( fdt_cells ( &fdt, offset, "reg", 8, 0, &u64 ) == 0 );
+	ok ( fdt_cells ( &node, "reg", 8, 0, &u64 ) == 0 );
 	ok ( u64 == 0 );
-	ok ( fdt_cells ( &fdt, offset, "reg", 7, 2, &u64 ) != 0 );
-	ok ( fdt_cells ( &fdt, offset, "notareg", 0, 1, &u64 ) != 0 );
+	ok ( fdt_cells ( &node, "reg", 7, 2, &u64 ) != 0 );
+	ok ( fdt_cells ( &node, "notareg", 0, 1, &u64 ) != 0 );
 
 	/* Verify alias lookup */
-	ok ( fdt_alias ( &fdt, "serial0", &offset ) == 0 );
-	ok ( ( string = fdt_string ( &fdt, offset, "compatible" ) ) != NULL );
+	ok ( fdt_alias ( &fdt, "serial0", &node ) == 0 );
+	ok ( ( string = fdt_string ( &node, "compatible" ) ) != NULL );
 	ok ( strcmp ( string, "sifive,uart0" ) == 0 );
-	ok ( fdt_alias ( &fdt, "nonexistent0", &offset ) != 0 );
+	ok ( fdt_alias ( &fdt, "nonexistent0", &node ) != 0 );
 
 	/* Verify node description */
-	ok ( fdt_path ( &fdt, "/memory@80000000", &offset ) == 0 );
-	ok ( fdt_describe ( &fdt, offset, &desc ) == 0 );
-	ok ( desc.offset == offset );
-	ok ( strcmp ( desc.name, "memory@80000000" ) == 0 );
-	ok ( desc.data == NULL );
-	ok ( desc.len == 0 );
-	ok ( desc.depth == +1 );
-	ok ( fdt_describe ( &fdt, desc.next, &desc ) == 0 );
-	ok ( strcmp ( desc.name, "device_type" ) == 0 );
-	ok ( strcmp ( desc.data, "memory" ) == 0 );
-	ok ( desc.depth == 0 );
+	ok ( fdt_path ( &fdt, "/memory@80000000", &node ) == 0 );
+	ok ( strcmp ( node.name, "memory@80000000" ) == 0 );
+	ok ( node.data == NULL );
+	ok ( node.len == 0 );
+	ok ( node.depth == 2 );
+	ok ( fdt_next ( &node ) == 0 );
+	ok ( strcmp ( node.name, "device_type" ) == 0 );
+	ok ( strcmp ( node.data, "memory" ) == 0 );
+	ok ( node.depth == 2 );
 
 	/* Verify device tree creation */
 	image = image_memory ( "test.dtb", sifive_u, sizeof ( sifive_u ) );
@@ -269,12 +270,12 @@ static void fdt_test_exec ( void ) {
 	image_tag ( image, &fdt_image );
 	ok ( fdt_create ( &hdr, "hello world", 0xabcd0000, 0x00001234 ) == 0 );
 	ok ( fdt_parse ( &fdt, hdr, -1UL ) == 0 );
-	ok ( fdt_path ( &fdt, "/chosen", &offset ) == 0 );
-	ok ( ( string = fdt_string ( &fdt, offset, "bootargs" ) ) != NULL );
+	ok ( fdt_path ( &fdt, "/chosen", &node ) == 0 );
+	ok ( ( string = fdt_string ( &node, "bootargs" ) ) != NULL );
 	ok ( strcmp ( string, "hello world" ) == 0 );
-	ok ( fdt_u64 ( &fdt, offset, "linux,initrd-start", &u64 ) == 0 );
+	ok ( fdt_u64 ( &node, "linux,initrd-start", &u64 ) == 0 );
 	ok ( u64 == 0xabcd0000 );
-	ok ( fdt_u64 ( &fdt, offset, "linux,initrd-end", &u64 ) == 0 );
+	ok ( fdt_u64 ( &node, "linux,initrd-end", &u64 ) == 0 );
 	ok ( u64 == 0xabcd1234 );
 	fdt_remove ( hdr );
 	unregister_image ( image );

@@ -47,12 +47,12 @@ static void dt_remove_children ( struct dt_device *parent );
  * Map devicetree range
  *
  * @v dt		Devicetree device
- * @v offset		Starting node offset
+ * @v node		Devicetree node
  * @v index		Region index
  * @v len		Length to map, or 0 to map whole region
  * @ret io_addr		I/O address, or NULL on error
  */
-void * dt_ioremap ( struct dt_device *dt, unsigned int offset,
+void * dt_ioremap ( struct dt_device *dt, const struct fdt_token *node,
 		    unsigned int index, size_t len ) {
 	struct dt_device *parent =
 		container_of ( dt->dev.parent, struct dt_device, dev );
@@ -63,8 +63,7 @@ void * dt_ioremap ( struct dt_device *dt, unsigned int offset,
 	int rc;
 
 	/* Read address */
-	if ( ( rc = fdt_reg_address ( &sysfdt, offset, regs, index,
-				      &address ) ) != 0 ) {
+	if ( ( rc = fdt_reg_address ( node, regs, index, &address ) ) != 0 ) {
 		DBGC ( dt, "DT %s could not read region %d address: %s\n",
 		       dt->path, index, strerror ( rc ) );
 		return NULL;
@@ -73,8 +72,7 @@ void * dt_ioremap ( struct dt_device *dt, unsigned int offset,
 	/* Read size (or assume sufficient, if tree specifies no sizes) */
 	size = len;
 	if ( regs->size_cells &&
-	     ( ( rc = fdt_reg_size ( &sysfdt, offset, regs, index,
-				     &size ) ) != 0 ) ) {
+	     ( ( rc = fdt_reg_size ( node, regs, index, &size ) ) != 0 ) ) {
 		DBGC ( dt, "DT %s could not read region %d size: %s\n",
 		       dt->path, index, strerror ( rc ) );
 		return NULL;
@@ -109,11 +107,11 @@ void * dt_ioremap ( struct dt_device *dt, unsigned int offset,
  * Find devicetree driver
  *
  * @v dt		Devicetree device
- * @v offset		Starting node offset
+ * @v node		Devicetree node
  * @ret driver		Driver, or NULL
  */
 static struct dt_driver * dt_find_driver ( struct dt_device *dt,
-					   unsigned int offset ) {
+					   const struct fdt_token *node ) {
 	struct dt_driver *driver;
 	const char *ids;
 	const char *id;
@@ -121,7 +119,7 @@ static struct dt_driver * dt_find_driver ( struct dt_device *dt,
 	unsigned int i;
 
 	/* Read compatible programming model identifiers */
-	ids = fdt_strings ( &sysfdt, offset, "compatible", &count );
+	ids = fdt_strings ( node, "compatible", &count );
 
 	/* Look for a compatible driver */
 	for ( id = ids ; count-- ; id += ( strlen ( id ) + 1 ) ) {
@@ -145,10 +143,10 @@ static struct dt_driver * dt_find_driver ( struct dt_device *dt,
  * Probe devicetree device
  *
  * @v dt		Devicetree device
- * @v offset		Starting node offset
+ * @v node		Devicetree node
  * @ret rc		Return status code
  */
-static int dt_probe ( struct dt_device *dt, unsigned int offset ) {
+static int dt_probe ( struct dt_device *dt, const struct fdt_token *node ) {
 	struct dt_driver *driver = NULL;
 	int rc;
 
@@ -156,8 +154,8 @@ static int dt_probe ( struct dt_device *dt, unsigned int offset ) {
 	 * driver matches, or if this is the root device (which has no
 	 * valid devicetree parent).
 	 */
-	if ( offset > 0 )
-		driver = dt_find_driver ( dt, offset );
+	if ( node->offset != node->fdt->root.offset )
+		driver = dt_find_driver ( dt, node );
 	if ( ! driver )
 		driver = &dt_node_driver;
 
@@ -166,7 +164,7 @@ static int dt_probe ( struct dt_device *dt, unsigned int offset ) {
 	dt->dev.driver_name = driver->name;
 
 	/* Probe device */
-	if ( ( rc = driver->probe ( dt, offset ) ) != 0 ) {
+	if ( ( rc = driver->probe ( dt, node ) ) != 0 ) {
 		if ( driver != &dt_node_driver ) {
 			DBGC ( dt, "DT %s could not probe: %s\n",
 			       dt->path, strerror ( rc ) );
@@ -192,12 +190,11 @@ static void dt_remove ( struct dt_device *dt ) {
  * Probe devicetree node
  *
  * @v parent		Parent device, or NULL for root of tree
- * @v offset		Starting node offset
- * @v name		Node name
+ * @v node		Devicetree node
  * @ret rc		Return status code
  */
-static int dt_probe_node ( struct dt_device *parent, unsigned int offset,
-			   const char *name ) {
+static int dt_probe_node ( struct dt_device *parent,
+			   const struct fdt_token *node ) {
 	struct dt_device *dt;
 	const char *ppath;
 	size_t path_len;
@@ -207,26 +204,26 @@ static int dt_probe_node ( struct dt_device *parent, unsigned int offset,
 	/* Allocate and initialise device */
 	ppath = ( ( parent && parent->path[1] ) ? parent->path : "" );
 	path_len = ( strlen ( ppath ) + 1 /* "/" */ +
-		     strlen ( name ) + 1 /* NUL */ );
+		     strlen ( node->name ) + 1 /* NUL */ );
 	dt = zalloc ( sizeof ( *dt ) + path_len );
 	if ( ! dt ) {
 		rc = -ENOMEM;
 		goto err_alloc;
 	}
 	path = ( ( ( void * ) dt ) + sizeof ( *dt ) );
-	sprintf ( path, "%s/%s", ppath, name );
+	sprintf ( path, "%s/%s", ppath, node->name );
 	dt->path = path;
-	snprintf ( dt->dev.name, sizeof ( dt->dev.name ), "%s", name );
+	snprintf ( dt->dev.name, sizeof ( dt->dev.name ), "%s", node->name );
 	dt->dev.desc.bus_type = BUS_TYPE_DT;
 	dt->dev.parent = ( parent ? &parent->dev : &dt_root_device.dev );
 	INIT_LIST_HEAD ( &dt->dev.children );
 	list_add_tail ( &dt->dev.siblings, &dt->dev.parent->children );
 
 	/* Read #address-cells and #size-cells, if present */
-	fdt_reg_cells ( &sysfdt, offset, &dt->regs );
+	fdt_reg_cells ( node, &dt->regs );
 
 	/* Probe device */
-	if ( ( rc = dt_probe ( dt, offset ) ) != 0 )
+	if ( ( rc = dt_probe ( dt, node ) ) != 0 )
 		goto err_probe;
 
 	return 0;
@@ -258,32 +255,27 @@ static void dt_remove_node ( struct dt_device *dt ) {
  * Probe devicetree children
  *
  * @v parent		Parent device
- * @v offset		Starting node offset
+ * @v node		Devicetree node
  * @ret rc		Return status code
  */
 static int dt_probe_children ( struct dt_device *parent,
-			       unsigned int offset ) {
-	struct fdt_descriptor desc;
-	int depth;
+			       const struct fdt_token *node ) {
+	struct fdt_token desc;
 	int rc;
 
 	/* Probe any immediate child nodes */
-	for ( depth = -1 ; ; depth += desc.depth, offset = desc.next ) {
+	for ( fdt_fork ( node, &desc ) ; desc.depth >= node->depth ; ) {
 
 		/* Describe token */
-		if ( ( rc = fdt_describe ( &sysfdt, offset, &desc ) ) != 0 ) {
+		if ( ( rc = fdt_next ( &desc ) ) != 0 ) {
 			DBGC ( &sysfdt, "DT %s has malformed node: %s\n",
 			       parent->path, strerror ( rc ) );
 			goto err_describe;
 		}
 
-		/* Terminate when we exit this node */
-		if ( ( depth == 0 ) && ( desc.depth < 0 ) )
-			break;
-
 		/* Probe child node, if applicable */
-		if ( ( depth == 0 ) && desc.name && ( ! desc.data ) )
-			dt_probe_node ( parent, desc.offset, desc.name );
+		if ( fdt_is_child ( &desc, node->depth ) )
+			dt_probe_node ( parent, &desc );
 	}
 
 	/* Fail if we have no children (so that this device will be freed) */
@@ -333,7 +325,7 @@ static struct dt_driver dt_node_driver __dt_driver = {
 static int dt_probe_all ( struct root_device *rootdev __unused ) {
 
 	/* Probe root node */
-	return dt_probe_node ( NULL, 0, "" );
+	return dt_probe_node ( NULL, &sysfdt.root );
 }
 
 /**

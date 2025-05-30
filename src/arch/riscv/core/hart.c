@@ -44,10 +44,10 @@ unsigned long boot_hart;
 /**
  * Find boot hart node
  *
- * @v offset		Boot hart node offset
+ * @v node		Boot hart node to fill in
  * @ret rc		Return status code
  */
-static int hart_node ( unsigned int *offset ) {
+static int hart_node ( struct fdt_token *node ) {
 	char path[27 /* "/cpus/cpu@XXXXXXXXXXXXXXXX" + NUL */ ];
 	int rc;
 
@@ -55,7 +55,7 @@ static int hart_node ( unsigned int *offset ) {
 	snprintf ( path, sizeof ( path ), "/cpus/cpu@%lx", boot_hart );
 
 	/* Find node */
-	if ( ( rc = fdt_path ( &sysfdt, path, offset ) ) != 0 ) {
+	if ( ( rc = fdt_path ( &sysfdt, path, node ) ) != 0 ) {
 		DBGC ( colour, "HART could not find %s: %s\n",
 		       path, strerror ( rc ) );
 		return rc;
@@ -71,17 +71,17 @@ static int hart_node ( unsigned int *offset ) {
  * @ret rc		Return status code
  */
 int hart_supported ( const char *ext ) {
-	unsigned int offset;
+	struct fdt_token node;
 	const char *isa;
 	const char *tmp;
 	int rc;
 
 	/* Find boot hart node */
-	if ( ( rc = hart_node ( &offset ) ) != 0 )
+	if ( ( rc = hart_node ( &node ) ) != 0 )
 		return rc;
 
 	/* Get ISA description */
-	isa = fdt_string ( &sysfdt, offset, "riscv,isa" );
+	isa = fdt_string ( &node, "riscv,isa" );
 	if ( ! isa ) {
 		DBGC ( colour, "HART could not identify ISA\n" );
 		return -ENOENT;

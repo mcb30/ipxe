@@ -138,7 +138,7 @@ static void zicntr_udelay ( unsigned long usecs ) {
  * @ret rc		Return status code
  */
 static int zicntr_probe ( void ) {
-	unsigned int offset;
+	struct fdt_token node;
 	union {
 		uint64_t freq;
 		int64_t sfreq;
@@ -152,8 +152,8 @@ static int zicntr_probe ( void ) {
 	}
 
 	/* Get timer frequency */
-	if ( ( ( rc = fdt_path ( &sysfdt, "/cpus", &offset ) ) != 0 ) ||
-	     ( ( rc = fdt_u64 ( &sysfdt, offset, "timebase-frequency",
+	if ( ( ( rc = fdt_path ( &sysfdt, "/cpus", &node ) ) != 0 ) ||
+	     ( ( rc = fdt_u64 ( &node, "timebase-frequency",
 				&u.freq ) ) != 0 ) ) {
 		DBGC ( colour, "ZICNTR could not determine frequency: %s\n",
 		       strerror ( rc ) );

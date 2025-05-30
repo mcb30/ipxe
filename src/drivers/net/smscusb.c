@@ -455,17 +455,17 @@ int smscusb_otp_fetch_mac ( struct smscusb_device *smscusb,
  */
 int smscusb_fdt_fetch_mac ( struct smscusb_device *smscusb ) {
 	struct net_device *netdev = smscusb->netdev;
-	unsigned int offset;
+	struct fdt_token node;
 	int rc;
 
 	/* Look for "ethernet[0]" alias */
-	if ( ( rc = fdt_alias ( &sysfdt, "ethernet", &offset ) != 0 ) &&
-	     ( rc = fdt_alias ( &sysfdt, "ethernet0", &offset ) != 0 ) ) {
+	if ( ( rc = fdt_alias ( &sysfdt, "ethernet", &node ) != 0 ) &&
+	     ( rc = fdt_alias ( &sysfdt, "ethernet0", &node ) != 0 ) ) {
 		return rc;
 	}
 
 	/* Fetch MAC address */
-	if ( ( rc = fdt_mac ( &sysfdt, offset, netdev ) ) != 0 )
+	if ( ( rc = fdt_mac ( &node, netdev ) ) != 0 )
 		return rc;
 
 	DBGC ( smscusb, "SMSCUSB %p using FDT MAC %s\n",

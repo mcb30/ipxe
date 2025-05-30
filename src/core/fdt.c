@@ -51,15 +51,14 @@ struct image_tag fdt_image __image_tag = {
 #define FDT_INSERT_PAD 1024
 
 /**
- * Describe device tree token
+ * Describe next device tree token
  *
- * @v fdt		Device tree
- * @v offset		Offset within structure block
- * @v desc		Token descriptor to fill in
+ * @v desc		Device tree token descriptor
  * @ret rc		Return status code
  */
-int fdt_describe ( struct fdt *fdt, unsigned int offset,
-		   struct fdt_descriptor *desc ) {
+int fdt_next ( struct fdt_token *desc ) {
+	struct fdt *fdt = desc->fdt;
+	unsigned int offset = desc->next;
 	const fdt_token_t *token;
 	const void *data;
 	const struct fdt_prop *prop;
@@ -68,12 +67,15 @@ int fdt_describe ( struct fdt *fdt, unsigned int offset,
 	size_t len;
 
 	/* Sanity checks */
+	assert ( fdt != NULL );
 	assert ( offset <= fdt->len );
 	assert ( ( offset & ( FDT_STRUCTURE_ALIGN - 1 ) ) == 0 );
 
 	/* Initialise descriptor */
-	memset ( desc, 0, sizeof ( *desc ) );
 	desc->offset = offset;
+	desc->name = NULL;
+	desc->data = NULL;
+	desc->len = 0;
 
 	/* Locate token and calculate remaining space */
 	token = ( fdt->raw + fdt->structure + offset );
@@ -99,13 +101,13 @@ int fdt_describe ( struct fdt *fdt, unsigned int offset,
 			       offset );
 			return -EINVAL;
 		}
-		desc->depth = +1;
+		desc->depth++;
 		break;
 
 	case cpu_to_be32 ( FDT_END_NODE ):
 
 		/* End of node */
-		desc->depth = -1;
+		desc->depth--;
 		break;
 
 	case cpu_to_be32 ( FDT_PROP ):
@@ -160,103 +162,84 @@ int fdt_describe ( struct fdt *fdt, unsigned int offset,
 }
 
 /**
- * Describe next device tree token
+ * Find root node
  *
  * @v fdt		Device tree
- * @v desc		Token descriptor to update
  * @ret rc		Return status code
  */
-static int fdt_next ( struct fdt *fdt, struct fdt_descriptor *desc ) {
-
-	/* Describe next token */
-	return fdt_describe ( fdt, desc->next, desc );
-}
-
-/**
- * Enter node
- *
- * @v fdt		Device tree
- * @v offset		Starting node offset
- * @v desc		Begin node descriptor to fill in
- * @ret rc		Return status code
- */
-static int fdt_enter ( struct fdt *fdt, unsigned int offset,
-		struct fdt_descriptor *desc ) {
+static int fdt_root ( struct fdt *fdt ) {
+	struct fdt_token *root = ( ( struct fdt_token * ) &fdt->root );
 	int rc;
 
-	/* Find begin node token */
-	for ( ; ; offset = desc->next ) {
+	/* Initialise root node */
+	root->fdt = fdt;
+	root->next = 0;
+	root->depth = 0;
+
+	/* Locate initial node */
+	while ( root->depth == 0 ) {
 
 		/* Describe token */
-		if ( ( rc = fdt_describe ( fdt, offset, desc ) ) != 0 ) {
-			DBGC ( fdt, "FDT +%#04x has malformed node: %s\n",
-			       offset, strerror ( rc ) );
+		if ( ( rc = fdt_next ( root ) ) != 0 ) {
+			DBGC ( fdt, "FDT has malformed root node: %s\n",
+			       strerror ( rc ) );
 			return rc;
 		}
 
-		/* Check for begin node token */
-		if ( desc->depth > 0 )
+		/* Check for root node */
+		if ( fdt_is_node ( root ) ) {
+			assert ( root->name != NULL );
+			assert ( root->name[0] == '\0' );
+			root->name = "";
+			assert ( root->data == NULL );
 			return 0;
-
-		/* Check for non-NOPs */
-		if ( desc->depth ) {
-			DBGC ( fdt, "FDT +%#04x has spurious node end at "
-			       "+%#04x\n", offset, desc->offset );
-			return -EINVAL;
-		}
-		if ( desc->name ) {
-			DBGC ( fdt, "FDT +%#04x has spurious property at "
-			       "+%#04x\n", offset, desc->offset );
-			return -EINVAL;
 		}
 	}
+
+	DBGC ( fdt, "FDT could not locate root node\n" );
+	return -ENOENT;
 }
 
 /**
  * Find child node
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v name		Node name
- * @v child		Child node offset to fill in
+ * @v child		Child node descriptor to fill in
  * @ret rc		Return status code
  */
-static int fdt_child ( struct fdt *fdt, unsigned int offset, const char *name,
-		       unsigned int *child ) {
-	struct fdt_descriptor desc;
+static int fdt_child ( const struct fdt_token *node, const char *name,
+		       struct fdt_token *child ) {
+	struct fdt *fdt = node->fdt;
+	unsigned int offset = node->offset;
+	int depth = node->depth;
 	const char *sep;
 	size_t name_len;
-	int depth;
 	int rc;
 
 	/* Determine length of name (may be terminated with NUL or '/') */
 	sep = strchr ( name, '/' );
 	name_len = ( sep ? ( ( size_t ) ( sep - name ) ) : strlen ( name ) );
 
-	/* Enter node */
-	if ( ( rc = fdt_enter ( fdt, offset, &desc ) ) != 0 )
-		return rc;
-
 	/* Find child node */
-	for ( depth = 0 ; depth >= 0 ; depth += desc.depth ) {
+	for ( fdt_fork ( node, child ) ; child->depth >= depth ; ) {
 
 		/* Describe token */
-		if ( ( rc = fdt_next ( fdt, &desc ) ) != 0 ) {
+		if ( ( rc = fdt_next ( child ) ) != 0 ) {
 			DBGC ( fdt, "FDT +%#04x has malformed node: %s\n",
 			       offset, strerror ( rc ) );
 			return rc;
 		}
 
 		/* Check for matching immediate child node */
-		if ( ( depth == 0 ) && desc.name && ( ! desc.data ) ) {
+		if ( fdt_is_child ( child, depth ) ) {
 			DBGC2 ( fdt, "FDT +%#04x has child node \"%s\" at "
-				"+%#04x\n", offset, desc.name, desc.offset );
-			assert ( desc.depth > 0 );
-			if ( ( strlen ( desc.name ) == name_len ) &&
-			     ( memcmp ( name, desc.name, name_len ) == 0 ) ) {
-				*child = desc.offset;
+				"+%#04x\n", offset, child->name,
+				child->offset );
+			assert ( child->depth > depth );
+			if ( ( strlen ( child->name ) == name_len ) &&
+			     ( memcmp ( name, child->name, name_len ) == 0 ) )
 				return 0;
-			}
 		}
 	}
 
@@ -267,35 +250,28 @@ static int fdt_child ( struct fdt *fdt, unsigned int offset, const char *name,
 /**
  * Find end of node
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
- * @v end		End of node offset to fill in
+ * @v node		Node descriptor
+ * @v end		End node descriptor to fill in
  * @ret rc		Return status code
  */
-static int fdt_end ( struct fdt *fdt, unsigned int offset,
-		     unsigned int *end ) {
-	struct fdt_descriptor desc;
-	int depth;
+static int fdt_end ( const struct fdt_token *node, struct fdt_token *end ) {
+	struct fdt *fdt = node->fdt;
+	unsigned int offset = node->offset;
+	int depth = node->depth;
 	int rc;
 
-	/* Enter node */
-	if ( ( rc = fdt_enter ( fdt, offset, &desc ) ) != 0 )
-		return rc;
-
 	/* Find end of this node */
-	for ( depth = 0 ; depth >= 0 ; depth += desc.depth ) {
+	for ( fdt_fork ( node, end ) ; end->depth >= depth ; ) {
 
 		/* Describe token */
-		if ( ( rc = fdt_next ( fdt, &desc ) ) != 0 ) {
+		if ( ( rc = fdt_next ( end ) ) != 0 ) {
 			DBGC ( fdt, "FDT +%#04x has malformed node: %s\n",
 			       offset, strerror ( rc ) );
 			return rc;
 		}
 	}
 
-	/* Record end offset */
-	*end = desc.offset;
-	DBGC2 ( fdt, "FDT +%#04x has end at +%#04x\n", offset, *end );
+	DBGC2 ( fdt, "FDT +%#04x has end at +%#04x\n", offset, end->offset );
 	return 0;
 }
 
@@ -304,15 +280,15 @@ static int fdt_end ( struct fdt *fdt, unsigned int offset,
  *
  * @v fdt		Device tree
  * @v path		Node path
- * @v offset		Offset to fill in
+ * @v node		Node descriptor to fill in
  * @ret rc		Return status code
  */
-int fdt_path ( struct fdt *fdt, const char *path, unsigned int *offset ) {
+int fdt_path ( struct fdt *fdt, const char *path, struct fdt_token *node ) {
 	const char *tmp = path;
 	int rc;
 
 	/* Initialise offset */
-	*offset = 0;
+	memcpy ( node, &fdt->root, sizeof ( *node ) );
 
 	/* Traverse tree one path segment at a time */
 	while ( 1 ) {
@@ -326,7 +302,7 @@ int fdt_path ( struct fdt *fdt, const char *path, unsigned int *offset ) {
 			break;
 
 		/* Find child */
-		if ( ( rc = fdt_child ( fdt, *offset, tmp, offset ) ) != 0 )
+		if ( ( rc = fdt_child ( node, tmp, node ) ) != 0 )
 			return rc;
 
 		/* Move to next path component, if any */
@@ -335,7 +311,7 @@ int fdt_path ( struct fdt *fdt, const char *path, unsigned int *offset ) {
 			break;
 	}
 
-	DBGC2 ( fdt, "FDT found path \"%s\" at +%#04x\n", path, *offset );
+	DBGC2 ( fdt, "FDT found path \"%s\" at +%#04x\n", path, node->offset );
 	return 0;
 }
 
@@ -344,24 +320,24 @@ int fdt_path ( struct fdt *fdt, const char *path, unsigned int *offset ) {
  *
  * @v fdt		Device tree
  * @v name		Alias name
- * @v offset		Offset to fill in
+ * @v node		Node descriptor to fill in
  * @ret rc		Return status code
  */
-int fdt_alias ( struct fdt *fdt, const char *name, unsigned int *offset ) {
+int fdt_alias ( struct fdt *fdt, const char *name, struct fdt_token *node ) {
 	const char *alias;
 	int rc;
 
 	/* Locate "/aliases" node */
-	if ( ( rc = fdt_child ( fdt, 0, "aliases", offset ) ) != 0 )
+	if ( ( rc = fdt_child ( &fdt->root, "aliases", node ) ) != 0 )
 		return rc;
 
 	/* Locate alias property */
-	if ( ( alias = fdt_string ( fdt, *offset, name ) ) == NULL )
+	if ( ( alias = fdt_string ( node, name ) ) == NULL )
 		return -ENOENT;
 	DBGC ( fdt, "FDT alias \"%s\" is \"%s\"\n", name, alias );
 
 	/* Locate aliased node */
-	if ( ( rc = fdt_path ( fdt, alias, offset ) ) != 0 )
+	if ( ( rc = fdt_path ( fdt, alias, node ) ) != 0 )
 		return rc;
 
 	return 0;
@@ -370,26 +346,23 @@ int fdt_alias ( struct fdt *fdt, const char *name, unsigned int *offset ) {
 /**
  * Find property
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v name		Property name
  * @v desc		Token descriptor to fill in
  * @ret rc		Return status code
  */
-static int fdt_property ( struct fdt *fdt, unsigned int offset,
-			  const char *name, struct fdt_descriptor *desc ) {
-	int depth;
+static int fdt_property ( const struct fdt_token *node, const char *name,
+			  struct fdt_token *desc ) {
+	struct fdt *fdt = node->fdt;
+	unsigned int offset = node->offset;
+	int depth = node->depth;
 	int rc;
 
-	/* Enter node */
-	if ( ( rc = fdt_enter ( fdt, offset, desc ) ) != 0 )
-		return rc;
-
 	/* Find property */
-	for ( depth = 0 ; depth == 0 ; depth += desc->depth ) {
+	for ( fdt_fork ( node, desc ) ; desc->depth == depth ; ) {
 
 		/* Describe token */
-		if ( ( rc = fdt_next ( fdt, desc ) ) != 0 ) {
+		if ( ( rc = fdt_next ( desc ) ) != 0 ) {
 			DBGC ( fdt, "FDT +%#04x has malformed node: %s\n",
 			       offset, strerror ( rc ) );
 			return rc;
@@ -400,7 +373,7 @@ static int fdt_property ( struct fdt *fdt, unsigned int offset,
 			DBGC2 ( fdt, "FDT +%#04x has property \"%s\" at "
 				"+%#04x len %#zx\n", offset, desc->name,
 				desc->offset, desc->len );
-			assert ( desc->depth == 0 );
+			assert ( desc->depth == depth );
 			if ( strcmp ( name, desc->name ) == 0 ) {
 				DBGC2_HDA ( fdt, 0, desc->data, desc->len );
 				return 0;
@@ -415,15 +388,15 @@ static int fdt_property ( struct fdt *fdt, unsigned int offset,
 /**
  * Find strings property
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v name		Property name
  * @v count		String count to fill in
  * @ret string		String property, or NULL on error
  */
-const char * fdt_strings ( struct fdt *fdt, unsigned int offset,
-			   const char *name, unsigned int *count ) {
-	struct fdt_descriptor desc;
+const char * fdt_strings ( const struct fdt_token *node, const char *name,
+			   unsigned int *count ) {
+	struct fdt *fdt = node->fdt;
+	struct fdt_token desc;
 	const char *data;
 	size_t len;
 	int rc;
@@ -432,7 +405,7 @@ const char * fdt_strings ( struct fdt *fdt, unsigned int offset,
 	*count = 0;
 
 	/* Find property */
-	if ( ( rc = fdt_property ( fdt, offset, name, &desc ) ) != 0 )
+	if ( ( rc = fdt_property ( node, name, &desc ) ) != 0 )
 		return NULL;
 
 	/* Check NUL termination */
@@ -455,33 +428,31 @@ const char * fdt_strings ( struct fdt *fdt, unsigned int offset,
 /**
  * Find string property
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v name		Property name
  * @ret string		String property, or NULL on error
  */
-const char * fdt_string ( struct fdt *fdt, unsigned int offset,
-			  const char *name ) {
+const char * fdt_string ( const struct fdt_token *node, const char *name ) {
 	unsigned int count;
 
 	/* Find strings property */
-	return fdt_strings ( fdt, offset, name, &count );
+	return fdt_strings ( node, name, &count );
 }
 
 /**
  * Get integer property
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v name		Property name
  * @v index		Starting cell index
  * @v count		Number of cells (or 0 to read all remaining cells)
  * @v value		Integer value to fill in
  * @ret rc		Return status code
  */
-int fdt_cells ( struct fdt *fdt, unsigned int offset, const char *name,
+int fdt_cells ( const struct fdt_token *node, const char *name,
 		unsigned int index, unsigned int count, uint64_t *value ) {
-	struct fdt_descriptor desc;
+	struct fdt *fdt = node->fdt;
+	struct fdt_token desc;
 	const uint32_t *cell;
 	unsigned int total;
 	int rc;
@@ -490,7 +461,7 @@ int fdt_cells ( struct fdt *fdt, unsigned int offset, const char *name,
 	*value = 0;
 
 	/* Find property */
-	if ( ( rc = fdt_property ( fdt, offset, name, &desc ) ) != 0 )
+	if ( ( rc = fdt_property ( node, name, &desc ) ) != 0 )
 		return rc;
 	cell = desc.data;
 
@@ -519,18 +490,17 @@ int fdt_cells ( struct fdt *fdt, unsigned int offset, const char *name,
 /**
  * Get 64-bit integer property
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v name		Property name
  * @v value		Integer value to fill in
  * @ret rc		Return status code
  */
-int fdt_u64 ( struct fdt *fdt, unsigned int offset, const char *name,
+int fdt_u64 ( const struct fdt_token *node, const char *name,
 	      uint64_t *value ) {
 	int rc;
 
 	/* Read value */
-	if ( ( rc = fdt_cells ( fdt, offset, name, 0, 0, value ) ) != 0 )
+	if ( ( rc = fdt_cells ( node, name, 0, 0, value ) ) != 0 )
 		return rc;
 
 	return 0;
@@ -539,19 +509,19 @@ int fdt_u64 ( struct fdt *fdt, unsigned int offset, const char *name,
 /**
  * Get 32-bit integer property
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v name		Property name
  * @v value		Integer value to fill in
  * @ret rc		Return status code
  */
-int fdt_u32 ( struct fdt *fdt, unsigned int offset, const char *name,
+int fdt_u32 ( const struct fdt_token *node, const char *name,
 	      uint32_t *value ) {
+	struct fdt *fdt = node->fdt;
 	uint64_t value64;
 	int rc;
 
 	/* Read value */
-	if ( ( rc = fdt_u64 ( fdt, offset, name, &value64 ) ) != 0 )
+	if ( ( rc = fdt_u64 ( node, name, &value64 ) ) != 0 )
 		return rc;
 
 	/* Check range */
@@ -567,26 +537,25 @@ int fdt_u32 ( struct fdt *fdt, unsigned int offset, const char *name,
 /**
  * Get region cell size specification
  *
- * @v fdt		Device tree
- * @v offset		Starting (parent) node offset
+ * @v node		Parent node descriptor
  * @v regs		Region cell size specification to fill in
  *
  * Note that #address-cells and #size-cells are defined on the
  * immediate parent node, rather than on the node with the "reg"
  * property itself.
  */
-void fdt_reg_cells ( struct fdt *fdt, unsigned int offset,
+void fdt_reg_cells ( const struct fdt_token *node,
 		     struct fdt_reg_cells *regs ) {
 	int rc;
 
 	/* Read #address-cells, if present */
-	if ( ( rc = fdt_u32 ( fdt, offset, "#address-cells",
+	if ( ( rc = fdt_u32 ( node, "#address-cells",
 			      &regs->address_cells ) ) != 0 ) {
 		regs->address_cells = FDT_DEFAULT_ADDRESS_CELLS;
 	}
 
 	/* Read #size-cells, if present */
-	if ( ( rc = fdt_u32 ( fdt, offset, "#size-cells",
+	if ( ( rc = fdt_u32 ( node, "#size-cells",
 			      &regs->size_cells ) ) != 0 ) {
 		regs->size_cells = FDT_DEFAULT_SIZE_CELLS;
 	}
@@ -598,20 +567,19 @@ void fdt_reg_cells ( struct fdt *fdt, unsigned int offset,
 /**
  * Get number of regions
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v regs		Region cell size specification
  * @ret count		Number of regions, or negative error
  */
-int fdt_reg_count ( struct fdt *fdt, unsigned int offset,
+int fdt_reg_count ( const struct fdt_token *node,
 		    struct fdt_reg_cells *regs ) {
-	struct fdt_descriptor desc;
+	struct fdt_token desc;
 	const uint32_t *cell;
 	unsigned int count;
 	int rc;
 
 	/* Find property */
-	if ( ( rc = fdt_property ( fdt, offset, "reg", &desc ) ) != 0 )
+	if ( ( rc = fdt_property ( node, "reg", &desc ) ) != 0 )
 		return rc;
 
 	/* Determine number of regions */
@@ -622,21 +590,20 @@ int fdt_reg_count ( struct fdt *fdt, unsigned int offset,
 /**
  * Get region address
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v regs		Region cell size specification
  * @v index		Region index
  * @v address		Region starting address to fill in
  * @ret rc		Return status code
  */
-int fdt_reg_address ( struct fdt *fdt, unsigned int offset,
+int fdt_reg_address ( const struct fdt_token *node,
 		      struct fdt_reg_cells *regs, unsigned int index,
 		      uint64_t *address ) {
 	unsigned int cell = ( index * regs->stride );
 	int rc;
 
 	/* Read relevant portion of region array */
-	if ( ( rc = fdt_cells ( fdt, offset, "reg", cell, regs->address_cells,
+	if ( ( rc = fdt_cells ( node, "reg", cell, regs->address_cells,
 				address ) ) != 0 ) {
 		return rc;
 	}
@@ -647,21 +614,19 @@ int fdt_reg_address ( struct fdt *fdt, unsigned int offset,
 /**
  * Get region size
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v regs		Region cell size specification
  * @v index		Region index
  * @v size		Region size to fill in
  * @ret rc		Return status code
  */
-int fdt_reg_size ( struct fdt *fdt, unsigned int offset,
-		   struct fdt_reg_cells *regs, unsigned int index,
-		   uint64_t *size ) {
+int fdt_reg_size ( const struct fdt_token *node, struct fdt_reg_cells *regs,
+		   unsigned int index, uint64_t *size ) {
 	unsigned int cell = ( ( index * regs->stride ) + regs->address_cells );
 	int rc;
 
 	/* Read relevant portion of region array */
-	if ( ( rc = fdt_cells ( fdt, offset, "reg", cell, regs->size_cells,
+	if ( ( rc = fdt_cells ( node, "reg", cell, regs->size_cells,
 				size ) ) != 0 ) {
 		return rc;
 	}
@@ -672,21 +637,19 @@ int fdt_reg_size ( struct fdt *fdt, unsigned int offset,
 /**
  * Get MAC address from property
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v netdev		Network device
  * @ret rc		Return status code
  */
-int fdt_mac ( struct fdt *fdt, unsigned int offset,
-	      struct net_device *netdev ) {
-	struct fdt_descriptor desc;
+int fdt_mac ( const struct fdt_token *node, struct net_device *netdev ) {
+	struct fdt *fdt = node->fdt;
+	struct fdt_token desc;
 	size_t len;
 	int rc;
 
 	/* Find applicable MAC address property */
-	if ( ( ( rc = fdt_property ( fdt, offset, "mac-address",
-				     &desc ) ) != 0 ) &&
-	     ( ( rc = fdt_property ( fdt, offset, "local-mac-address",
+	if ( ( ( rc = fdt_property ( node, "mac-address", &desc ) ) != 0 ) &&
+	     ( ( rc = fdt_property ( node, "local-mac-address",
 				     &desc ) ) != 0 ) ) {
 		return rc;
 	}
@@ -715,9 +678,10 @@ int fdt_mac ( struct fdt *fdt, unsigned int offset,
  * @ret rc		Return status code
  */
 int fdt_parse ( struct fdt *fdt, struct fdt_header *hdr, size_t max_len ) {
+	struct fdt_token node;
 	const uint8_t *nul;
-	unsigned int chosen;
 	size_t end;
+	int rc;
 
 	/* Sanity check */
 	if ( sizeof ( *hdr ) > max_len ) {
@@ -812,13 +776,17 @@ int fdt_parse ( struct fdt *fdt, struct fdt_header *hdr, size_t max_len ) {
 		       fdt->used, fdt->len );
 	}
 
+	/* Find root node */
+	if ( ( rc = fdt_root ( fdt ) ) != 0 )
+		goto err;
+
 	/* Print model name and boot arguments (for debugging) */
 	if ( DBG_LOG ) {
 		DBGC ( fdt, "FDT model is \"%s\"\n",
-		       fdt_string ( fdt, 0, "model" ) );
-		if ( fdt_child ( fdt, 0, "chosen", &chosen ) == 0 ) {
+		       fdt_string ( &fdt->root, "model" ) );
+		if ( fdt_child ( &fdt->root, "chosen", &node ) == 0 ) {
 			DBGC ( fdt, "FDT boot arguments \"%s\"\n",
-			       fdt_string ( fdt, chosen, "bootargs" ) );
+			       fdt_string ( &node, "bootargs" ) );
 		}
 	}
 
@@ -1013,43 +981,46 @@ static int fdt_insert_string ( struct fdt *fdt, const char *string,
 /**
  * Ensure child node exists
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Node descriptor
  * @v name		New node name
- * @v child		Child node offset to fill in
+ * @v child		Child node descriptor to fill in
  * @ret rc		Return status code
  */
-static int fdt_ensure_child ( struct fdt *fdt, unsigned int offset,
-			      const char *name, unsigned int *child ) {
+static int fdt_ensure_child ( const struct fdt_token *node, const char *name,
+			      struct fdt_token *child ) {
+	struct fdt *fdt = node->fdt;
 	size_t name_len = ( strlen ( name ) + 1 /* NUL */ );
 	fdt_token_t *token;
 	size_t len;
 	int rc;
 
 	/* Find existing child node, if any */
-	if ( ( rc = fdt_child ( fdt, offset, name, child ) ) == 0 )
+	if ( ( rc = fdt_child ( node, name, child ) ) == 0 )
 		return 0;
 
 	/* Find end of parent node */
-	if ( ( rc = fdt_end ( fdt, offset, child ) ) != 0 )
+	if ( ( rc = fdt_end ( node, child ) ) != 0 )
 		return rc;
 
 	/* Insert space for child node (with maximal alignment) */
 	len = ( sizeof ( fdt_token_t ) /* BEGIN_NODE */ + name_len +
 		sizeof ( fdt_token_t ) /* END_NODE */ );
-	if ( ( rc = fdt_insert_nop ( fdt, *child, len ) ) != 0 )
+	if ( ( rc = fdt_insert_nop ( fdt, child->offset, len ) ) != 0 )
 		return rc;
 
 	/* Construct node */
-	token = ( fdt->raw + fdt->structure + *child );
+	token = ( fdt->raw + fdt->structure + child->offset );
 	*(token++) = cpu_to_be32 ( FDT_BEGIN_NODE );
+	child->name = ( ( const void * ) token );
 	memcpy ( token, name, name_len );
 	name_len = ( ( name_len + FDT_STRUCTURE_ALIGN - 1 ) &
 		     ~( FDT_STRUCTURE_ALIGN - 1 ) );
 	token = ( ( ( void * ) token ) + name_len );
 	*(token++) = cpu_to_be32 ( FDT_END_NODE );
+	child->next = ( child->offset + sizeof ( fdt_token_t ) + name_len );
+	child->depth = ( node->depth + 1 );
 	DBGC2 ( fdt, "FDT +%#04x created child \"%s\" at +%#04x\n",
-		offset, name, *child );
+		node->offset, name, child->offset );
 
 	return 0;
 }
@@ -1057,16 +1028,17 @@ static int fdt_ensure_child ( struct fdt *fdt, unsigned int offset,
 /**
  * Set property value
  *
- * @v fdt		Device tree
- * @v offset		Starting node offset
+ * @v node		Device tree node
  * @v name		Property name
  * @v data		Property data, or NULL to delete property
  * @v len		Length of property data
  * @ret rc		Return status code
  */
-static int fdt_set ( struct fdt *fdt, unsigned int offset, const char *name,
+static int fdt_set ( const struct fdt_token *node, const char *name,
 		     const void *data, size_t len ) {
-	struct fdt_descriptor desc;
+	struct fdt *fdt = node->fdt;
+	unsigned int offset = node->offset;
+	struct fdt_token desc;
 	struct {
 		fdt_token_t token;
 		struct fdt_prop prop;
@@ -1078,10 +1050,11 @@ static int fdt_set ( struct fdt *fdt, unsigned int offset, const char *name,
 	int rc;
 
 	/* Find and reuse existing property, if any */
-	if ( ( rc = fdt_property ( fdt, offset, name, &desc ) ) == 0 ) {
+	if ( ( rc = fdt_property ( node, name, &desc ) ) == 0 ) {
 
 		/* Reuse existing name */
 		hdr = ( fdt->raw + fdt->structure + desc.offset );
+		assert ( hdr->token == be32_to_cpu ( FDT_PROP ) );
 		string = be32_to_cpu ( hdr->prop.name_off );
 
 		/* Erase existing property */
@@ -1101,13 +1074,8 @@ static int fdt_set ( struct fdt *fdt, unsigned int offset, const char *name,
 		if ( ( rc = fdt_insert_string ( fdt, name, &string ) ) != 0 )
 			return rc;
 
-		/* Enter node */
-		if ( ( rc = fdt_enter ( fdt, offset, &desc ) ) != 0 )
-			return rc;
-		assert ( desc.depth > 0 );
-		desc.offset = desc.next;
-
-		/* Calculate insertion length */
+		/* Calculate insertion position and length */
+		desc.offset = node->next;
 		insert = ( sizeof ( *hdr ) + len );
 	}
 
@@ -1175,19 +1143,19 @@ static int fdt_urealloc ( struct fdt *fdt, size_t len ) {
  */
 static int fdt_bootargs ( struct fdt *fdt, const char *cmdline,
 			  physaddr_t initrd, size_t initrd_len ) {
-	unsigned int chosen;
+	struct fdt_token node;
 	physaddr_t addr;
 	const void *data;
 	size_t len;
 	int rc;
 
 	/* Ensure "chosen" node exists */
-	if ( ( rc = fdt_ensure_child ( fdt, 0, "chosen", &chosen ) ) != 0 )
+	if ( ( rc = fdt_ensure_child ( &fdt->root, "chosen", &node ) ) != 0 )
 		return rc;
 
 	/* Set or clear "bootargs" property */
 	len = ( cmdline ? ( strlen ( cmdline ) + 1 /* NUL */ ) : 0 );
-	if ( ( rc = fdt_set ( fdt, chosen, "bootargs", cmdline, len ) ) != 0 )
+	if ( ( rc = fdt_set ( &node, "bootargs", cmdline, len ) ) != 0 )
 		return rc;
 
 	/* Set or clear initrd properties */
@@ -1196,14 +1164,12 @@ static int fdt_bootargs ( struct fdt *fdt, const char *cmdline,
 	addr = initrd;
 	addr = ( ( sizeof ( addr ) == sizeof ( uint64_t ) ) ?
 		 cpu_to_be64 ( addr ) : cpu_to_be32 ( addr ) );
-	if ( ( rc = fdt_set ( fdt, chosen, "linux,initrd-start", data,
-			      len ) ) != 0 )
+	if ( ( rc = fdt_set ( &node, "linux,initrd-start", data, len ) ) != 0 )
 		return rc;
 	addr = ( initrd + initrd_len );
 	addr = ( ( sizeof ( addr ) == sizeof ( uint64_t ) ) ?
 		 cpu_to_be64 ( addr ) : cpu_to_be32 ( addr ) );
-	if ( ( rc = fdt_set ( fdt, chosen, "linux,initrd-end", data,
-			      len ) ) != 0 )
+	if ( ( rc = fdt_set ( &node, "linux,initrd-end", data, len ) ) != 0 )
 		return rc;
 
 	return 0;
@@ -1220,6 +1186,7 @@ static int fdt_bootargs ( struct fdt *fdt, const char *cmdline,
  */
 int fdt_create ( struct fdt_header **hdr, const char *cmdline,
 		 physaddr_t initrd, size_t initrd_len ) {
+	struct fdt_token *root;
 	struct image *image;
 	struct fdt fdt;
 	void *copy;
@@ -1227,6 +1194,8 @@ int fdt_create ( struct fdt_header **hdr, const char *cmdline,
 
 	/* Use system FDT as the base by default */
 	memcpy ( &fdt, &sysfdt, sizeof ( fdt ) );
+	root = ( ( struct fdt_token * ) &fdt.root );
+	root->fdt = &fdt;
 
 	/* If an FDT image exists, use this instead */
 	image = find_image_tag ( &fdt_image );
@@ -1275,8 +1244,8 @@ void fdt_remove ( struct fdt_header *hdr ) {
 	ufree ( hdr );
 }
 
-/* Drag in objects via fdt_describe() */
-REQUIRING_SYMBOL ( fdt_describe );
+/* Drag in objects via fdt_next() */
+REQUIRING_SYMBOL ( fdt_next );
 
 /* Drag in device tree configuration */
 REQUIRE_OBJECT ( config_fdt );
