@@ -269,8 +269,6 @@ physaddr_t fdtmem_relocate ( struct fdt_header *hdr, physaddr_t max ) {
 	size_t len;
 	int rc;
 
-	return 0xc0000000;
-
 	/* Sanity check */
 	assert ( ( max_align & ( max_align - 1 ) ) == 0 );
 

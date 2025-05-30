@@ -470,6 +470,9 @@ apply_relocs:
 	 */
 	la	a1, _prefix
 
+	//
+	print_hex_reg a1
+
 	/* Calculate relocation addend */
 	LOADN	a2, prefix_virt
 	sub	a2, a1, a2
@@ -900,13 +903,20 @@ enable_paging_64_loop:
 	csrw	satp, t0
 	sfence.vma
 	csrr	a2, satp
+	srli	a2, a2, SATP_MODE_SHIFT
+
+	//
+	mv	a2, zero
+
+	bnez	a2, 1f
 	csrw	satp, zero
 	sfence.vma
-	progress " satp:"
-	print_hex_reg a2
+1:
 
-	csrr	a2, satp
-	srli	a2, a2, SATP_MODE_SHIFT
+	//
+	progress " satp:"
+	csrr	t0, satp
+	print_hex_reg t0
 
 	/* Loop until we successfully enable paging, or run out of levels */
 	beq	a2, a1, 1f
@@ -1261,10 +1271,6 @@ install:
 	/* Apply relocations, if still needed after enabling paging */
 	mv	a0, s3
 	call	apply_relocs
-
-	progress " hanging:a0:"
-	print_hex_reg a0
-99:	j	99b
 
 	/* Find a suitable address for relocation (using temporary stack) */
 	phys_to_virt a0, s1

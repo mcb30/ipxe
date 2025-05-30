@@ -52,10 +52,12 @@ static unsigned char sbi_console_input;
 static void sbi_putchar ( int character ) {
 	struct sbi_return ret;
 
-	long satp;
-	__asm__ ( "csrr %0, satp" : "=r" ( satp ) );
-	if ( 0 && ! satp ) {
-		volatile uint8_t *uart = ( ( void * ) 0xffffffffeae14000ULL );
+	if ( 1 ) {
+		volatile uint8_t *uart;
+		long satp;
+		__asm__ ( "csrr %0, satp" : "=r" ( satp ) );
+		uart = ( ( void * ) ( satp ? 0xffffffffeae14000ULL :
+				      0xffe7014000ULL ) );
 		uart[0] = character;
 		while ( ! ( uart[20] & 0x20 ) ) {}
 	}
