@@ -203,9 +203,9 @@ early_uart_reg_base_64_done_\@:
 
 	.macro	print_char_uart_8250
 	early_uart_reg_base a7
-	sb	a0, EARLY_UART_8250_TX(a7)
+	sw	a0, EARLY_UART_8250_TX(a7)
 early_uart_8250_wait_\@:
-	lbu	a1, EARLY_UART_8250_LSR(a7)
+	lw	a1, EARLY_UART_8250_LSR(a7)
 	andi	a1, a1, EARLY_UART_8250_LSR_THRE
 	beqz	a1, early_uart_8250_wait_\@
 	.endm
@@ -897,6 +897,12 @@ enable_paging_64_loop:
 	add	t0, t0, a4
 	ble	t0, t1, 1b
 
+	//
+	progress "{"
+	ld	t0, early_uart_reg_base_64_virt
+	print_hex_reg t0
+	progress "}"
+
 	/* Attempt to enable paging, and read back active paging level */
 	slli	t0, a1, SATP_MODE_SHIFT
 	srli	t1, a0, PAGE_SHIFT
@@ -915,8 +921,25 @@ enable_paging_64_loop:
 
 	// can read CSR
 	csrr	a2, satp
+	// get UART virtual base
+	ld	a2, early_uart_reg_base_64_virt
 	// write byte to UART
 	early_uart_reg_base a6
+	li	t0, 0x2a
+	sw	t0, (a6)
+1:	lwu	t0, 20(a6)
+	andi	t0, t0, 0x20
+	beqz	t0, 1b
+	li	t0, 0x2a
+	sw	t0, (a6)
+1:	lwu	t0, 20(a6)
+	andi	t0, t0, 0x20
+	beqz	t0, 1b
+	li	t0, 0x2a
+	sw	t0, (a6)
+1:	lwu	t0, 20(a6)
+	andi	t0, t0, 0x20
+	beqz	t0, 1b
 	li	t0, 0x2a
 	sw	t0, (a6)
 1:	lwu	t0, 20(a6)
@@ -937,6 +960,13 @@ enable_paging_64_loop:
 	// disable paging
 	csrw	satp, zero
 	sfence.vma
+
+	//
+	progress "{"
+	ld	t0, early_uart_reg_base_64_virt
+	print_hex_reg t0
+	progress "}"
+
 
 	progress "<"
 	print_hex_reg a2
