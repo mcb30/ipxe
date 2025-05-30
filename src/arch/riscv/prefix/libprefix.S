@@ -913,20 +913,25 @@ enable_paging_64_loop:
 
 	// Following code will also be tried with paging enabled:
 
+	// can read CSR
+	csrr	a2, satp
 	// write byte to UART
-	early_uart_reg_base a2
+	early_uart_reg_base a6
 	li	t0, 0x2a
-	sb	t0, (a2)
+	sw	t0, (a6)
+1:	lwu	t0, 20(a6)
+	andi	t0, t0, 0x20
+	beqz	t0, 1b
 	// try executing from a virtual address if paging enabled
-	csrr	t0, satp
-	beqz	t0, 2f
-	la	t0, 1f
-	la	t1, 2f
+	la	t0, 2f
+	la	t1, 3f
+	csrr	t2, satp
+	beqz	t2, 1f
 	sub	t0, t0, tp
-	jr	t0
-1:	auipc	a2, 0
+1:	jr	t0
+2:	auipc	a7, 0
 	jr	t1
-2:
+3:
 
 
 	// disable paging
@@ -935,6 +940,10 @@ enable_paging_64_loop:
 
 	progress "<"
 	print_hex_reg a2
+	progress ":"
+	print_hex_reg a6
+	progress ":"
+	print_hex_reg a7
 	progress ">"
 
 	// report paging disabled
