@@ -161,7 +161,8 @@ prefix_virt:
 	.macro	early_uart_reg_base_64 reg
 	csrr	\reg, satp
 	beqz	\reg, early_uart_reg_base_64_nonpaged_\@
-	LOADN	\reg, early_uart_reg_base_64_virt
+	//LOADN	\reg, early_uart_reg_base_64_virt
+	li	\reg, 0xffffffffeae14000
 	j	early_uart_reg_base_64_done_\@
 early_uart_reg_base_64_nonpaged_\@:
 	li	\reg, EARLY_UART_REG_BASE
@@ -203,11 +204,19 @@ early_uart_reg_base_64_done_\@:
 
 	.macro	print_char_uart_8250
 	early_uart_reg_base a7
-	sw	a0, EARLY_UART_8250_TX(a7)
+	fence
 early_uart_8250_wait_\@:
 	lw	a1, EARLY_UART_8250_LSR(a7)
 	andi	a1, a1, EARLY_UART_8250_LSR_THRE
 	beqz	a1, early_uart_8250_wait_\@
+	fence
+	sw	a0, EARLY_UART_8250_TX(a7)
+	fence
+early_uart_8250_wait2_\@:
+	lw	a1, EARLY_UART_8250_LSR(a7)
+	andi	a1, a1, EARLY_UART_8250_LSR_THRE
+	beqz	a1, early_uart_8250_wait2_\@
+	fence
 	.endm
 
 /*****************************************************************************
@@ -882,7 +891,10 @@ enable_paging_64_loop:
 #ifdef EARLY_UART_REG_BASE
 	li	t0, ( EARLY_UART_REG_BASE & ~( ( 1 << VPN1_LSB ) - 1 ) )
 	srli	t0, t0, PTE_PPN_SHIFT
-	ori	t0, t0, PTE_LEAF
+	ori	t0, t0, ( PTE_LEAF & ~PTE_X )
+	// non-cacheable (svpbmt)?
+	//li	t1, ( 2 << 61 )
+	//or	t0, t0, t1
 	STOREN	t0, -PTE_SIZE(a3)
 #endif
 
@@ -907,13 +919,26 @@ enable_paging_64_loop:
 	slli	t0, a1, SATP_MODE_SHIFT
 	srli	t1, a0, PAGE_SHIFT
 	or	t0, t0, t1
+	fence
+	sfence.vma
+	fence
 	sfence.vma
 	csrw	satp, t0
+	fence
+	sfence.vma
+	fence
 	sfence.vma
 	csrr	a2, satp
 	srli	a2, a2, SATP_MODE_SHIFT
 	bnez	a2, 1f
+	fence
+	sfence.vma
+	fence
+	sfence.vma
 	csrw	satp, zero
+	fence
+	sfence.vma
+	fence
 	sfence.vma
 1:
 
@@ -925,23 +950,31 @@ enable_paging_64_loop:
 	ld	a2, early_uart_reg_base_64_virt
 	// write byte to UART
 	early_uart_reg_base a6
-	li	t0, 0x2a
-	sw	t0, (a6)
+	fence
 1:	lwu	t0, 20(a6)
 	andi	t0, t0, 0x20
 	beqz	t0, 1b
 	li	t0, 0x2a
 	sw	t0, (a6)
+	fence
 1:	lwu	t0, 20(a6)
 	andi	t0, t0, 0x20
 	beqz	t0, 1b
 	li	t0, 0x2a
 	sw	t0, (a6)
+	fence
 1:	lwu	t0, 20(a6)
 	andi	t0, t0, 0x20
 	beqz	t0, 1b
 	li	t0, 0x2a
 	sw	t0, (a6)
+	fence
+1:	lwu	t0, 20(a6)
+	andi	t0, t0, 0x20
+	beqz	t0, 1b
+	li	t0, 0x2a
+	sw	t0, (a6)
+	fence
 1:	lwu	t0, 20(a6)
 	andi	t0, t0, 0x20
 	beqz	t0, 1b
@@ -952,18 +985,30 @@ enable_paging_64_loop:
 	beqz	t2, 1f
 	sub	t0, t0, tp
 1:	jr	t0
-2:	auipc	a7, 0
+2:	// running from virtual addresses if paging is enabled
+	csrr	a2, satp
+	la	a6, early_uart_reg_base_64_virt
+	LOADN	a7, (a6)
 	jr	t1
-3:
+3:	// back to flat addresses
 
 
 	// disable paging
+	fence
+	sfence.vma
+	fence
+	sfence.vma
 	csrw	satp, zero
+	fence
+	sfence.vma
+	fence
 	sfence.vma
 
 	//
 	progress "{"
-	ld	t0, early_uart_reg_base_64_virt
+	la	gp, early_uart_reg_base_64_virt
+	print_hex_reg gp
+	LOADN	t0, (gp)
 	print_hex_reg t0
 	progress "}"
 
@@ -976,8 +1021,9 @@ enable_paging_64_loop:
 	print_hex_reg a7
 	progress ">"
 
-	// report paging disabled
-	mv	a2, zero
+	// report paging level
+	csrr	a2, satp
+	srli	a2, a2, SATP_MODE_SHIFT
 
 
 	/* Loop until we successfully enable paging, or run out of levels */
