@@ -58,8 +58,13 @@ static void sbi_putchar ( int character ) {
 		__asm__ ( "csrr %0, satp" : "=r" ( satp ) );
 		uart = ( ( void * ) ( satp ? 0xffffffffeae14000ULL :
 				      0xffe7014000ULL ) );
-		uart[0] = character;
+		__asm__ __volatile__ ( "fence" );
 		while ( ! ( uart[20] & 0x20 ) ) {}
+		__asm__ __volatile__ ( "fence" );
+		uart[0] = character;
+		__asm__ __volatile__ ( "fence" );
+		while ( ! ( uart[20] & 0x20 ) ) {}
+		__asm__ __volatile__ ( "fence" );
 	}
 
 	/* Write byte to console */
