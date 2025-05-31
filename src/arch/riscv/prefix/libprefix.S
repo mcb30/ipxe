@@ -29,6 +29,9 @@
  *
  */
 
+	.option arch, +xtheadsync
+	.option arch, +xtheadcmo
+
 #include <config/serial.h>
 
 	.section ".note.GNU-stack", "", @progbits
@@ -826,6 +829,9 @@ enable_paging_64:
 	la	t1, _prefix
 	sub	tp, t1, t0
 
+	// paging enabled, but stay using flat addresses
+	//mv	tp, zero
+
 enable_paging_64_loop:
 
 	/* Calculate PTE stride for identity map at this paging level
@@ -910,7 +916,7 @@ enable_paging_64_loop:
 	ble	t0, t1, 1b
 
 	//
-	progress "{"
+	progress "\r\n{"
 	ld	t0, early_uart_reg_base_64_virt
 	print_hex_reg t0
 	progress "}"
@@ -919,18 +925,33 @@ enable_paging_64_loop:
 	slli	t0, a1, SATP_MODE_SHIFT
 	srli	t1, a0, PAGE_SHIFT
 	or	t0, t0, t1
+	th.sync.s
+	//th.dcache.iall
+	//th.icache.iall
 	fence
 	sfence.vma
 	fence
 	sfence.vma
+	th.sync.s
+	//th.dcache.iall
+	//th.icache.iall
 	csrw	satp, t0
+	th.sync.s
+	//th.dcache.iall
+	//th.icache.iall
 	fence
 	sfence.vma
 	fence
 	sfence.vma
+	th.sync.s
+	//th.dcache.iall
+	//th.icache.iall
 	csrr	a2, satp
 	srli	a2, a2, SATP_MODE_SHIFT
 	bnez	a2, 1f
+	th.sync.s
+	//th.dcache.iall
+	//th.icache.iall
 	fence
 	sfence.vma
 	fence
@@ -940,6 +961,9 @@ enable_paging_64_loop:
 	sfence.vma
 	fence
 	sfence.vma
+	th.sync.s
+	//th.dcache.iall
+	//th.icache.iall
 1:
 
 	// Following code will also be tried with paging enabled:
@@ -994,20 +1018,27 @@ enable_paging_64_loop:
 
 
 	// disable paging
+	th.sync.s
+	//th.dcache.iall
+	//th.icache.iall
 	fence
 	sfence.vma
 	fence
 	sfence.vma
-	csrw	satp, zero
+	//csrw	satp, zero
 	fence
 	sfence.vma
 	fence
 	sfence.vma
+	th.sync.s
+	//th.dcache.iall
+	//th.icache.iall
 
 	//
 	progress "{"
 	la	gp, early_uart_reg_base_64_virt
 	print_hex_reg gp
+	progress ":"
 	LOADN	t0, (gp)
 	print_hex_reg t0
 	progress "}"
@@ -1019,7 +1050,7 @@ enable_paging_64_loop:
 	print_hex_reg a6
 	progress ":"
 	print_hex_reg a7
-	progress ">"
+	progress ">\r\n"
 
 	// report paging level
 	csrr	a2, satp
@@ -1370,6 +1401,13 @@ install:
 	mv	s2, ra
 	la	s3, _edata
 
+	// trap vector
+	la	t0, trapvec
+	csrw	stvec, t0
+
+	//
+	mv	a2, zero
+
 	/* Attempt to enable paging, if we have temporary page table space */
 	mv	a0, a2
 	beqz	a2, 1f
@@ -1441,6 +1479,10 @@ install:
 	progress "\r\n"
 	ret
 	.size	install, . - install
+
+trapvec:
+	j trapvec
+
 
 /*****************************************************************************
  *
