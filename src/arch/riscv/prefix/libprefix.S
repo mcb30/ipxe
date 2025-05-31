@@ -927,31 +927,31 @@ enable_paging_64_loop:
 	or	t0, t0, t1
 	th.sync.s
 	//th.dcache.iall
-	//th.icache.iall
+	th.icache.iall
 	fence
 	sfence.vma
 	fence
 	sfence.vma
 	th.sync.s
 	//th.dcache.iall
-	//th.icache.iall
+	th.icache.iall
 	csrw	satp, t0
 	th.sync.s
 	//th.dcache.iall
-	//th.icache.iall
+	th.icache.iall
 	fence
 	sfence.vma
 	fence
 	sfence.vma
 	th.sync.s
 	//th.dcache.iall
-	//th.icache.iall
+	th.icache.iall
 	csrr	a2, satp
 	srli	a2, a2, SATP_MODE_SHIFT
 	bnez	a2, 1f
 	th.sync.s
 	//th.dcache.iall
-	//th.icache.iall
+	th.icache.iall
 	fence
 	sfence.vma
 	fence
@@ -963,7 +963,7 @@ enable_paging_64_loop:
 	sfence.vma
 	th.sync.s
 	//th.dcache.iall
-	//th.icache.iall
+	th.icache.iall
 1:
 
 	// Following code will also be tried with paging enabled:
@@ -1020,7 +1020,7 @@ enable_paging_64_loop:
 	// disable paging
 	th.sync.s
 	//th.dcache.iall
-	//th.icache.iall
+	th.icache.iall
 	fence
 	sfence.vma
 	fence
@@ -1032,7 +1032,7 @@ enable_paging_64_loop:
 	sfence.vma
 	th.sync.s
 	//th.dcache.iall
-	//th.icache.iall
+	th.icache.iall
 
 	//
 	progress "{"
