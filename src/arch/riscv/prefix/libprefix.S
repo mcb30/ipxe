@@ -484,9 +484,6 @@ apply_relocs:
 	 */
 	la	a1, _prefix
 
-	//
-	print_hex_reg a1
-
 	/* Calculate relocation addend */
 	LOADN	a2, prefix_virt
 	sub	a2, a1, a2
@@ -829,9 +826,6 @@ enable_paging_64:
 	la	t1, _prefix
 	sub	tp, t1, t0
 
-	// paging enabled, but stay using flat addresses
-	//mv	tp, zero
-
 enable_paging_64_loop:
 
 	/* Calculate PTE stride for identity map at this paging level
@@ -898,9 +892,6 @@ enable_paging_64_loop:
 	li	t0, ( EARLY_UART_REG_BASE & ~( ( 1 << VPN1_LSB ) - 1 ) )
 	srli	t0, t0, PTE_PPN_SHIFT
 	ori	t0, t0, ( PTE_LEAF & ~PTE_X )
-	// non-cacheable (svpbmt)?
-	//li	t1, ( 2 << 61 )
-	//or	t0, t0, t1
 	STOREN	t0, -PTE_SIZE(a3)
 #endif
 
@@ -916,12 +907,6 @@ enable_paging_64_loop:
 	addi	a3, a3, PTE_SIZE
 	add	t0, t0, a4
 	ble	t0, t1, 1b
-
-	//
-	progress "\r\n{"
-	ld	t0, early_uart_reg_base_64_virt
-	print_hex_reg t0
-	progress "}"
 
 	/* Attempt to enable paging, and read back active paging level */
 	slli	t0, a1, SATP_MODE_SHIFT
@@ -967,101 +952,6 @@ enable_paging_64_loop:
 	//th.dcache.iall
 	th.icache.iall
 1:
-
-	// Following code will also be tried with paging enabled:
-
-	// can read CSR
-	csrr	a2, satp
-	// get UART virtual base
-	ld	a2, early_uart_reg_base_64_virt
-	// write byte to UART
-	early_uart_reg_base a6
-	fence
-1:	lwu	t0, 20(a6)
-	andi	t0, t0, 0x20
-	beqz	t0, 1b
-	li	t0, 0x2a
-	sw	t0, (a6)
-	fence
-1:	lwu	t0, 20(a6)
-	andi	t0, t0, 0x20
-	beqz	t0, 1b
-	li	t0, 0x2a
-	sw	t0, (a6)
-	fence
-1:	lwu	t0, 20(a6)
-	andi	t0, t0, 0x20
-	beqz	t0, 1b
-
-	li	t0, 0x200000
-	//lbu	t0, (t0)
-
-	li	t0, 0x2a
-	sw	t0, (a6)
-	fence
-1:	lwu	t0, 20(a6)
-	andi	t0, t0, 0x20
-	beqz	t0, 1b
-
-	//th.dcache.iall
-	li	t0, 0x400000
-	lbu	t0, (t0)
-
-	li	t0, 0x2a
-	sw	t0, (a6)
-	fence
-1:	lwu	t0, 20(a6)
-	andi	t0, t0, 0x20
-	beqz	t0, 1b
-	// try executing from a virtual address if paging enabled
-	la	t0, 2f
-	la	t1, 3f
-	csrr	t2, satp
-	beqz	t2, 1f
-	sub	t0, t0, tp
-1:	jr	t0
-2:	// running from virtual addresses if paging is enabled
-	csrr	a2, satp
-	la	a6, early_uart_reg_base_64_virt
-	LOADN	a7, (a6)
-	jr	t1
-3:	// back to flat addresses
-
-
-	// disable paging
-	th.sync.s
-	//th.dcache.iall
-	th.icache.iall
-	fence
-	sfence.vma
-	fence
-	sfence.vma
-	//csrw	satp, zero
-	fence
-	sfence.vma
-	fence
-	sfence.vma
-	th.sync.s
-	//th.dcache.iall
-	th.icache.iall
-
-	//
-	progress "{"
-	la	gp, early_uart_reg_base_64_virt
-	print_hex_reg gp
-	progress ":"
-	LOADN	t0, (gp)
-	print_hex_reg t0
-	progress "}"
-
-
-	progress "<"
-	print_hex_reg a2
-	progress ":"
-	print_hex_reg a6
-	progress ":"
-	print_hex_reg a7
-	progress ">\r\n"
 
 	// report paging level
 	csrr	a2, satp
@@ -1411,6 +1301,14 @@ install:
 	mv	s1, a1
 	mv	s2, ra
 	la	s3, _edata
+
+
+	progress " vendor:"
+	li	a7, 0x10
+	li	a6, 0x04
+	ecall
+	print_hex_reg a1
+
 
 	// trap vector
 	la	t0, trapvec
