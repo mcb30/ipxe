@@ -908,6 +908,8 @@ enable_paging_64_loop:
 	la	t0, _prefix
 	srli	t0, t0, PTE_PPN_SHIFT
 	ori	t0, t0, PTE_LEAF
+	li	t1, ( 1 << 61 ) | ( 1 << 62 )
+	or	t0, t0, t1
 	la	t1, _ebss
 	srli	t1, t1, PTE_PPN_SHIFT
 1:	STOREN	t0, (a3)
