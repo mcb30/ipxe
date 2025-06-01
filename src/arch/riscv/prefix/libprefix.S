@@ -164,8 +164,7 @@ prefix_virt:
 	.macro	early_uart_reg_base_64 reg
 	csrr	\reg, satp
 	beqz	\reg, early_uart_reg_base_64_nonpaged_\@
-	//LOADN	\reg, early_uart_reg_base_64_virt
-	li	\reg, 0xffffffffeae14000
+	LOADN	\reg, early_uart_reg_base_64_virt
 	j	early_uart_reg_base_64_done_\@
 early_uart_reg_base_64_nonpaged_\@:
 	li	\reg, EARLY_UART_REG_BASE
@@ -819,7 +818,7 @@ enable_paging_64:
 	 */
 
 	progress " paging:"
-	li	a1, SATP_MODE_SV39
+	li	a1, SATP_MODE_SV57
 
 	/* Calculate virtual address offset */
 	LOADN	t0, prefix_link
@@ -913,41 +912,11 @@ enable_paging_64_loop:
 	srli	t1, a0, PAGE_SHIFT
 	or	t0, t0, t1
 	csrw	satp, t0
-	th.sync.s
-	//th.dcache.iall
-	th.icache.iall
-	fence
-	sfence.vma
-	fence
-	sfence.vma
-	th.sync.s
-	//th.dcache.iall
-	th.icache.iall
 	csrr	a2, satp
 	srli	a2, a2, SATP_MODE_SHIFT
 	bnez	a2, 1f
-	th.sync.s
-	//th.dcache.iall
-	th.icache.iall
-	fence
-	sfence.vma
-	fence
-	sfence.vma
 	csrw	satp, zero
-	fence
-	sfence.vma
-	fence
-	sfence.vma
-	th.sync.s
-	//th.dcache.iall
-	th.icache.iall
 1:
-
-	// report paging level
-	csrr	a2, satp
-	srli	a2, a2, SATP_MODE_SHIFT
-
-
 	/* Loop until we successfully enable paging, or run out of levels */
 	beq	a2, a1, 1f
 	addi	a1, a1, -1
