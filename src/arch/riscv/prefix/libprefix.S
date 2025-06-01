@@ -822,7 +822,7 @@ enable_paging_64:
 	 */
 
 	progress " paging:"
-	li	a1, SATP_MODE_SV57
+	li	a1, SATP_MODE_SV39
 
 	/* Calculate virtual address offset */
 	LOADN	t0, prefix_link
@@ -859,7 +859,7 @@ enable_paging_64_loop:
 	/* Construct PTE[0-255] for identity map */
 	mv	a3, a0
 	li	t0, ( PTE_COUNT / 2 )
-	li	t1, PTE_LEAF
+	li	t1, PTE_LEAF | ( 1 << 61 ) | ( 1 << 62 )
 1:	STOREN	t1, (a3)
 	addi	a3, a3, PTE_SIZE
 	add	t1, t1, a4
@@ -990,12 +990,21 @@ enable_paging_64_loop:
 1:	lwu	t0, 20(a6)
 	andi	t0, t0, 0x20
 	beqz	t0, 1b
+
+	li	t0, 0x200000
+	//lbu	t0, (t0)
+
 	li	t0, 0x2a
 	sw	t0, (a6)
 	fence
 1:	lwu	t0, 20(a6)
 	andi	t0, t0, 0x20
 	beqz	t0, 1b
+
+	//th.dcache.iall
+	li	t0, 0x400000
+	lbu	t0, (t0)
+
 	li	t0, 0x2a
 	sw	t0, (a6)
 	fence
@@ -1481,6 +1490,8 @@ install:
 	.size	install, . - install
 
 trapvec:
+	li	a0, 0x40
+	print_char_uart
 	j trapvec
 
 

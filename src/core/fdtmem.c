@@ -344,6 +344,9 @@ int fdtmem_register ( struct fdt_header *hdr, physaddr_t max ) {
 		return rc;
 	}
 
+	//
+	DBG_HD ( hdr, fdt.len );
+
 	/* Copy device tree to end of iPXE image */
 	copy = ( ( void * ) _end );
 	memcpy ( copy, hdr, fdt.len );
