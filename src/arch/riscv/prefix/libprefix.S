@@ -912,16 +912,6 @@ enable_paging_64_loop:
 	slli	t0, a1, SATP_MODE_SHIFT
 	srli	t1, a0, PAGE_SHIFT
 	or	t0, t0, t1
-	th.sync.s
-	//th.dcache.iall
-	th.icache.iall
-	fence
-	sfence.vma
-	fence
-	sfence.vma
-	th.sync.s
-	//th.dcache.iall
-	th.icache.iall
 	csrw	satp, t0
 	th.sync.s
 	//th.dcache.iall
@@ -1302,7 +1292,7 @@ install:
 	mv	s2, ra
 	la	s3, _edata
 
-
+	//
 	progress " vendor:"
 	li	a7, 0x10
 	li	a6, 0x04
@@ -1313,9 +1303,6 @@ install:
 	// trap vector
 	la	t0, trapvec
 	csrw	stvec, t0
-
-	//
-	mv	a2, zero
 
 	/* Attempt to enable paging, if we have temporary page table space */
 	mv	a0, a2
