@@ -29,9 +29,6 @@
  *
  */
 
-	.option arch, +xtheadsync
-	.option arch, +xtheadcmo
-
 #include <config/serial.h>
 
 	.section ".note.GNU-stack", "", @progbits
@@ -208,14 +205,14 @@ early_uart_reg_base_64_done_\@:
 	early_uart_reg_base a7
 	fence
 early_uart_8250_wait_\@:
-	lw	a1, EARLY_UART_8250_LSR(a7)
+	lbu	a1, EARLY_UART_8250_LSR(a7)
 	andi	a1, a1, EARLY_UART_8250_LSR_THRE
 	beqz	a1, early_uart_8250_wait_\@
 	fence
-	sw	a0, EARLY_UART_8250_TX(a7)
+	sb	a0, EARLY_UART_8250_TX(a7)
 	fence
 early_uart_8250_wait2_\@:
-	lw	a1, EARLY_UART_8250_LSR(a7)
+	lbu	a1, EARLY_UART_8250_LSR(a7)
 	andi	a1, a1, EARLY_UART_8250_LSR_THRE
 	beqz	a1, early_uart_8250_wait2_\@
 	fence
@@ -302,12 +299,10 @@ print_message_alt:
 	addi	t1, t1, 1
 	beqz	a0, 2f
 	print_char_uart
-#if 0
 	print_char_dbcn
 	beqz	a0, 1b
 	lbu	a0, -1(t1)
 	print_char_legacy
-#endif
 	j	1b
 2:
 	/* Restore registers and return (via alternate link register) */
@@ -912,6 +907,7 @@ enable_paging_64_loop:
 	srli	t1, a0, PAGE_SHIFT
 	or	t0, t0, t1
 	csrw	satp, t0
+	sfence.vma
 	csrr	a2, satp
 	srli	a2, a2, SATP_MODE_SHIFT
 	bnez	a2, 1f
