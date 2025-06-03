@@ -204,12 +204,17 @@ static int dwmac_open ( struct net_device *netdev ) {
 
 	/* Set MAC address */
 	memcpy ( mac.raw, netdev->ll_addr, ETH_ALEN );
-	writel ( mac.reg.addrl, ( dwmac->regs + DWMAC_MAC_ADDRL ) );
-	writel ( mac.reg.addrh, ( dwmac->regs + DWMAC_MAC_ADDRH ) );
+	writel ( mac.reg.addrl, ( dwmac->regs + DWMAC_ADDRL ) );
+	writel ( mac.reg.addrh, ( dwmac->regs + DWMAC_ADDRH ) );
+
+	/* Enable promiscuous mode */
+	writel ( DWMAC_FILTER_PR, ( dwmac->regs + DWMAC_FILTER ) );
 
 	/* Enable transmit and receive */
 	writel ( ( DWMAC_OP_TXEN | DWMAC_OP_RXEN ),
 		 ( dwmac->regs + DWMAC_OP ) );
+	writel ( ( DWMAC_CFG_TXEN | DWMAC_CFG_RXEN ),
+		 ( dwmac->regs + DWMAC_CFG ) );
 
 	/* Refill receive descriptor ring */
 	dwmac_refill_rx ( dwmac );
@@ -364,7 +369,7 @@ static void dwmac_poll_rx ( struct net_device *netdev ) {
 			       dwmac->name, rx_idx, stat );
 			netdev_rx_err ( netdev, iobuf, -EIO );
 		} else {
-			len = DWMAC_STAT_RX_LEN ( stat );
+			len = ( DWMAC_STAT_RX_LEN ( stat ) - 4 /* CRC */ );
 			iob_put ( iobuf, len );
 			DBGC2 ( dwmac, "DWMAC %s RX %d complete (length "
 				"%zd)\n", dwmac->name, rx_idx, len );
@@ -452,8 +457,8 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	}
 
 	/* Fetch current MAC address, if set */
-	mac.reg.addrl = readl ( dwmac->regs + DWMAC_MAC_ADDRL );
-	mac.reg.addrh = readl ( dwmac->regs + DWMAC_MAC_ADDRH );
+	mac.reg.addrl = readl ( dwmac->regs + DWMAC_ADDRL );
+	mac.reg.addrh = readl ( dwmac->regs + DWMAC_ADDRH );
 	memcpy ( netdev->ll_addr, mac.raw, ETH_ALEN );
 
 	/* Reset the NIC */
@@ -463,6 +468,9 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
+
+	/* Mark as link up; we don't yet handle link state */
+	netdev_link_up ( netdev );
 
 	return 0;
 
