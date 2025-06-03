@@ -21,11 +21,20 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 /** MAC register block */
 #define DWMAC_MAC 0x0000
 
+/** MAC configuration register */
+#define DWMAC_CFG ( DWMAC_MAC + 0x00 )
+#define DWMAC_CFG_TXEN		0x00000008	/**< TX enabled */
+#define DWMAC_CFG_RXEN		0x00000004	/**< RX enabled */
+
+/** MAC filter register */
+#define DWMAC_FILTER ( DWMAC_MAC + 0x04 )
+#define DWMAC_FILTER_PR		0x00000001	/**< Promiscuous mode */
+
 /** MAC address high register */
-#define DWMAC_MAC_ADDRH ( DWMAC_MAC + 0x40 )
+#define DWMAC_ADDRH ( DWMAC_MAC + 0x40 )
 
 /** MAC address low register */
-#define DWMAC_MAC_ADDRL ( DWMAC_MAC + 0x44 )
+#define DWMAC_ADDRL ( DWMAC_MAC + 0x44 )
 
 /** A DesignWare MAC address */
 union dwmac_mac {
@@ -128,7 +137,7 @@ struct dwmac_ring {
  *
  * Must be a multiple of 16.
  */
-#define DWMAC_RX_LEN 1520
+#define DWMAC_RX_LEN 1536
 
 /**
  * Initialise descriptor ring
