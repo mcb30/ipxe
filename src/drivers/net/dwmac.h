@@ -30,6 +30,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define DWMAC_FILTER ( DWMAC_MAC + 0x04 )
 #define DWMAC_FILTER_PR		0x00000001	/**< Promiscuous mode */
 
+/** Version register */
+#define DWMAC_VER ( DWMAC_MAC + 0x20 )
+
 /** MAC address high register */
 #define DWMAC_ADDRH ( DWMAC_MAC + 0x40 )
 
@@ -72,10 +75,28 @@ union dwmac_mac {
 /** Transmit descriptor list address register */
 #define DWMAC_TXBASE ( DWMAC_DMA + 0x10 )
 
+/** Status register */
+#define DWMAC_STATUS ( DWMAC_DMA + 0x14 )
+
 /** Operation mode register */
 #define DWMAC_OP ( DWMAC_DMA + 0x18 )
 #define DWMAC_OP_TXEN		0x00002000	/**< TX enabled */
 #define DWMAC_OP_RXEN		0x00000002	/**< RX enabled */
+
+/** Packet drop counter register */
+#define DWMAC_DROP ( DWMAC_DMA + 0x20 )
+
+/** Current transmit descriptor register */
+#define DWMAC_TXDESC ( DWMAC_DMA + 0x48 )
+
+/** Current receive descriptor register */
+#define DWMAC_RXDESC ( DWMAC_DMA + 0x4c )
+
+/** Current transmit buffer address register */
+#define DWMAC_TXBUF ( DWMAC_DMA + 0x50 )
+
+/** Current receive buffer address register */
+#define DWMAC_RXBUF ( DWMAC_DMA + 0x54 )
 
 /** A frame descriptor */
 struct dwmac_descriptor {
