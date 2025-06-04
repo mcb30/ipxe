@@ -44,6 +44,50 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 /******************************************************************************
  *
+ * Debug
+ *
+ ******************************************************************************
+ */
+
+/**
+ * Dump device registers (for debugging)
+ *
+ * @v dwmac		DesignWare MAC device
+ */
+static void __attribute__ (( unused )) dwmac_dump ( struct dwmac *dwmac ) {
+
+	/* Do nothing unless debugging is enabled */
+	if ( ! DBG_LOG )
+		return;
+
+	/* Dump MAC registers */
+	DBGC ( dwmac, "DWMAC %s MAC %08x:%08x:%08x:%08x:%08x\n",
+	       dwmac->name, readl ( dwmac->regs + DWMAC_CFG ),
+	       readl ( dwmac->regs + DWMAC_FILTER ),
+	       readl ( dwmac->regs + DWMAC_VER ),
+	       readl ( dwmac->regs + DWMAC_ADDRH ),
+	       readl ( dwmac->regs + DWMAC_ADDRL ) );
+
+	/* Dump DMA registers */
+	DBGC ( dwmac, "DWMAC %s DMA %08x:%08x:%08x:%08x:%08x\n",
+	       dwmac->name, readl ( dwmac->regs + DWMAC_BUS ),
+	       readl ( dwmac->regs + DWMAC_TXBASE ),
+	       readl ( dwmac->regs + DWMAC_RXBASE ),
+	       readl ( dwmac->regs + DWMAC_STATUS ),
+	       readl ( dwmac->regs + DWMAC_OP ) );
+	DBGC ( dwmac, "DWMAC %s DMA %08x:%08x:%08x:%08x:%08x\n",
+	       dwmac->name, readl ( dwmac->regs + DWMAC_DROP ),
+	       readl ( dwmac->regs + DWMAC_TXDESC ),
+	       readl ( dwmac->regs + DWMAC_RXDESC ),
+	       readl ( dwmac->regs + DWMAC_TXBUF ),
+	       readl ( dwmac->regs + DWMAC_RXBUF ) );
+
+	//
+	writel ( 0xffffffff, ( dwmac->regs + DWMAC_STATUS ) );
+}
+
+/******************************************************************************
+ *
  * Device reset
  *
  ******************************************************************************
@@ -65,13 +109,18 @@ static int dwmac_reset ( struct dwmac *dwmac ) {
 	/* Wait for reset to complete */
 	for ( i = 0 ; i < DWMAC_RESET_MAX_WAIT_MS ; i++ ) {
 
-		/* Check for reset completion */
-		bus = readl ( DWMAC_BUS );
-		if ( ! ( bus & DWMAC_BUS_SWR ) )
-			return 0;
-
-		/* Delay and retry */
+		/* Delay */
 		mdelay ( 1 );
+
+		/* Check for reset completion */
+		bus = readl ( dwmac->regs + DWMAC_BUS );
+		if ( ! ( bus & DWMAC_BUS_SWR ) ) {
+
+			//
+			writel ( 0x00010800, ( dwmac->regs + DWMAC_BUS ) );
+
+			return 0;
+		}
 	}
 
 	DBGC ( dwmac, "DWMAC %s timed out waiting for reset\n",
@@ -149,6 +198,7 @@ static void dwmac_refill_rx ( struct dwmac *dwmac ) {
 	struct dwmac_descriptor *rx;
 	struct io_buffer *iobuf;
 	unsigned int rx_idx;
+	unsigned int refilled = 0;
 
 	/* Refill ring */
 	while ( ( dwmac->rx.prod - dwmac->rx.cons ) != DWMAC_NUM_RX_DESC ) {
@@ -176,11 +226,14 @@ static void dwmac_refill_rx ( struct dwmac *dwmac ) {
 		DBGC2 ( dwmac, "DWMAC %s RX %d is [%08lx,%08lx)\n",
 			dwmac->name, rx_idx, virt_to_phys ( iobuf->data ),
 			( virt_to_phys ( iobuf->data ) + DWMAC_RX_LEN ) );
+		refilled++;
 	}
 
 	/* Trigger poll */
-	wmb();
-	writel ( 0, ( dwmac->regs + DWMAC_RXPOLL ) );
+	if ( refilled ) {
+		wmb();
+		writel ( 1, ( dwmac->regs + DWMAC_RXPOLL ) );
+	}
 }
 
 /**
@@ -267,6 +320,9 @@ static int dwmac_transmit ( struct net_device *netdev,
 	struct dwmac_descriptor *tx;
 	unsigned int tx_idx;
 
+	//
+	dwmac_dump ( dwmac );
+
 	/* Get next transmit descriptor */
 	if ( ( dwmac->tx.prod - dwmac->tx.cons ) >= DWMAC_NUM_TX_DESC ) {
 		DBGC ( dwmac, "DWMAC %s out of transmit descriptors\n",
@@ -286,8 +342,11 @@ static int dwmac_transmit ( struct net_device *netdev,
 	tx->stat = cpu_to_le32 ( DWMAC_STAT_OWN );
 	wmb();
 
+	//
+	DBGC_HDA ( dwmac, virt_to_phys ( tx ), tx, sizeof ( *tx ) );
+
 	/* Initiate transmission */
-	writel ( 0, ( dwmac->regs + DWMAC_TXPOLL ) );
+	writel ( 1, ( dwmac->regs + DWMAC_TXPOLL ) );
 
 	DBGC2 ( dwmac, "DWMAC %s TX %d is [%08lx,%08lx)\n",
 		dwmac->name, tx_idx, virt_to_phys ( iobuf->data ),
@@ -442,12 +501,22 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 			  ( DWMAC_CTRL_TX_FIRST | DWMAC_CTRL_TX_LAST ) );
 	dwmac_init_ring ( &dwmac->rx, DWMAC_NUM_RX_DESC, DWMAC_RXBASE, 0 );
 
+	//
+	if ( 0 && strcmp ( dwmac->name, "ethernet@ffe7060000" ) == 0 ) {
+		rc = -ENOTSUP;
+		goto err_ioremap;
+	}
+
 	/* Map registers */
 	dwmac->regs = dt_ioremap ( dt, offset, DWMAC_REG_IDX, DWMAC_REG_LEN );
 	if ( ! dwmac->regs ) {
 		rc = -ENODEV;
 		goto err_ioremap;
 	}
+
+
+	//
+	dwmac_dump ( dwmac );
 
 	/* Fetch devicetree MAC address */
 	if ( ( rc = fdt_mac ( &sysfdt, offset, netdev ) ) != 0 ) {
