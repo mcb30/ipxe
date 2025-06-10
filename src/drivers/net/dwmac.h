@@ -110,8 +110,14 @@ struct dwmac_descriptor {
 	uint8_t ctrl;
 	/** Buffer address */
 	uint32_t addr;
-	/** Reserved (second buffer address) */
-	uint32_t reserved_b;
+	/** Next descriptor address */
+	uint32_t next;
+
+	//
+	uint8_t pad[48];
+
+
+
 } __attribute__ (( packed ));
 
 /* Completion status */
@@ -125,7 +131,8 @@ struct dwmac_descriptor {
 /* Ring control */
 #define DWMAC_CTRL_TX_LAST	0x40		/**< Last segment (TX) */
 #define DWMAC_CTRL_TX_FIRST	0x20		/**< First segment (TX) */
-#define DWMAC_CTRL_END		0x02		/**< End of ring */
+//#define DWMAC_CTRL_END		0x02		/**< End of ring */
+#define DWMAC_CTRL_CHAIN	0x01		/**< Chained descriptor */
 
 /** A DesignWare descriptor ring */
 struct dwmac_ring {

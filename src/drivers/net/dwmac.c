@@ -144,6 +144,7 @@ static int dwmac_reset ( struct dwmac *dwmac ) {
  */
 static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 	struct dwmac_descriptor *desc;
+	struct dwmac_descriptor *next;
 	unsigned int i;
 
 	/* Allocate descriptor ring (on its own size) */
@@ -157,8 +158,16 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 		desc = &ring->desc[i];
 		desc->size = cpu_to_le16 ( DWMAC_RX_LEN );
 		desc->ctrl = ring->ctrl;
+
+
+		//
+		desc->ctrl |= DWMAC_CTRL_CHAIN;
+		next = &ring->desc[ ( i + 1 ) & ( ring->count - 1 ) ];
+		desc->next = dma ( &ring->map, next );
 	}
-	ring->desc[ ring->count - 1 ].ctrl |= DWMAC_CTRL_END;
+	//ring->desc[ ring->count - 1 ].ctrl |= DWMAC_CTRL_END;
+
+	wmb();
 
 	/* Program ring address */
 	writel ( dma ( &ring->map, ring->desc ),
@@ -340,13 +349,20 @@ static int dwmac_transmit ( struct net_device *netdev,
 	tx->addr = cpu_to_le32 ( iob_dma ( iobuf ) );
 	wmb();
 	tx->stat = cpu_to_le32 ( DWMAC_STAT_OWN );
+
+	//
+	tx->ctrl = 0;
+	tx->stat = cpu_to_le32 ( 0xb0100000 );
+
 	wmb();
 
 	//
-	DBGC_HDA ( dwmac, virt_to_phys ( tx ), tx, sizeof ( *tx ) );
+	DBGC_HDA ( dwmac, virt_to_phys ( dwmac->tx.desc ),
+		   dwmac->tx.desc, dwmac->tx.len );
 
 	/* Initiate transmission */
-	writel ( 1, ( dwmac->regs + DWMAC_TXPOLL ) );
+	//
+	writel ( 0xffffffff, ( dwmac->regs + DWMAC_TXPOLL ) );
 
 	DBGC2 ( dwmac, "DWMAC %s TX %d is [%08lx,%08lx)\n",
 		dwmac->name, tx_idx, virt_to_phys ( iobuf->data ),
@@ -502,7 +518,7 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	dwmac_init_ring ( &dwmac->rx, DWMAC_NUM_RX_DESC, DWMAC_RXBASE, 0 );
 
 	//
-	if ( 0 && strcmp ( dwmac->name, "ethernet@ffe7060000" ) == 0 ) {
+	if ( 1 && strcmp ( dwmac->name, "ethernet@ffe7060000" ) == 0 ) {
 		rc = -ENOTSUP;
 		goto err_ioremap;
 	}
@@ -514,9 +530,23 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 		goto err_ioremap;
 	}
 
+	void *clk = dt_ioremap ( dt, offset, 3, 0 );
+	DBGC ( dwmac, "*** CLK_EN = %08x\n",
+	       readl ( clk + 0x00 ) );
+
+	//
+	DBGC ( dwmac, "*** features = %08x\n",
+	       readl ( dwmac->regs + DWMAC_DMA + ( 22 * 4 ) ) );
+
 
 	//
 	dwmac_dump ( dwmac );
+	DBGC ( dwmac, "*** AXI reg 10 = %08x\n",
+	       readl ( dwmac->regs + DWMAC_DMA + ( 10 * 4 ) ) );
+
+	//
+	void *foo = phys_to_virt ( readl ( dwmac->regs + DWMAC_TXBASE ) );
+	DBGC_HD ( dwmac, foo, 128 );
 
 	/* Fetch devicetree MAC address */
 	if ( ( rc = fdt_mac ( &sysfdt, offset, netdev ) ) != 0 ) {
@@ -533,6 +563,12 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	/* Reset the NIC */
 	if ( ( rc = dwmac_reset ( dwmac ) ) != 0 )
 		goto err_reset;
+
+	//
+	dwmac_dump ( dwmac );
+	DBGC ( dwmac, "*** AXI reg 10 = %08x\n",
+	       readl ( dwmac->regs + DWMAC_DMA + ( 10 * 4 ) ) );
+
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
