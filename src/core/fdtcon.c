@@ -106,3 +106,10 @@ static struct uart * fdtcon_default ( void ) {
 }
 
 PROVIDE_SERIAL ( fdt, default_serial_console, fdtcon_default );
+
+
+
+
+//
+PROVIDE_REQUIRING_SYMBOL();
+REQUIRE_OBJECT ( dwuart );
