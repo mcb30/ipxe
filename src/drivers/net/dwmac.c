@@ -530,9 +530,18 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 		goto err_ioremap;
 	}
 
-	void *clk = dt_ioremap ( dt, offset, 3, 0 );
-	DBGC ( dwmac, "*** CLK_EN = %08x\n",
-	       readl ( clk + 0x00 ) );
+	//
+	{
+		physaddr_t rphys = 0xffec003000;
+		void *rio = ioremap ( rphys, 0x1000 );
+		unsigned int i;
+
+		DBGC ( dwmac, "*** th1520 regs before reset:\n" );
+		for ( i = 0 ; i < 0x28 ; i += 4 ) {
+			DBGC ( dwmac, "*** reg %#lx => %#08x\n",
+			       ( rphys + i ), readl ( rio + i ) );
+		}
+	}
 
 	//
 	DBGC ( dwmac, "*** features = %08x\n",
@@ -563,6 +572,21 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	/* Reset the NIC */
 	if ( ( rc = dwmac_reset ( dwmac ) ) != 0 )
 		goto err_reset;
+
+
+	//
+	{
+		physaddr_t rphys = 0xffec003000;
+		void *rio = ioremap ( rphys, 0x1000 );
+		unsigned int i;
+
+		DBGC ( dwmac, "*** th1520 regs after reset:\n" );
+		for ( i = 0 ; i < 0x28 ; i += 4 ) {
+			DBGC ( dwmac, "*** reg %#lx => %#08x\n",
+			       ( rphys + i ), readl ( rio + i ) );
+		}
+	}
+
 
 	//
 	dwmac_dump ( dwmac );
