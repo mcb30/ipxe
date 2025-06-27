@@ -20,24 +20,34 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 /** MAC register block */
 #define DWMAC_MAC 0x0000
+#define DWMAC_MAC_REG( n ) ( DWMAC_MAC + ( (n) * 4 ) )
 
 /** MAC configuration register */
-#define DWMAC_CFG ( DWMAC_MAC + 0x00 )
+#define DWMAC_CFG DWMAC_MAC_REG ( 0 )
 #define DWMAC_CFG_TXEN		0x00000008	/**< TX enabled */
 #define DWMAC_CFG_RXEN		0x00000004	/**< RX enabled */
 
 /** MAC filter register */
-#define DWMAC_FILTER ( DWMAC_MAC + 0x04 )
+#define DWMAC_FILTER DWMAC_MAC_REG ( 1 )
 #define DWMAC_FILTER_PR		0x00000001	/**< Promiscuous mode */
 
+/** Flow control register */
+#define DWMAC_FLOW DWMAC_MAC_REG ( 6 )
+
 /** Version register */
-#define DWMAC_VER ( DWMAC_MAC + 0x20 )
+#define DWMAC_VER DWMAC_MAC_REG ( 8 )
+
+/** Debug register */
+#define DWMAC_DEBUG DWMAC_MAC_REG ( 9 )
+
+/** Interrupt status register */
+#define DWMAC_ISR DWMAC_MAC_REG ( 14 )
 
 /** MAC address high register */
-#define DWMAC_ADDRH ( DWMAC_MAC + 0x40 )
+#define DWMAC_ADDRH DWMAC_MAC_REG ( 16 )
 
 /** MAC address low register */
-#define DWMAC_ADDRL ( DWMAC_MAC + 0x44 )
+#define DWMAC_ADDRL DWMAC_MAC_REG ( 17 )
 
 /** A DesignWare MAC address */
 union dwmac_mac {
@@ -48,11 +58,15 @@ union dwmac_mac {
 	uint8_t raw[ETH_ALEN];
 };
 
+/** SGMII/RGMII status register */
+#define DWMAC_GMII DWMAC_MAC_REG ( 54 )
+
 /** DMA register block */
 #define DWMAC_DMA 0x1000
+#define DWMAC_DMA_REG( n ) ( DWMAC_DMA + ( (n) * 4 ) )
 
 /** Bus mode register */
-#define DWMAC_BUS ( DWMAC_DMA + 0x00 )
+#define DWMAC_BUS DWMAC_DMA_REG ( 0 )
 #define DWMAC_BUS_PBL4		0x01000000	/**< 4x PBL mode */
 #define DWMAC_BUS_USP		0x00800000	/**< Use separate PBL */
 #define DWMAC_BUS_RPBL(x)	( (x) << 17 )	/**< RX DMA PBL */
@@ -64,39 +78,48 @@ union dwmac_mac {
 #define DWMAC_RESET_MAX_WAIT_MS 500
 
 /** Transmit poll demand register */
-#define DWMAC_TXPOLL ( DWMAC_DMA + 0x04 )
+#define DWMAC_TXPOLL DWMAC_DMA_REG ( 1 )
 
 /** Receive poll demand register */
-#define DWMAC_RXPOLL ( DWMAC_DMA + 0x08 )
+#define DWMAC_RXPOLL DWMAC_DMA_REG ( 2 )
 
 /** Receive descriptor list address register */
-#define DWMAC_RXBASE ( DWMAC_DMA + 0x0c )
+#define DWMAC_RXBASE DWMAC_DMA_REG ( 3 )
 
 /** Transmit descriptor list address register */
-#define DWMAC_TXBASE ( DWMAC_DMA + 0x10 )
+#define DWMAC_TXBASE DWMAC_DMA_REG ( 4 )
 
 /** Status register */
-#define DWMAC_STATUS ( DWMAC_DMA + 0x14 )
+#define DWMAC_STATUS DWMAC_DMA_REG ( 5 )
 
 /** Operation mode register */
-#define DWMAC_OP ( DWMAC_DMA + 0x18 )
+#define DWMAC_OP DWMAC_DMA_REG ( 6 )
 #define DWMAC_OP_TXEN		0x00002000	/**< TX enabled */
 #define DWMAC_OP_RXEN		0x00000002	/**< RX enabled */
 
 /** Packet drop counter register */
-#define DWMAC_DROP ( DWMAC_DMA + 0x20 )
+#define DWMAC_DROP DWMAC_DMA_REG ( 8 )
+
+/** AXI bus mode register */
+#define DWMAC_AXI DWMAC_DMA_REG ( 10 )
+
+/** AHB or AXI status register */
+#define DWMAC_AHB DWMAC_DMA_REG ( 11 )
 
 /** Current transmit descriptor register */
-#define DWMAC_TXDESC ( DWMAC_DMA + 0x48 )
+#define DWMAC_TXDESC DWMAC_DMA_REG ( 18 )
 
 /** Current receive descriptor register */
-#define DWMAC_RXDESC ( DWMAC_DMA + 0x4c )
+#define DWMAC_RXDESC DWMAC_DMA_REG ( 19 )
 
 /** Current transmit buffer address register */
-#define DWMAC_TXBUF ( DWMAC_DMA + 0x50 )
+#define DWMAC_TXBUF DWMAC_DMA_REG ( 20 )
 
 /** Current receive buffer address register */
-#define DWMAC_RXBUF ( DWMAC_DMA + 0x54 )
+#define DWMAC_RXBUF DWMAC_DMA_REG ( 21 )
+
+/** Hardware feature register */
+#define DWMAC_FEATURE DWMAC_DMA_REG ( 22 )
 
 /** A frame descriptor */
 struct dwmac_descriptor {
