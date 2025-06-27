@@ -50,40 +50,73 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 
 /**
- * Dump device registers (for debugging)
+ * Dump MAC registers (for debugging)
  *
  * @v dwmac		DesignWare MAC device
  */
-static void __attribute__ (( unused )) dwmac_dump ( struct dwmac *dwmac ) {
+static void dwmac_dump_mac ( struct dwmac *dwmac ) {
 
 	/* Do nothing unless debugging is enabled */
 	if ( ! DBG_LOG )
 		return;
 
 	/* Dump MAC registers */
-	DBGC ( dwmac, "DWMAC %s MAC %08x:%08x:%08x:%08x:%08x\n",
-	       dwmac->name, readl ( dwmac->regs + DWMAC_CFG ),
+	DBGC ( dwmac, "DWMAC %s ver %08x cfg %08x flt %08x flo %08x\n",
+	       dwmac->name, readl ( dwmac->regs + DWMAC_VER ),
+	       readl ( dwmac->regs + DWMAC_CFG ),
 	       readl ( dwmac->regs + DWMAC_FILTER ),
-	       readl ( dwmac->regs + DWMAC_VER ),
-	       readl ( dwmac->regs + DWMAC_ADDRH ),
-	       readl ( dwmac->regs + DWMAC_ADDRL ) );
+	       readl ( dwmac->regs + DWMAC_FLOW ) );
+	DBGC ( dwmac, "DWMAC %s isr %08x dbg %08x gmi %08x\n",
+	       dwmac->name, readl ( dwmac->regs + DWMAC_ISR ),
+	       readl ( dwmac->regs + DWMAC_DEBUG ),
+	       readl ( dwmac->regs + DWMAC_GMII ) );
+}
+
+/**
+ * Dump DMA registers (for debugging)
+ *
+ * @v dwmac		DesignWare MAC device
+ */
+static void dwmac_dump_dma ( struct dwmac *dwmac ) {
+	uint32_t status;
+
+	/* Do nothing unless debugging is enabled */
+	if ( ! DBG_LOG )
+		return;
 
 	/* Dump DMA registers */
-	DBGC ( dwmac, "DWMAC %s DMA %08x:%08x:%08x:%08x:%08x\n",
+	status = readl ( dwmac->regs + DWMAC_STATUS );
+	DBGC ( dwmac, "DWMAC %s bus %08x ftr %08x axi %08x ahb %08x\n",
 	       dwmac->name, readl ( dwmac->regs + DWMAC_BUS ),
-	       readl ( dwmac->regs + DWMAC_TXBASE ),
-	       readl ( dwmac->regs + DWMAC_RXBASE ),
-	       readl ( dwmac->regs + DWMAC_STATUS ),
-	       readl ( dwmac->regs + DWMAC_OP ) );
-	DBGC ( dwmac, "DWMAC %s DMA %08x:%08x:%08x:%08x:%08x\n",
-	       dwmac->name, readl ( dwmac->regs + DWMAC_DROP ),
+	       readl ( dwmac->regs + DWMAC_FEATURE ),
+	       readl ( dwmac->regs + DWMAC_AXI ),
+	       readl ( dwmac->regs + DWMAC_AHB ) );
+	DBGC ( dwmac, "DWMAC %s opm %08x sta %08x drp %08x\n",
+	       dwmac->name, readl ( dwmac->regs + DWMAC_OP ),
+	       status, readl ( dwmac->regs + DWMAC_DROP ) );
+	DBGC ( dwmac, "DWMAC %s txb %08x txd %08x txb %08x\n",
+	       dwmac->name, readl ( dwmac->regs + DWMAC_TXBASE ),
 	       readl ( dwmac->regs + DWMAC_TXDESC ),
+	       readl ( dwmac->regs + DWMAC_TXBUF ) );
+	DBGC ( dwmac, "DWMAC %s rxb %08x rxd %08x rxb %08x\n",
+	       dwmac->name, readl ( dwmac->regs + DWMAC_RXBASE ),
 	       readl ( dwmac->regs + DWMAC_RXDESC ),
-	       readl ( dwmac->regs + DWMAC_TXBUF ),
 	       readl ( dwmac->regs + DWMAC_RXBUF ) );
 
-	//
-	writel ( 0xffffffff, ( dwmac->regs + DWMAC_STATUS ) );
+	/* Clear sticky bits in status register, since nothing else will */
+	writel ( status, ( dwmac->regs + DWMAC_STATUS ) );
+}
+
+/**
+ * Dump all registers (for debugging)
+ *
+ * @v dwmac		DesignWare MAC device
+ */
+static void __attribute__ (( unused )) dwmac_dump ( struct dwmac *dwmac ) {
+
+	/* Dump MAC and DMA registers */
+	dwmac_dump_mac ( dwmac );
+	dwmac_dump_dma ( dwmac );
 }
 
 /******************************************************************************
@@ -362,7 +395,7 @@ static int dwmac_transmit ( struct net_device *netdev,
 
 	/* Initiate transmission */
 	//
-	writel ( 0xffffffff, ( dwmac->regs + DWMAC_TXPOLL ) );
+	writel ( 0, ( dwmac->regs + DWMAC_TXPOLL ) );
 
 	DBGC2 ( dwmac, "DWMAC %s TX %d is [%08lx,%08lx)\n",
 		dwmac->name, tx_idx, virt_to_phys ( iobuf->data ),
@@ -544,18 +577,7 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	}
 
 	//
-	DBGC ( dwmac, "*** features = %08x\n",
-	       readl ( dwmac->regs + DWMAC_DMA + ( 22 * 4 ) ) );
-
-
-	//
 	dwmac_dump ( dwmac );
-	DBGC ( dwmac, "*** AXI reg 10 = %08x\n",
-	       readl ( dwmac->regs + DWMAC_DMA + ( 10 * 4 ) ) );
-
-	//
-	void *foo = phys_to_virt ( readl ( dwmac->regs + DWMAC_TXBASE ) );
-	DBGC_HD ( dwmac, foo, 128 );
 
 	/* Fetch devicetree MAC address */
 	if ( ( rc = fdt_mac ( &sysfdt, offset, netdev ) ) != 0 ) {
@@ -590,8 +612,6 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 
 	//
 	dwmac_dump ( dwmac );
-	DBGC ( dwmac, "*** AXI reg 10 = %08x\n",
-	       readl ( dwmac->regs + DWMAC_DMA + ( 10 * 4 ) ) );
 
 
 	/* Register network device */
