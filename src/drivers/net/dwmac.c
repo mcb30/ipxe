@@ -178,6 +178,7 @@ static int dwmac_reset ( struct dwmac *dwmac ) {
 static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 	struct dwmac_descriptor *desc;
 	struct dwmac_descriptor *next;
+	physaddr_t base;
 	unsigned int i;
 
 	/* Allocate descriptor ring (on its own size) */
@@ -191,20 +192,16 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 		desc = &ring->desc[i];
 		desc->size = cpu_to_le16 ( DWMAC_RX_LEN );
 		desc->ctrl = ring->ctrl;
-
-
-		//
-		desc->ctrl |= DWMAC_CTRL_CHAIN;
+		assert ( desc->ctrl & DWMAC_CTRL_CHAIN );
 		next = &ring->desc[ ( i + 1 ) & ( ring->count - 1 ) ];
 		desc->next = dma ( &ring->map, next );
 	}
-	//ring->desc[ ring->count - 1 ].ctrl |= DWMAC_CTRL_END;
-
 	wmb();
 
 	/* Program ring address */
-	writel ( dma ( &ring->map, ring->desc ),
-		 ( dwmac->regs + DWMAC_DMA + ring->qbase ) );
+	base = dma ( &ring->map, ring->desc );
+	assert ( base == ( ( uint32_t ) base ) );
+	writel ( base, ( dwmac->regs + DWMAC_DMA + ring->qbase ) );
 
 	DBGC ( dwmac, "DWMAC %s ring %02x is at [%08lx,%08lx)\n",
 	       dwmac->name, ring->qbase, virt_to_phys ( ring->desc ),
@@ -382,19 +379,13 @@ static int dwmac_transmit ( struct net_device *netdev,
 	tx->addr = cpu_to_le32 ( iob_dma ( iobuf ) );
 	wmb();
 	tx->stat = cpu_to_le32 ( DWMAC_STAT_OWN );
-
-	//
-	tx->ctrl = 0;
-	tx->stat = cpu_to_le32 ( 0xb0100000 );
-
 	wmb();
 
 	//
-	DBGC_HDA ( dwmac, virt_to_phys ( dwmac->tx.desc ),
-		   dwmac->tx.desc, dwmac->tx.len );
+	DBGC2_HDA ( dwmac, virt_to_phys ( dwmac->tx.desc ),
+		    dwmac->tx.desc, dwmac->tx.len );
 
 	/* Initiate transmission */
-	//
 	writel ( 0, ( dwmac->regs + DWMAC_TXPOLL ) );
 
 	DBGC2 ( dwmac, "DWMAC %s TX %d is [%08lx,%08lx)\n",
@@ -547,8 +538,10 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	dwmac->dma = &dt->dma;
 	dwmac->name = netdev->dev->name;
 	dwmac_init_ring ( &dwmac->tx, DWMAC_NUM_TX_DESC, DWMAC_TXBASE,
-			  ( DWMAC_CTRL_TX_FIRST | DWMAC_CTRL_TX_LAST ) );
-	dwmac_init_ring ( &dwmac->rx, DWMAC_NUM_RX_DESC, DWMAC_RXBASE, 0 );
+			  ( DWMAC_CTRL_TX_FIRST | DWMAC_CTRL_TX_LAST |
+			    DWMAC_CTRL_CHAIN ) );
+	dwmac_init_ring ( &dwmac->rx, DWMAC_NUM_RX_DESC, DWMAC_RXBASE,
+			  DWMAC_CTRL_CHAIN );
 
 	//
 	if ( 1 && strcmp ( dwmac->name, "ethernet@ffe7060000" ) == 0 ) {
@@ -564,7 +557,7 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	}
 
 	//
-	{
+	if ( 0 ) {
 		physaddr_t rphys = 0xffec003000;
 		void *rio = ioremap ( rphys, 0x1000 );
 		unsigned int i;
@@ -597,7 +590,7 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 
 
 	//
-	{
+	if ( 0 ) {
 		physaddr_t rphys = 0xffec003000;
 		void *rio = ioremap ( rphys, 0x1000 );
 		unsigned int i;
