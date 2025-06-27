@@ -86,7 +86,7 @@ static void dwmac_dump_dma ( struct dwmac *dwmac ) {
 
 	/* Dump DMA registers */
 	status = readl ( dwmac->regs + DWMAC_STATUS );
-	DBGC ( dwmac, "DWMAC %s bus %08x ftr %08x axi %08x ahb %08x\n",
+	DBGC ( dwmac, "DWMAC %s bus %08x fea %08x axi %08x ahb %08x\n",
 	       dwmac->name, readl ( dwmac->regs + DWMAC_BUS ),
 	       readl ( dwmac->regs + DWMAC_FEATURE ),
 	       readl ( dwmac->regs + DWMAC_AXI ),
@@ -135,6 +135,10 @@ static void __attribute__ (( unused )) dwmac_dump ( struct dwmac *dwmac ) {
 static int dwmac_reset ( struct dwmac *dwmac ) {
 	unsigned int i;
 	uint32_t bus;
+
+	//
+	DBGC ( dwmac, "**** skip reset\n" );
+	return 0;
 
 	/* Trigger software reset */
 	writel ( DWMAC_BUS_SWR, ( dwmac->regs + DWMAC_BUS ) );
@@ -201,7 +205,7 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 	/* Program ring address */
 	base = dma ( &ring->map, ring->desc );
 	assert ( base == ( ( uint32_t ) base ) );
-	writel ( base, ( dwmac->regs + DWMAC_DMA + ring->qbase ) );
+	//writel ( base, ( dwmac->regs + DWMAC_DMA + ring->qbase ) );
 
 	DBGC ( dwmac, "DWMAC %s ring %02x is at [%08lx,%08lx)\n",
 	       dwmac->name, ring->qbase, virt_to_phys ( ring->desc ),
@@ -255,6 +259,10 @@ static void dwmac_refill_rx ( struct dwmac *dwmac ) {
 
 		/* Populate receive descriptor */
 		rx->addr = cpu_to_le32 ( iob_dma ( iobuf ) );
+
+		//
+		rx->size |= cpu_to_be16 ( 0x4000 );
+		rx->ctrl = 0;
 		wmb();
 		rx->stat = cpu_to_le32 ( DWMAC_STAT_OWN );
 
@@ -303,9 +311,11 @@ static int dwmac_open ( struct net_device *netdev ) {
 	writel ( DWMAC_FILTER_PR, ( dwmac->regs + DWMAC_FILTER ) );
 
 	/* Enable transmit and receive */
-	writel ( ( DWMAC_OP_TXEN | DWMAC_OP_RXEN ),
+	//
+	writel ( ( DWMAC_OP_TXEN | DWMAC_OP_RXEN ) | 0x00200000,
 		 ( dwmac->regs + DWMAC_OP ) );
-	writel ( ( DWMAC_CFG_TXEN | DWMAC_CFG_RXEN ),
+	//
+	writel ( ( DWMAC_CFG_TXEN | DWMAC_CFG_RXEN )  | 0x00202800,
 		 ( dwmac->regs + DWMAC_CFG ) );
 
 	/* Refill receive descriptor ring */
@@ -377,13 +387,26 @@ static int dwmac_transmit ( struct net_device *netdev,
 	/* Populate transmit descriptor */
 	tx->size = cpu_to_le16 ( iob_len ( iobuf ) );
 	tx->addr = cpu_to_le32 ( iob_dma ( iobuf ) );
-	wmb();
-	tx->stat = cpu_to_le32 ( DWMAC_STAT_OWN );
-	wmb();
 
 	//
-	DBGC2_HDA ( dwmac, virt_to_phys ( dwmac->tx.desc ),
-		    dwmac->tx.desc, dwmac->tx.len );
+	tx->ctrl = 0;
+
+	//
+	wmb();
+	tx->stat = //cpu_to_le32 ( DWMAC_STAT_OWN );
+		cpu_to_le32 ( 0xb0100000 );
+	wmb();
+
+
+	//
+	if ( 0 ) {
+		DBGC2 ( dwmac, "TX ring:\n" );
+		DBGC2_HDA ( dwmac, virt_to_phys ( dwmac->tx.desc ),
+			    dwmac->tx.desc, 64 * 3 );
+		DBGC2 ( dwmac, "RX ring:\n" );
+		DBGC2_HDA ( dwmac, virt_to_phys ( dwmac->rx.desc ),
+			    dwmac->rx.desc, 64 * 3 );
+	}
 
 	/* Initiate transmission */
 	writel ( 0, ( dwmac->regs + DWMAC_TXPOLL ) );
@@ -558,6 +581,39 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 
 	//
 	if ( 0 ) {
+		physaddr_t phys = 0xffef018000;
+		void *io = ioremap ( phys, 0x1000 );
+
+		DBGC ( dwmac, "*** PERISYS_SEL_ADDR_L = %08x\n",
+		       readl ( io + 0xd0 ) );
+	}
+
+	//
+	if ( 0 ) {
+		physaddr_t phys = 0xffef014000;
+		void *io = ioremap ( phys, 0x1000 );
+
+		DBGC ( dwmac, "*** GMAC0_SWRST = %08x\n",
+		       readl ( io + 0x68 ) );
+	}
+
+	//
+	if ( 0 ) {
+		physaddr_t phys = 0xffef010000;
+		void *io = ioremap ( phys, 0x4000 );
+
+		DBGC ( dwmac, "*** AP_SUBSYS GMAC_PLL_CFG0 = %#08x\n",
+		       readl ( io + 0x20 ) );
+		DBGC ( dwmac, "*** AP_SUBSYS GMAC_PLL_CFG1 = %#08x\n",
+		       readl ( io + 0x24 ) );
+		DBGC ( dwmac, "*** AP_SUBSYS GMAC_PLL_CFG2 = %#08x\n",
+		       readl ( io + 0x28 ) );
+		DBGC ( dwmac, "*** AP_SUBSYS GMAC_PLL_CFG3 = %#08x\n",
+		       readl ( io + 0x2c ) );
+	}
+
+	//
+	if ( 0 ) {
 		physaddr_t rphys = 0xffec003000;
 		void *rio = ioremap ( rphys, 0x1000 );
 		unsigned int i;
@@ -570,7 +626,20 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	}
 
 	//
+	DBGC ( dwmac, "DWMAC %s before reset:\n", dwmac->name );
 	dwmac_dump ( dwmac );
+
+	//
+	if ( 1 ) {
+		physaddr_t phys = readl ( dwmac->regs + DWMAC_TXBASE );
+		DBGC ( dwmac, "*** old TX ring:\n" );
+		DBGC_HDA ( dwmac, phys, phys_to_virt ( phys ), 1024 );
+	}
+	if ( 1 ) {
+		physaddr_t phys = readl ( dwmac->regs + DWMAC_RXBASE );
+		DBGC ( dwmac, "*** old RX ring:\n" );
+		DBGC_HDA ( dwmac, phys, phys_to_virt ( phys ), 1024 );
+	}
 
 	/* Fetch devicetree MAC address */
 	if ( ( rc = fdt_mac ( &sysfdt, offset, netdev ) ) != 0 ) {
@@ -604,6 +673,7 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 
 
 	//
+	DBGC ( dwmac, "DWMAC %s after reset:\n", dwmac->name );
 	dwmac_dump ( dwmac );
 
 
