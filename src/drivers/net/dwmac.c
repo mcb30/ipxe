@@ -199,6 +199,11 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 		assert ( desc->ctrl & DWMAC_CTRL_CHAIN );
 		next = &ring->desc[ ( i + 1 ) & ( ring->count - 1 ) ];
 		desc->next = dma ( &ring->map, next );
+
+
+		__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
+				       "th.dcache.cva %0\n\t"
+				       : : "r" ( desc ) );
 	}
 	wmb();
 
@@ -379,6 +384,19 @@ static int dwmac_transmit ( struct net_device *netdev,
 	//
 	//dwmac_dump ( dwmac );
 
+	DBGC ( dwmac, "*** transmit:\n" );
+	DBGC_HDA ( dwmac, virt_to_phys ( iobuf->data ), iobuf->data,
+		   iob_len ( iobuf ) );
+
+	//
+	void *foo;
+	for ( foo = iobuf->data ; foo < ( iobuf->tail + 64 ) ; foo += 64 ) {
+		__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
+				       "th.dcache.cva %0\n\t"
+				       : : "r" ( foo ) );
+	}
+
+
 	/* Get next transmit descriptor */
 	if ( ( dwmac->tx.prod - dwmac->tx.cons ) >= DWMAC_NUM_TX_DESC ) {
 		DBGC ( dwmac, "DWMAC %s out of transmit descriptors\n",
@@ -407,7 +425,6 @@ static int dwmac_transmit ( struct net_device *netdev,
 	__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
 			       "th.dcache.cva %0\n\t"
 			       : : "r" ( tx ) );
-
 
 	//
 	if ( 0 ) {
@@ -512,6 +529,15 @@ static void dwmac_poll_rx ( struct net_device *netdev ) {
 		} else {
 			len = ( DWMAC_STAT_RX_LEN ( stat ) - 4 /* CRC */ );
 			iob_put ( iobuf, len );
+
+			//
+			void *foo;
+			for ( foo = iobuf->data ; foo < ( iobuf->tail + 64 ); foo += 64 ) {
+				__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
+						       "th.dcache.iva %0\n\t"
+				       : : "r" ( foo ) );
+			}
+
 			DBGC2 ( dwmac, "DWMAC %s RX %d complete (length "
 				"%zd)\n", dwmac->name, rx_idx, len );
 			netdev_rx ( netdev, iobuf );
