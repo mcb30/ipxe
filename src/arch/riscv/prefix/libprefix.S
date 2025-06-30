@@ -1014,7 +1014,7 @@ enable_paging_64_loop:
 	beq	a2, a1, 1f
 	csrw	satp, zero
 	addi	a1, a1, -1
-	li	t0, SATP_MODE_SV39
+	li	t0, SATP_MODE_SV48 //
 	bge	a1, t0, enable_paging_64_loop
 	mv	tp, zero
 	mv	a5, zero

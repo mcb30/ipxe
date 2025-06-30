@@ -183,7 +183,7 @@ struct dwmac_ring {
  *
  * Must be a multiple of 16.
  */
-#define DWMAC_RX_LEN 1536
+#define DWMAC_RX_LEN 1600 // 1536
 
 /**
  * Initialise descriptor ring
