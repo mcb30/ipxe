@@ -191,8 +191,9 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 		return -ENOMEM;
 
 	//
-	//base = 0xff000000 + ( ring->qbase << 16 );
-	//ring->desc = ioremap ( base, 0x1000 );
+	base = 0xff000000 + ( ring->qbase << 16 );
+	ring->desc = ioremap ( base, 0x1000 );
+	//ring->desc = phys_to_virt ( base );
 
 	/* Initialise descriptor ring */
 	memset ( ring->desc, 0, ring->len );
@@ -205,7 +206,10 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 		desc->next = dma ( &ring->map, next );
 
 		//
-		if ( 1 ) {
+		desc->next = base + 64 * ( ( i + 1 ) & ( ring->count - 1 ) );
+
+		//
+		if ( 0 ) {
 			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
 					       "th.dcache.cva %0\n\t"
 					       : : "r" ( desc ) );
@@ -214,7 +218,7 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 	wmb();
 
 	/* Program ring address */
-	base = dma ( &ring->map, ring->desc );
+	//base = dma ( &ring->map, ring->desc );
 	assert ( base == ( ( uint32_t ) base ) );
 	writel ( base, ( dwmac->regs + DWMAC_DMA + ring->qbase ) );
 
@@ -279,7 +283,7 @@ static void dwmac_refill_rx ( struct dwmac *dwmac ) {
 		rx->stat = cpu_to_le32 ( DWMAC_STAT_OWN ) | 0x85ee0320;
 
 		//
-		if ( 1 ) {
+		if ( 0 ) {
 			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
 					       "th.dcache.cva %0\n\t"
 					       : : "r" ( rx ) );
@@ -430,7 +434,7 @@ static int dwmac_transmit ( struct net_device *netdev,
 
 	//
 	DBGC2 ( dwmac, "TX %d at %p\n", tx_idx, tx );
-	if ( 1 ) {
+	if ( 0 ) {
 		__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
 				       "th.dcache.cva %0\n\t"
 				       : : "r" ( tx ) );
@@ -473,7 +477,7 @@ static void dwmac_poll_tx ( struct net_device *netdev ) {
 		tx = &dwmac->tx.desc[tx_idx];
 
 		//
-		if ( 1 ) {
+		if ( 0 ) {
 			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
 					       "th.dcache.iva %0\n\t"
 					       : : "r" ( tx ) );
@@ -518,7 +522,7 @@ static void dwmac_poll_rx ( struct net_device *netdev ) {
 		rx = &dwmac->rx.desc[rx_idx];
 
 		//
-		if ( 1 ) {
+		if ( 0 ) {
 			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
 					       "th.dcache.iva %0\n\t"
 					       : : "r" ( rx ) );
