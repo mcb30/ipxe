@@ -190,6 +190,10 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 	if ( ! ring->desc )
 		return -ENOMEM;
 
+	//
+	//base = 0xff000000 + ( ring->qbase << 16 );
+	//ring->desc = ioremap ( base, 0x1000 );
+
 	/* Initialise descriptor ring */
 	memset ( ring->desc, 0, ring->len );
 	for ( i = 0 ; i < ring->count ; i++ ) {
@@ -200,10 +204,12 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 		next = &ring->desc[ ( i + 1 ) & ( ring->count - 1 ) ];
 		desc->next = dma ( &ring->map, next );
 
-
-		__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-				       "th.dcache.cva %0\n\t"
-				       : : "r" ( desc ) );
+		//
+		if ( 1 ) {
+			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
+					       "th.dcache.cva %0\n\t"
+					       : : "r" ( desc ) );
+		}
 	}
 	wmb();
 
@@ -272,11 +278,12 @@ static void dwmac_refill_rx ( struct dwmac *dwmac ) {
 		//
 		rx->stat = cpu_to_le32 ( DWMAC_STAT_OWN ) | 0x85ee0320;
 
-
-		__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-				       "th.dcache.cva %0\n\t"
-				       : : "r" ( rx ) );
-
+		//
+		if ( 1 ) {
+			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
+					       "th.dcache.cva %0\n\t"
+					       : : "r" ( rx ) );
+		}
 
 		/* Record I/O buffer */
 		assert ( dwmac->rx_iobuf[rx_idx] == NULL );
@@ -329,6 +336,9 @@ static int dwmac_open ( struct net_device *netdev ) {
 	//
 	writel ( ( DWMAC_CFG_TXEN | DWMAC_CFG_RXEN )  | 0x00202800,
 		 ( dwmac->regs + DWMAC_CFG ) );
+
+	//
+	dwmac_dump ( dwmac );
 
 	/* Refill receive descriptor ring */
 	dwmac_refill_rx ( dwmac );
@@ -384,10 +394,6 @@ static int dwmac_transmit ( struct net_device *netdev,
 	//
 	//dwmac_dump ( dwmac );
 
-	DBGC ( dwmac, "*** transmit:\n" );
-	DBGC_HDA ( dwmac, virt_to_phys ( iobuf->data ), iobuf->data,
-		   iob_len ( iobuf ) );
-
 	//
 	void *foo;
 	for ( foo = iobuf->data ; foo < ( iobuf->tail + 64 ) ; foo += 64 ) {
@@ -422,9 +428,13 @@ static int dwmac_transmit ( struct net_device *netdev,
 		cpu_to_le32 ( 0xb0100000 );
 	wmb();
 
-	__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-			       "th.dcache.cva %0\n\t"
-			       : : "r" ( tx ) );
+	//
+	DBGC2 ( dwmac, "TX %d at %p\n", tx_idx, tx );
+	if ( 1 ) {
+		__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
+				       "th.dcache.cva %0\n\t"
+				       : : "r" ( tx ) );
+	}
 
 	//
 	if ( 0 ) {
@@ -462,9 +472,12 @@ static void dwmac_poll_tx ( struct net_device *netdev ) {
 		tx_idx = ( dwmac->tx.cons % DWMAC_NUM_TX_DESC );
 		tx = &dwmac->tx.desc[tx_idx];
 
-		__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-				       "th.dcache.iva %0\n\t"
-			       : : "r" ( tx ) );
+		//
+		if ( 1 ) {
+			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
+					       "th.dcache.iva %0\n\t"
+					       : : "r" ( tx ) );
+		}
 
 		/* Stop if descriptor is still owned by hardware */
 		if ( tx->stat & cpu_to_le32 ( DWMAC_STAT_OWN ) )
@@ -504,9 +517,12 @@ static void dwmac_poll_rx ( struct net_device *netdev ) {
 		rx_idx = ( dwmac->rx.cons % DWMAC_NUM_RX_DESC );
 		rx = &dwmac->rx.desc[rx_idx];
 
-		__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-				       "th.dcache.iva %0\n\t"
-				       : : "r" ( rx ) );
+		//
+		if ( 1 ) {
+			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
+					       "th.dcache.iva %0\n\t"
+					       : : "r" ( rx ) );
+		}
 
 		/* Stop if descriptor is still in use */
 		if ( rx->stat & cpu_to_le32 ( DWMAC_STAT_OWN ) )
