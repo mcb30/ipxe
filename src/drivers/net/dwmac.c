@@ -193,11 +193,6 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 	//
 	ring->desc = ( void * ) ( virt_to_phys ( ring->desc ) +
 				  0xffffffc000000000ULL );
-	//base = 0xff000000 + ( ring->qbase << 16 );
-	//ring->desc = ioremap ( base, 0x1000 );
-	//ring->desc = phys_to_virt ( base );
-
-	//
 	DBGC ( dwmac, "***** ring virt %p phys %#08lx DMA %#08lx\n",
 	       ring->desc, virt_to_phys ( ring->desc ),
 	       dma ( &ring->map, ring->desc ) );
@@ -211,16 +206,6 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 		assert ( desc->ctrl & DWMAC_CTRL_CHAIN );
 		next = &ring->desc[ ( i + 1 ) & ( ring->count - 1 ) ];
 		desc->next = dma ( &ring->map, next );
-
-		//
-		//desc->next = base + 64 * ( ( i + 1 ) & ( ring->count - 1 ) );
-
-		//
-		if ( 0 ) {
-			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-					       "th.dcache.cva %0\n\t"
-					       : : "r" ( desc ) );
-		}
 	}
 	wmb();
 
@@ -288,13 +273,6 @@ static void dwmac_refill_rx ( struct dwmac *dwmac ) {
 		wmb();
 		//
 		rx->stat = cpu_to_le32 ( DWMAC_STAT_OWN ) | 0x85ee0320;
-
-		//
-		if ( 0 ) {
-			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-					       "th.dcache.cva %0\n\t"
-					       : : "r" ( rx ) );
-		}
 
 		/* Record I/O buffer */
 		assert ( dwmac->rx_iobuf[rx_idx] == NULL );
@@ -439,24 +417,6 @@ static int dwmac_transmit ( struct net_device *netdev,
 		cpu_to_le32 ( 0xb0100000 );
 	wmb();
 
-	//
-	DBGC2 ( dwmac, "TX %d at %p\n", tx_idx, tx );
-	if ( 0 ) {
-		__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-				       "th.dcache.cva %0\n\t"
-				       : : "r" ( tx ) );
-	}
-
-	//
-	if ( 0 ) {
-		DBGC2 ( dwmac, "TX ring:\n" );
-		DBGC2_HDA ( dwmac, virt_to_phys ( dwmac->tx.desc ),
-			    dwmac->tx.desc, 64 * 3 );
-		DBGC2 ( dwmac, "RX ring:\n" );
-		DBGC2_HDA ( dwmac, virt_to_phys ( dwmac->rx.desc ),
-			    dwmac->rx.desc, 64 * 3 );
-	}
-
 	/* Initiate transmission */
 	writel ( 0, ( dwmac->regs + DWMAC_TXPOLL ) );
 
@@ -482,13 +442,6 @@ static void dwmac_poll_tx ( struct net_device *netdev ) {
 		/* Get next transmit descriptor */
 		tx_idx = ( dwmac->tx.cons % DWMAC_NUM_TX_DESC );
 		tx = &dwmac->tx.desc[tx_idx];
-
-		//
-		if ( 0 ) {
-			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-					       "th.dcache.iva %0\n\t"
-					       : : "r" ( tx ) );
-		}
 
 		/* Stop if descriptor is still owned by hardware */
 		if ( tx->stat & cpu_to_le32 ( DWMAC_STAT_OWN ) )
@@ -527,13 +480,6 @@ static void dwmac_poll_rx ( struct net_device *netdev ) {
 		/* Get next receive descriptor */
 		rx_idx = ( dwmac->rx.cons % DWMAC_NUM_RX_DESC );
 		rx = &dwmac->rx.desc[rx_idx];
-
-		//
-		if ( 0 ) {
-			__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-					       "th.dcache.iva %0\n\t"
-					       : : "r" ( rx ) );
-		}
 
 		/* Stop if descriptor is still in use */
 		if ( rx->stat & cpu_to_le32 ( DWMAC_STAT_OWN ) )
@@ -700,18 +646,6 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	//
 	DBGC ( dwmac, "DWMAC %s before reset:\n", dwmac->name );
 	dwmac_dump ( dwmac );
-
-	//
-	if ( 0 ) {
-		physaddr_t phys = readl ( dwmac->regs + DWMAC_TXBASE );
-		DBGC ( dwmac, "*** old TX ring:\n" );
-		DBGC_HDA ( dwmac, phys, phys_to_virt ( phys ), 1024 );
-	}
-	if ( 0 ) {
-		physaddr_t phys = readl ( dwmac->regs + DWMAC_RXBASE );
-		DBGC ( dwmac, "*** old RX ring:\n" );
-		DBGC_HDA ( dwmac, phys, phys_to_virt ( phys ), 1024 );
-	}
 
 	/* Fetch devicetree MAC address */
 	if ( ( rc = fdt_mac ( &sysfdt, offset, netdev ) ) != 0 ) {
