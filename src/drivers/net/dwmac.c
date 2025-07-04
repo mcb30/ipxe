@@ -191,9 +191,16 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 		return -ENOMEM;
 
 	//
-	base = 0xff000000 + ( ring->qbase << 16 );
-	ring->desc = ioremap ( base, 0x1000 );
+	ring->desc = ( void * ) ( virt_to_phys ( ring->desc ) +
+				  0xffffffc000000000ULL );
+	//base = 0xff000000 + ( ring->qbase << 16 );
+	//ring->desc = ioremap ( base, 0x1000 );
 	//ring->desc = phys_to_virt ( base );
+
+	//
+	DBGC ( dwmac, "***** ring virt %p phys %#08lx DMA %#08lx\n",
+	       ring->desc, virt_to_phys ( ring->desc ),
+	       dma ( &ring->map, ring->desc ) );
 
 	/* Initialise descriptor ring */
 	memset ( ring->desc, 0, ring->len );
@@ -206,7 +213,7 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 		desc->next = dma ( &ring->map, next );
 
 		//
-		desc->next = base + 64 * ( ( i + 1 ) & ( ring->count - 1 ) );
+		//desc->next = base + 64 * ( ( i + 1 ) & ( ring->count - 1 ) );
 
 		//
 		if ( 0 ) {
@@ -218,7 +225,7 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 	wmb();
 
 	/* Program ring address */
-	//base = dma ( &ring->map, ring->desc );
+	base = dma ( &ring->map, ring->desc );
 	assert ( base == ( ( uint32_t ) base ) );
 	writel ( base, ( dwmac->regs + DWMAC_DMA + ring->qbase ) );
 
