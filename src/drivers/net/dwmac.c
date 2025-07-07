@@ -367,6 +367,10 @@ static void dwmac_close ( struct net_device *netdev ) {
 	dwmac_destroy_ring ( dwmac, &dwmac->tx );
 }
 
+//
+extern void cache_clean ( struct io_buffer *iobuf );
+extern void cache_invalidate ( struct io_buffer *iobuf );
+
 /**
  * Transmit packet
  *
@@ -384,11 +388,15 @@ static int dwmac_transmit ( struct net_device *netdev,
 	//dwmac_dump ( dwmac );
 
 	//
+	if ( 0 ) {
 	void *foo;
 	for ( foo = iobuf->data ; foo < ( iobuf->tail + 64 ) ; foo += 64 ) {
 		__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
 				       "th.dcache.cva %0\n\t"
 				       : : "r" ( foo ) );
+	}
+	} else {
+		cache_clean ( iobuf );
 	}
 
 
@@ -504,11 +512,15 @@ static void dwmac_poll_rx ( struct net_device *netdev ) {
 			iob_put ( iobuf, len );
 
 			//
+			if ( 0 ) {
 			void *foo;
 			for ( foo = iobuf->data ; foo < ( iobuf->tail + 64 ); foo += 64 ) {
 				__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
 						       "th.dcache.iva %0\n\t"
 				       : : "r" ( foo ) );
+			}
+			} else {
+				cache_invalidate ( iobuf );
 			}
 
 			DBGC2 ( dwmac, "DWMAC %s RX %d complete (length "
