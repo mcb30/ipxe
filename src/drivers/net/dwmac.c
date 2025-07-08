@@ -191,8 +191,8 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 		return -ENOMEM;
 
 	//
-	ring->desc = ( void * ) ( virt_to_phys ( ring->desc ) +
-				  0xffffffc000000000ULL );
+	//ring->desc = ( void * ) ( virt_to_phys ( ring->desc ) +
+	//			  0xffffffc000000000ULL );
 	DBGC ( dwmac, "***** ring virt %p phys %#08lx DMA %#08lx\n",
 	       ring->desc, virt_to_phys ( ring->desc ),
 	       dma ( &ring->map, ring->desc ) );
@@ -368,8 +368,8 @@ static void dwmac_close ( struct net_device *netdev ) {
 }
 
 //
-extern void cache_clean ( struct io_buffer *iobuf );
-extern void cache_invalidate ( struct io_buffer *iobuf );
+//extern void cache_clean ( struct io_buffer *iobuf );
+//extern void cache_invalidate ( struct io_buffer *iobuf );
 
 /**
  * Transmit packet
@@ -396,7 +396,7 @@ static int dwmac_transmit ( struct net_device *netdev,
 				       : : "r" ( foo ) );
 	}
 	} else {
-		cache_clean ( iobuf );
+		//cache_clean ( iobuf );
 	}
 
 
@@ -520,7 +520,7 @@ static void dwmac_poll_rx ( struct net_device *netdev ) {
 				       : : "r" ( foo ) );
 			}
 			} else {
-				cache_invalidate ( iobuf );
+				//cache_invalidate ( iobuf );
 			}
 
 			DBGC2 ( dwmac, "DWMAC %s RX %d complete (length "
@@ -610,52 +610,6 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	}
 
 	//
-	if ( 0 ) {
-		physaddr_t phys = 0xffef018000;
-		void *io = ioremap ( phys, 0x1000 );
-
-		DBGC ( dwmac, "*** PERISYS_SEL_ADDR_L = %08x\n",
-		       readl ( io + 0xd0 ) );
-	}
-
-	//
-	if ( 0 ) {
-		physaddr_t phys = 0xffef014000;
-		void *io = ioremap ( phys, 0x1000 );
-
-		DBGC ( dwmac, "*** GMAC0_SWRST = %08x\n",
-		       readl ( io + 0x68 ) );
-	}
-
-	//
-	if ( 0 ) {
-		physaddr_t phys = 0xffef010000;
-		void *io = ioremap ( phys, 0x4000 );
-
-		DBGC ( dwmac, "*** AP_SUBSYS GMAC_PLL_CFG0 = %#08x\n",
-		       readl ( io + 0x20 ) );
-		DBGC ( dwmac, "*** AP_SUBSYS GMAC_PLL_CFG1 = %#08x\n",
-		       readl ( io + 0x24 ) );
-		DBGC ( dwmac, "*** AP_SUBSYS GMAC_PLL_CFG2 = %#08x\n",
-		       readl ( io + 0x28 ) );
-		DBGC ( dwmac, "*** AP_SUBSYS GMAC_PLL_CFG3 = %#08x\n",
-		       readl ( io + 0x2c ) );
-	}
-
-	//
-	if ( 0 ) {
-		physaddr_t rphys = 0xffec003000;
-		void *rio = ioremap ( rphys, 0x1000 );
-		unsigned int i;
-
-		DBGC ( dwmac, "*** th1520 regs before reset:\n" );
-		for ( i = 0 ; i < 0x28 ; i += 4 ) {
-			DBGC ( dwmac, "*** reg %#lx => %#08x\n",
-			       ( rphys + i ), readl ( rio + i ) );
-		}
-	}
-
-	//
 	DBGC ( dwmac, "DWMAC %s before reset:\n", dwmac->name );
 	dwmac_dump ( dwmac );
 
@@ -674,21 +628,6 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	/* Reset the NIC */
 	if ( ( rc = dwmac_reset ( dwmac ) ) != 0 )
 		goto err_reset;
-
-
-	//
-	if ( 0 ) {
-		physaddr_t rphys = 0xffec003000;
-		void *rio = ioremap ( rphys, 0x1000 );
-		unsigned int i;
-
-		DBGC ( dwmac, "*** th1520 regs after reset:\n" );
-		for ( i = 0 ; i < 0x28 ; i += 4 ) {
-			DBGC ( dwmac, "*** reg %#lx => %#08x\n",
-			       ( rphys + i ), readl ( rio + i ) );
-		}
-	}
-
 
 	//
 	DBGC ( dwmac, "DWMAC %s after reset:\n", dwmac->name );
