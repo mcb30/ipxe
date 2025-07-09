@@ -308,8 +308,7 @@ static int dwmac_open ( struct net_device *netdev ) {
 	writel ( DWMAC_FILTER_PR, ( dwmac->regs + DWMAC_FILTER ) );
 
 	/* Enable transmit and receive */
-	//
-	writel ( ( DWMAC_OP_TXEN | DWMAC_OP_RXEN ) | 0x00200000,
+	writel ( ( DWMAC_OP_TSF | DWMAC_OP_TXEN | DWMAC_OP_RXEN ),
 		 ( dwmac->regs + DWMAC_OP ) );
 	//
 	writel ( ( DWMAC_CFG_TXEN | DWMAC_CFG_RXEN )  | 0x00202800,
@@ -429,6 +428,7 @@ static void dwmac_poll_tx ( struct net_device *netdev ) {
 		if ( tx->stat & cpu_to_le32 ( DWMAC_STAT_ERR ) ) {
 			DBGC ( dwmac, "DWMAC %s TX %d error %#08x\n",
 			       dwmac->name, tx_idx, le32_to_cpu ( tx->stat ) );
+			dwmac_dump ( dwmac );
 			netdev_tx_complete_next_err ( netdev, -EIO );
 		} else {
 			DBGC2 ( dwmac, "DWMAC %s TX %d complete\n",

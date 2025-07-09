@@ -94,6 +94,7 @@ union dwmac_mac {
 
 /** Operation mode register */
 #define DWMAC_OP DWMAC_DMA_REG ( 6 )
+#define DWMAC_OP_TSF		0x00200000	/**< TX store and forward */
 #define DWMAC_OP_TXEN		0x00002000	/**< TX enabled */
 #define DWMAC_OP_RXEN		0x00000002	/**< RX enabled */
 
