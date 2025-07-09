@@ -185,7 +185,8 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 	memset ( ring->desc, 0, ring->len );
 	for ( i = 0 ; i < ring->count ; i++ ) {
 		desc = &ring->desc[i];
-		desc->size = cpu_to_le16 ( DWMAC_RX_LEN );
+		desc->size = cpu_to_le16 ( DWMAC_RX_LEN |
+					   DWMAC_SIZE_RX_CHAIN );
 		desc->ctrl = ring->ctrl;
 		assert ( desc->ctrl & DWMAC_CTRL_CHAIN );
 		next = &ring->desc[ ( i + 1 ) & ( ring->count - 1 ) ];
@@ -250,10 +251,6 @@ static void dwmac_refill_rx ( struct dwmac *dwmac ) {
 
 		/* Populate receive descriptor */
 		rx->addr = cpu_to_le32 ( iob_dma ( iobuf ) );
-
-		//
-		rx->size |= cpu_to_le16 ( 0x4000 );
-		rx->ctrl = 0;
 		wmb();
 		//
 		rx->stat = cpu_to_le32 ( DWMAC_STAT_OWN ) | 0x85ee0320;

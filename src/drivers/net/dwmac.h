@@ -152,6 +152,9 @@ struct dwmac_descriptor {
 #define DWMAC_STAT_RX_LEN(x) \
 	( ( (x) >> 16 ) & 0x3fff )		/**< Frame length (RX) */
 
+/** Buffer size */
+#define DWMAC_SIZE_RX_CHAIN	0x4000		/**< Chained descriptor (RX) */
+
 /* Ring control */
 #define DWMAC_CTRL_TX_LAST	0x40		/**< Last segment (TX) */
 #define DWMAC_CTRL_TX_FIRST	0x20		/**< First segment (TX) */
