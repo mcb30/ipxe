@@ -147,13 +147,8 @@ static int dwmac_reset ( struct dwmac *dwmac ) {
 
 		/* Check for reset completion */
 		bus = readl ( dwmac->regs + DWMAC_BUS );
-		if ( ! ( bus & DWMAC_BUS_SWR ) ) {
-
-			//
-			writel ( 0x00010800, ( dwmac->regs + DWMAC_BUS ) );
-
+		if ( ! ( bus & DWMAC_BUS_SWR ) )
 			return 0;
-		}
 	}
 
 	DBGC ( dwmac, "DWMAC %s timed out waiting for reset\n",
@@ -566,10 +561,6 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 		goto err_ioremap;
 	}
 
-	//
-	DBGC ( dwmac, "DWMAC %s before reset:\n", dwmac->name );
-	dwmac_dump ( dwmac );
-
 	/* Fetch devicetree MAC address */
 	if ( ( rc = fdt_mac ( &sysfdt, offset, netdev ) ) != 0 ) {
 		DBGC ( dwmac, "DWMAC %s could not fetch MAC: %s\n",
@@ -585,11 +576,6 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	/* Reset the NIC */
 	if ( ( rc = dwmac_reset ( dwmac ) ) != 0 )
 		goto err_reset;
-
-	//
-	DBGC ( dwmac, "DWMAC %s after reset:\n", dwmac->name );
-	dwmac_dump ( dwmac );
-
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
