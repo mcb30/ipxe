@@ -136,10 +136,6 @@ static int dwmac_reset ( struct dwmac *dwmac ) {
 	unsigned int i;
 	uint32_t bus;
 
-	//
-	DBGC ( dwmac, "**** skip reset\n" );
-	return 0;
-
 	/* Trigger software reset */
 	writel ( DWMAC_BUS_SWR, ( dwmac->regs + DWMAC_BUS ) );
 
@@ -189,13 +185,6 @@ static int dwmac_create_ring ( struct dwmac *dwmac, struct dwmac_ring *ring ) {
 	ring->desc = dma_alloc ( dwmac->dma, &ring->map, ring->len, ring->len );
 	if ( ! ring->desc )
 		return -ENOMEM;
-
-	//
-	//ring->desc = ( void * ) ( virt_to_phys ( ring->desc ) +
-	//			  0xffffffc000000000ULL );
-	DBGC ( dwmac, "***** ring virt %p phys %#08lx DMA %#08lx\n",
-	       ring->desc, virt_to_phys ( ring->desc ),
-	       dma ( &ring->map, ring->desc ) );
 
 	/* Initialise descriptor ring */
 	memset ( ring->desc, 0, ring->len );
@@ -367,10 +356,6 @@ static void dwmac_close ( struct net_device *netdev ) {
 	dwmac_destroy_ring ( dwmac, &dwmac->tx );
 }
 
-//
-//extern void cache_clean ( struct io_buffer *iobuf );
-//extern void cache_invalidate ( struct io_buffer *iobuf );
-
 /**
  * Transmit packet
  *
@@ -383,22 +368,6 @@ static int dwmac_transmit ( struct net_device *netdev,
 	struct dwmac *dwmac = netdev->priv;
 	struct dwmac_descriptor *tx;
 	unsigned int tx_idx;
-
-	//
-	//dwmac_dump ( dwmac );
-
-	//
-	if ( 0 ) {
-	void *foo;
-	for ( foo = iobuf->data ; foo < ( iobuf->tail + 64 ) ; foo += 64 ) {
-		__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-				       "th.dcache.cva %0\n\t"
-				       : : "r" ( foo ) );
-	}
-	} else {
-		//cache_clean ( iobuf );
-	}
-
 
 	/* Get next transmit descriptor */
 	if ( ( dwmac->tx.prod - dwmac->tx.cons ) >= DWMAC_NUM_TX_DESC ) {
@@ -506,23 +475,11 @@ static void dwmac_poll_rx ( struct net_device *netdev ) {
 		if ( stat & DWMAC_STAT_ERR ) {
 			DBGC ( dwmac, "DWMAC %s RX %d error %#08x\n",
 			       dwmac->name, rx_idx, stat );
+			dwmac_dump ( dwmac );
 			netdev_rx_err ( netdev, iobuf, -EIO );
 		} else {
 			len = ( DWMAC_STAT_RX_LEN ( stat ) - 4 /* CRC */ );
 			iob_put ( iobuf, len );
-
-			//
-			if ( 0 ) {
-			void *foo;
-			for ( foo = iobuf->data ; foo < ( iobuf->tail + 64 ); foo += 64 ) {
-				__asm__ __volatile__ ( ".option arch, +xtheadcmo\n\t"
-						       "th.dcache.iva %0\n\t"
-				       : : "r" ( foo ) );
-			}
-			} else {
-				//cache_invalidate ( iobuf );
-			}
-
 			DBGC2 ( dwmac, "DWMAC %s RX %d complete (length "
 				"%zd)\n", dwmac->name, rx_idx, len );
 			netdev_rx ( netdev, iobuf );
@@ -595,12 +552,6 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 			    DWMAC_CTRL_CHAIN ) );
 	dwmac_init_ring ( &dwmac->rx, DWMAC_NUM_RX_DESC, DWMAC_RXBASE,
 			  DWMAC_CTRL_CHAIN );
-
-	//
-	if ( 1 && strcmp ( dwmac->name, "ethernet@ffe7060000" ) == 0 ) {
-		rc = -ENOTSUP;
-		goto err_ioremap;
-	}
 
 	/* Map registers */
 	dwmac->regs = dt_ioremap ( dt, offset, DWMAC_REG_IDX, DWMAC_REG_LEN );
