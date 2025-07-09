@@ -311,12 +311,9 @@ static int dwmac_open ( struct net_device *netdev ) {
 	writel ( ( DWMAC_OP_TXSF | DWMAC_OP_RXSF |
 		   DWMAC_OP_TXEN | DWMAC_OP_RXEN ),
 		 ( dwmac->regs + DWMAC_OP ) );
-	//
-	writel ( ( DWMAC_CFG_TXEN | DWMAC_CFG_RXEN )  | 0x00202800,
+	writel ( ( DWMAC_CFG_DO | DWMAC_CFG_FD |
+		   DWMAC_CFG_TXEN | DWMAC_CFG_RXEN ),
 		 ( dwmac->regs + DWMAC_CFG ) );
-
-	//
-	dwmac_dump ( dwmac );
 
 	/* Refill receive descriptor ring */
 	dwmac_refill_rx ( dwmac );

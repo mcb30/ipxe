@@ -24,6 +24,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 /** MAC configuration register */
 #define DWMAC_CFG DWMAC_MAC_REG ( 0 )
+#define DWMAC_CFG_DO		0x00002000	/**< Disable RX own frames */
+#define DWMAC_CFG_FD		0x00000800	/**< Full duplex */
 #define DWMAC_CFG_TXEN		0x00000008	/**< TX enabled */
 #define DWMAC_CFG_RXEN		0x00000004	/**< RX enabled */
 
