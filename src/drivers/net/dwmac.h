@@ -125,7 +125,12 @@ union dwmac_mac {
 /** Hardware feature register */
 #define DWMAC_FEATURE DWMAC_DMA_REG ( 22 )
 
-/** A frame descriptor */
+/** A frame descriptor
+ *
+ * We populate the descriptor with values that are valid for both
+ * normal and enhanced descriptor formats, to avoid needing to care
+ * about which version of the hardware we have.
+ */
 struct dwmac_descriptor {
 	/** Completion status */
 	uint32_t stat;
@@ -191,7 +196,7 @@ struct dwmac_ring {
  *
  * Must be a multiple of 16.
  */
-#define DWMAC_RX_LEN 1600 // 1536
+#define DWMAC_RX_LEN 1536
 
 /**
  * Initialise descriptor ring
