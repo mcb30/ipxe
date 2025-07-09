@@ -376,14 +376,9 @@ static int dwmac_transmit ( struct net_device *netdev,
 	/* Populate transmit descriptor */
 	tx->size = cpu_to_le16 ( iob_len ( iobuf ) );
 	tx->addr = cpu_to_le32 ( iob_dma ( iobuf ) );
-
-	//
-	tx->ctrl = 0;
-
-	//
 	wmb();
-	tx->stat = //cpu_to_le32 ( DWMAC_STAT_OWN );
-		cpu_to_le32 ( 0xb0100000 );
+	tx->stat = cpu_to_le32 ( DWMAC_STAT_OWN | DWMAC_STAT_TX_LAST |
+				 DWMAC_STAT_TX_FIRST | DWMAC_STAT_TX_CHAIN );
 	wmb();
 
 	/* Initiate transmission */

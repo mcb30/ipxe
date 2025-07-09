@@ -143,6 +143,9 @@ struct dwmac_descriptor {
 
 /* Completion status */
 #define DWMAC_STAT_OWN		0x80000000	/**< Owned by hardware */
+#define DWMAC_STAT_TX_LAST	0x20000000	/**< Last segment (TX) */
+#define DWMAC_STAT_TX_FIRST	0x10000000	/**< First segment (TX) */
+#define DWMAC_STAT_TX_CHAIN	0x00100000	/**< Chained descriptor (TX) */
 #define DWMAC_STAT_ERR		0x00008000	/**< Error summary */
 #define DWMAC_STAT_RX_FIRST	0x00000200	/**< First segment (RX) */
 #define DWMAC_STAT_RX_LAST	0x00000100	/**< Last segment (RX) */
