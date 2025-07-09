@@ -158,6 +158,34 @@ static int dwmac_reset ( struct dwmac *dwmac ) {
 
 /******************************************************************************
  *
+ * Link state
+ *
+ ******************************************************************************
+ */
+
+/**
+ * Check link state
+ *
+ * @v netdev		Network device
+ */
+static void dwmac_check_link ( struct net_device *netdev ) {
+	struct dwmac *dwmac = netdev->priv;
+	uint32_t gmii;
+
+	/* Read SGMII/RGMII link status */
+	gmii = readl ( dwmac->regs + DWMAC_GMII );
+	DBGC ( dwmac, "DWMAC %s GMII link status %#08x\n", dwmac->name, gmii );
+
+	/* Update network device */
+	if ( gmii & DWMAC_GMII_LINK ) {
+		netdev_link_up ( netdev );
+	} else {
+		netdev_link_down ( netdev );
+	}
+}
+
+/******************************************************************************
+ *
  * Network device interface
  *
  ******************************************************************************
@@ -308,6 +336,9 @@ static int dwmac_open ( struct net_device *netdev ) {
 
 	/* Refill receive descriptor ring */
 	dwmac_refill_rx ( dwmac );
+
+	/* Update link state */
+	dwmac_check_link ( netdev );
 
 	return 0;
 
@@ -486,8 +517,14 @@ static void dwmac_poll_rx ( struct net_device *netdev ) {
  */
 static void dwmac_poll ( struct net_device *netdev ) {
 	struct dwmac *dwmac = netdev->priv;
+	uint32_t status;
 
-	/* Poll for TX competions */
+	/* Check for link status changes */
+	status = readl ( dwmac->regs + DWMAC_STATUS );
+	if ( status & DWMAC_STATUS_LINK )
+		dwmac_check_link ( netdev );
+
+	/* Poll for TX competions, if applicable */
 	dwmac_poll_tx ( netdev );
 
 	/* Poll for RX completions */
@@ -572,8 +609,8 @@ static int dwmac_probe ( struct dt_device *dt, unsigned int offset ) {
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
 
-	/* Mark as link up; we don't yet handle link state */
-	netdev_link_up ( netdev );
+	/* Update link state */
+	dwmac_check_link ( netdev );
 
 	return 0;
 

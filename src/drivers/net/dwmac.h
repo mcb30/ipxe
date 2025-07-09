@@ -62,6 +62,7 @@ union dwmac_mac {
 
 /** SGMII/RGMII status register */
 #define DWMAC_GMII DWMAC_MAC_REG ( 54 )
+#define DWMAC_GMII_LINK		0x00000008	/**< Link up */
 
 /** DMA register block */
 #define DWMAC_DMA 0x1000
@@ -93,6 +94,7 @@ union dwmac_mac {
 
 /** Status register */
 #define DWMAC_STATUS DWMAC_DMA_REG ( 5 )
+#define DWMAC_STATUS_LINK	0x04000000	/**< Link status change */
 
 /** Operation mode register */
 #define DWMAC_OP DWMAC_DMA_REG ( 6 )
