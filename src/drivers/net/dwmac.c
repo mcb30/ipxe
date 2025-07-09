@@ -308,7 +308,8 @@ static int dwmac_open ( struct net_device *netdev ) {
 	writel ( DWMAC_FILTER_PR, ( dwmac->regs + DWMAC_FILTER ) );
 
 	/* Enable transmit and receive */
-	writel ( ( DWMAC_OP_TSF | DWMAC_OP_TXEN | DWMAC_OP_RXEN ),
+	writel ( ( DWMAC_OP_TXSF | DWMAC_OP_RXSF |
+		   DWMAC_OP_TXEN | DWMAC_OP_RXEN ),
 		 ( dwmac->regs + DWMAC_OP ) );
 	//
 	writel ( ( DWMAC_CFG_TXEN | DWMAC_CFG_RXEN )  | 0x00202800,
@@ -438,6 +439,9 @@ static void dwmac_poll_tx ( struct net_device *netdev ) {
 	}
 }
 
+//
+#include <ipxe/zicbom.h>
+
 /**
  * Poll for received packets
  *
@@ -480,6 +484,11 @@ static void dwmac_poll_rx ( struct net_device *netdev ) {
 		} else {
 			len = ( DWMAC_STAT_RX_LEN ( stat ) - 4 /* CRC */ );
 			iob_put ( iobuf, len );
+
+			//
+			if ( 1 )
+				cache_invalidate ( iobuf->data, len );
+
 			DBGC2 ( dwmac, "DWMAC %s RX %d complete (length "
 				"%zd)\n", dwmac->name, rx_idx, len );
 			netdev_rx ( netdev, iobuf );
