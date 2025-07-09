@@ -139,8 +139,6 @@ struct dwmac_descriptor {
 	uint32_t addr;
 	/** Next descriptor address */
 	uint32_t next;
-	/** Padding */
-	uint8_t pad[48];
 } __attribute__ (( packed ));
 
 /* Completion status */
