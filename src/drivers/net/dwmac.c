@@ -252,8 +252,7 @@ static void dwmac_refill_rx ( struct dwmac *dwmac ) {
 		/* Populate receive descriptor */
 		rx->addr = cpu_to_le32 ( iob_dma ( iobuf ) );
 		wmb();
-		//
-		rx->stat = cpu_to_le32 ( DWMAC_STAT_OWN ) | 0x85ee0320;
+		rx->stat = cpu_to_le32 ( DWMAC_STAT_OWN );
 
 		/* Record I/O buffer */
 		assert ( dwmac->rx_iobuf[rx_idx] == NULL );
