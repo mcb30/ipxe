@@ -31,6 +31,12 @@ FILE_LICENCE ( GPL2_OR_LATER );
 //#define EARLY_UART_REG_BASE	0x10000000
 //#define EARLY_UART_REG_SHIFT	0
 
+
+#define EARLY_UART_MODEL       8250
+#define EARLY_UART_REG_BASE    0xffe7014000
+#define EARLY_UART_REG_SHIFT   2
+
+
 #include <config/named.h>
 #include NAMED_CONFIG(serial.h)
 #include <config/local/serial.h>
