@@ -32,6 +32,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <byteswap.h>
 #include <ipxe/malloc.h>
 #include <ipxe/pci.h>
+#include <ipxe/devtree.h>
 #include <ipxe/usb.h>
 #include <ipxe/init.h>
 #include <ipxe/profile.h>
@@ -3213,6 +3214,10 @@ static int xhci_root_speed ( struct usb_hub *hub, struct usb_port *port ) {
 	csc = ( portsc & XHCI_PORTSC_CSC );
 	psiv = XHCI_PORTSC_PSIV ( portsc );
 
+
+	//
+	xhci_dump_port ( xhci, port->address );
+
 	/* Record disconnections and clear changes */
 	port->disconnected |= csc;
 	portsc &= ( XHCI_PORTSC_PRESERVE | XHCI_PORTSC_CHANGE );
@@ -3363,7 +3368,7 @@ static void xhci_pch_undo ( struct xhci_device *xhci, struct pci_device *pci ) {
  * @v pci		PCI device
  * @ret rc		Return status code
  */
-static int xhci_probe ( struct pci_device *pci ) {
+static int xhci_pci_probe ( struct pci_device *pci ) {
 	struct xhci_device *xhci;
 	struct usb_port *port;
 	unsigned long bar_start;
@@ -3456,7 +3461,7 @@ static int xhci_probe ( struct pci_device *pci ) {
  *
  * @v pci		PCI device
  */
-static void xhci_remove ( struct pci_device *pci ) {
+static void xhci_pci_remove ( struct pci_device *pci ) {
 	struct xhci_device *xhci = pci_get_drvdata ( pci );
 	struct usb_bus *bus = xhci->bus;
 	uint16_t command;
@@ -3493,20 +3498,148 @@ static void xhci_remove ( struct pci_device *pci ) {
 }
 
 /** XHCI PCI device IDs */
-static struct pci_device_id xhci_ids[] = {
+static struct pci_device_id xhci_pci_ids[] = {
 	PCI_ROM ( 0x8086, 0x9d2f, "xhci-skylake", "xHCI (Skylake)", ( XHCI_PCH | XHCI_BAD_PSIV ) ),
 	PCI_ROM ( 0x8086, 0xffff, "xhci-pch", "xHCI (Intel PCH)", XHCI_PCH ),
 	PCI_ROM ( 0xffff, 0xffff, "xhci", "xHCI", 0 ),
 };
 
 /** XHCI PCI driver */
-struct pci_driver xhci_driver __pci_driver = {
-	.ids = xhci_ids,
-	.id_count = ( sizeof ( xhci_ids ) / sizeof ( xhci_ids[0] ) ),
+struct pci_driver xhci_pci_driver __pci_driver = {
+	.ids = xhci_pci_ids,
+	.id_count = ( sizeof ( xhci_pci_ids ) / sizeof ( xhci_pci_ids[0] ) ),
 	.class = PCI_CLASS_ID ( PCI_CLASS_SERIAL, PCI_CLASS_SERIAL_USB,
 				PCI_CLASS_SERIAL_USB_XHCI ),
-	.probe = xhci_probe,
-	.remove = xhci_remove,
+	.probe = xhci_pci_probe,
+	.remove = xhci_pci_remove,
+};
+
+/**
+ * Probe devicetree device
+ *
+ * @v dt		Devicetree device
+ * @v offset		Starting node offset
+ * @ret rc		Return status code
+ */
+static int xhci_dt_probe ( struct dt_device *dt, unsigned int offset ) {
+	struct xhci_device *xhci;
+	struct usb_port *port;
+	unsigned int i;
+	int rc;
+
+	/* Allocate and initialise structure */
+	xhci = zalloc ( sizeof ( *xhci ) );
+	if ( ! xhci ) {
+		rc = -ENOMEM;
+		goto err_alloc;
+	}
+	xhci->name = dt->name;
+
+
+	//
+	void *foo = ioremap ( 0xffec000000, 0x100000 );
+	DBG ( "*** MISCSYS_USB_CLK_CTRL = %#08x\n",
+	      readl ( foo + 0x2c104 ) );
+	DBG ( "*** REF_SSP_EN = %#08x\n",
+	      readl ( foo + 0x3f034 ) );
+	DBG ( "*** USB3_DRD_SWRST = %#08x\n",
+	      readl ( foo + 0x2c014 ) );
+
+	//
+	writel ( 1, foo + 0x3f034 );
+	DBG ( "*** REF_SSP_EN = %#08x\n",
+	      readl ( foo + 0x3f034 ) );
+
+	/* Map registers */
+	xhci->regs = dt_ioremap ( dt, offset, 0, 0 );
+	if ( ! xhci->regs ) {
+		rc = -ENODEV;
+		goto err_ioremap;
+	}
+
+	/* Initialise xHCI device */
+	xhci_init ( xhci, xhci->regs );
+
+	/* Configure DMA device */
+	xhci->dma = &dt->dma;
+	if ( xhci->addr64 )
+		dma_set_mask_64bit ( xhci->dma );
+
+	/* Reset device */
+	if ( ( rc = xhci_reset ( xhci ) ) != 0 )
+		goto err_reset;
+
+	/* Allocate USB bus */
+	xhci->bus = alloc_usb_bus ( &dt->dev, xhci->ports, XHCI_MTU,
+				    &xhci_operations );
+	if ( ! xhci->bus ) {
+		rc = -ENOMEM;
+		goto err_alloc_bus;
+	}
+	usb_bus_set_hostdata ( xhci->bus, xhci );
+	usb_hub_set_drvdata ( xhci->bus->hub, xhci );
+
+	/* Set port protocols */
+	for ( i = 1 ; i <= xhci->ports ; i++ ) {
+		port = usb_port ( xhci->bus->hub, i );
+		port->protocol = xhci_port_protocol ( xhci, i );
+	}
+
+	/* Register USB bus */
+	if ( ( rc = register_usb_bus ( xhci->bus ) ) != 0 )
+		goto err_register;
+
+	dt_set_drvdata ( dt, xhci );
+	return 0;
+
+	unregister_usb_bus ( xhci->bus );
+ err_register:
+	free_usb_bus ( xhci->bus );
+ err_alloc_bus:
+	xhci_reset ( xhci );
+ err_reset:
+	iounmap ( xhci->regs );
+ err_ioremap:
+	free ( xhci );
+ err_alloc:
+	return rc;
+}
+
+/**
+ * Remove devicetree device
+ *
+ * @v dt		Devicetree device
+ */
+static void xhci_dt_remove ( struct dt_device *dt ) {
+	struct xhci_device *xhci = dt_get_drvdata ( dt );
+	struct usb_bus *bus = xhci->bus;
+
+	/* Unregister and free USB bus */
+	unregister_usb_bus ( bus );
+	free_usb_bus ( bus );
+
+	/* Reset device */
+	xhci_reset ( xhci );
+
+	/* Unmap registers */
+	iounmap ( xhci->regs );
+
+	/* Free device */
+	free ( xhci );
+}
+
+/** XHCI compatible model identifiers */
+static const char * xhci_dt_ids[] = {
+	"snps,dwc3",
+};
+
+/** XHCI devicetree driver */
+struct dt_driver xhci_dt_driver __dt_driver = {
+	.name = "xhci",
+	.ids = xhci_dt_ids,
+	.id_count = ( sizeof ( xhci_dt_ids ) / sizeof ( xhci_dt_ids[0] ) ),
+	.probe = xhci_dt_probe,
+	.remove = xhci_dt_remove,
 };
 
 /**
