@@ -3552,6 +3552,7 @@ static int xhci_dt_probe ( struct dt_device *dt, unsigned int offset ) {
 	/* Initialise xHCI device */
 	//
 	void *foo = ioremap ( 0xffec000000, 0x100000 );
+	void *gpio = ioremap ( 0xfffff41000, 0x1000 );
 
 	uint32_t gctl = readl ( xhci->regs + 0xc110 );
 	DBG ( "*** GCTL = %#08x\n", gctl );
@@ -3562,6 +3563,20 @@ static int xhci_dt_probe ( struct dt_device *dt, unsigned int offset ) {
 	gctl |= ( 1 << 12 );
 	writel ( gctl, xhci->regs + 0xc110 );
 	DBG ( "*** GCTL = %#08x\n", readl ( xhci->regs + 0xc110 ) );
+
+	uint32_t dr = readl ( gpio + 0x0 );
+	uint32_t ddr = readl ( gpio + 0x4 );
+	DBG ( "*** SWPORTA_DR = %#08x\n", dr );
+	DBG ( "*** SWPORTA_DDR = %#08x\n", ddr );
+	DBG ( "*** SWPORTA_CTL = %#08x\n", readl ( gpio + 0x8 ) );
+	dr |= ( 1 << 4 );
+	writel ( dr, gpio + 0x0 );
+	ddr |= ( 1 << 4 );
+	writel ( ddr, gpio + 0x4 );
+	dr = readl ( gpio + 0x0 );
+	ddr = readl ( gpio + 0x4 );
+	DBG ( "*** SWPORTA_DR = %#08x\n", dr );
+	DBG ( "*** SWPORTA_DDR = %#08x\n", ddr );
 
 	DBG ( "*** MISCSYS_USB_CLK_CTRL = %#08x\n",
 	      readl ( foo + 0x2c104 ) );
