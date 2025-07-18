@@ -3566,6 +3566,7 @@ static int xhci_dt_probe ( struct dt_device *dt, unsigned int offset ) {
 
 	uint32_t dr = readl ( gpio + 0x0 );
 	uint32_t ddr = readl ( gpio + 0x4 );
+	DBG ( "*** hubswitch:\n" );
 	DBG ( "*** SWPORTA_DR = %#08x\n", dr );
 	DBG ( "*** SWPORTA_DDR = %#08x\n", ddr );
 	DBG ( "*** SWPORTA_CTL = %#08x\n", readl ( gpio + 0x8 ) );
@@ -3606,6 +3607,22 @@ static int xhci_dt_probe ( struct dt_device *dt, unsigned int offset ) {
 	writel ( 1, foo + 0x3f034 );
 	DBG ( "*** REF_SSP_EN = %#08x\n",
 	      readl ( foo + 0x3f034 ) );
+
+	//
+	DBG ( "*** vbus:\n" );
+	dr = readl ( foo + 0x6000 );
+	ddr = readl ( foo + 0x6004 );
+	DBG ( "*** SWPORTA_DR = %#08x\n", dr );
+	DBG ( "*** SWPORTA_DDR = %#08x\n", ddr );
+	DBG ( "*** SWPORTA_CTL = %#08x\n", readl ( foo + 0x6008 ) );
+	dr |= ( 1 << 0x16 );
+	ddr |= ( 1 << 0x16 );
+	writel ( dr, ( foo + 0x6000 ) );
+	writel ( ddr, ( foo + 0x6004 ) );
+	dr = readl ( foo + 0x6000 );
+	ddr = readl ( foo + 0x6004 );
+	DBG ( "*** SWPORTA_DR = %#08x\n", dr );
+	DBG ( "*** SWPORTA_DDR = %#08x\n", ddr );
 
 	/* Initialise xHCI device */
 	xhci_init ( xhci, xhci->regs );
