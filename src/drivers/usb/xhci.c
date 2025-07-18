@@ -3096,9 +3096,16 @@ static int xhci_root_open ( struct usb_hub *hub ) {
 		     ( ( portsc & XHCI_PORTSC_PLS_MASK ) ==
 		       XHCI_PORTSC_PLS_DISABLED ) ) {
 			/* Force link state to RxDetect */
+
+			DBG ( "*** forcing RxDetect\n" );
+
 			portsc &= XHCI_PORTSC_PRESERVE;
 			portsc |= ( XHCI_PORTSC_PLS_RXDETECT | XHCI_PORTSC_LWS);
 			writel ( portsc, xhci->op + XHCI_OP_PORTSC ( i ) );
+
+
+			uint32_t foo = readl ( xhci->op + XHCI_OP_PORTSC ( i ) );
+			DBG ( "*** portsc = %08x\n", foo );
 		}
 	}
 
@@ -3535,27 +3542,55 @@ static int xhci_dt_probe ( struct dt_device *dt, unsigned int offset ) {
 	}
 	xhci->name = dt->name;
 
-
-	//
-	void *foo = ioremap ( 0xffec000000, 0x100000 );
-	DBG ( "*** MISCSYS_USB_CLK_CTRL = %#08x\n",
-	      readl ( foo + 0x2c104 ) );
-	DBG ( "*** REF_SSP_EN = %#08x\n",
-	      readl ( foo + 0x3f034 ) );
-	DBG ( "*** USB3_DRD_SWRST = %#08x\n",
-	      readl ( foo + 0x2c014 ) );
-
-	//
-	writel ( 1, foo + 0x3f034 );
-	DBG ( "*** REF_SSP_EN = %#08x\n",
-	      readl ( foo + 0x3f034 ) );
-
 	/* Map registers */
 	xhci->regs = dt_ioremap ( dt, offset, 0, 0 );
 	if ( ! xhci->regs ) {
 		rc = -ENODEV;
 		goto err_ioremap;
 	}
+
+	/* Initialise xHCI device */
+	//
+	void *foo = ioremap ( 0xffec000000, 0x100000 );
+
+	uint32_t gctl = readl ( xhci->regs + 0xc110 );
+	DBG ( "*** GCTL = %#08x\n", gctl );
+	writel ( ( gctl | ( 1 << 11 ) ), xhci->regs + 0xc110 );
+	mdelay ( 100 );
+	writel ( gctl, xhci->regs + 0xc110 );
+	gctl &= ~( 3 << 12 );
+	gctl |= ( 1 << 12 );
+	writel ( gctl, xhci->regs + 0xc110 );
+	DBG ( "*** GCTL = %#08x\n", readl ( xhci->regs + 0xc110 ) );
+
+	DBG ( "*** MISCSYS_USB_CLK_CTRL = %#08x\n",
+	      readl ( foo + 0x2c104 ) );
+	DBG ( "*** USB3_DRD_SWRST = %#08x\n",
+	      readl ( foo + 0x2c014 ) );
+
+	DBG ( "*** USB_CLK_GATE_STATUS = %#08x\n",
+	      readl ( foo + 0x3f000 ) );
+	DBG ( "*** USBCTL_CLK_CTRL0 = %#08x\n",
+	      readl ( foo + 0x3f01c ) );
+	DBG ( "*** USBCTL_CLK_CTRL1 = %#08x\n",
+	      readl ( foo + 0x3f020 ) );
+	DBG ( "*** REF_SSP_EN = %#08x\n",
+	      readl ( foo + 0x3f034 ) );
+	DBG ( "*** USB_SYS = %#08x\n",
+	      readl ( foo + 0x3f03c ) );
+	DBG ( "*** USB_HOST_STATUS = %#08x\n",
+	      readl ( foo + 0x3f040 ) );
+	DBG ( "*** USB_HOST_CTRL = %#08x\n",
+	      readl ( foo + 0x3f044 ) );
+	DBG ( "*** USBPHY_HOST_CTRL = %#08x\n",
+	      readl ( foo + 0x3f048 ) );
+	DBG ( "*** USBPHY_HOST_STATUS = %#08x\n",
+	      readl ( foo + 0x3f04c ) );
+
+	//
+	writel ( 1, foo + 0x3f034 );
+	DBG ( "*** REF_SSP_EN = %#08x\n",
+	      readl ( foo + 0x3f034 ) );
 
 	/* Initialise xHCI device */
 	xhci_init ( xhci, xhci->regs );
