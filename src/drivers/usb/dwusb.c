@@ -29,6 +29,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/timer.h>
 #include <ipxe/devtree.h>
 #include <ipxe/fdt.h>
+#include <ipxe/gpio.h>
 #include "dwusb.h"
 
 /** @file
@@ -78,6 +79,17 @@ static int dwusb_probe ( struct dt_device *dt, unsigned int offset ) {
 
 	/* Initialise xHCI device */
 	xhci_init ( xhci );
+
+	//
+	struct gpios *hubswitch = gpios_find ( BUS_TYPE_DT, 0x39 );
+	DBG ( "*** hubswitch via %s\n", hubswitch->dev->name );
+	gpio_out ( &hubswitch->gpio[0x04], 1 );
+	gpio_config ( &hubswitch->gpio[0x04], GPIO_CFG_OUTPUT );
+	//
+	struct gpios *vbus = gpios_find ( BUS_TYPE_DT, 0x55 );
+	DBG ( "*** vbus via %s\n", vbus->dev->name );
+	gpio_out ( &vbus->gpio[0x16], 1 );
+	gpio_config ( &vbus->gpio[0x16], GPIO_CFG_OUTPUT );
 
 	/* Register xHCI device */
 	if ( ( rc = xhci_register ( xhci ) ) != 0 ) {
