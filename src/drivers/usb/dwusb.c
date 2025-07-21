@@ -79,6 +79,54 @@ static int dwusb_probe ( struct dt_device *dt, unsigned int offset ) {
 	/* Initialise xHCI device */
 	xhci_init ( xhci );
 
+
+
+
+	/* Initialise xHCI device */
+	//
+	void *foo = ioremap ( 0xffec000000, 0x100000 );
+	void *gpio = ioremap ( 0xfffff41000, 0x1000 );
+
+	uint32_t dr = readl ( gpio + 0x0 );
+	uint32_t ddr = readl ( gpio + 0x4 );
+	DBG ( "*** hubswitch:\n" );
+	DBG ( "*** SWPORTA_DR = %#08x\n", dr );
+	DBG ( "*** SWPORTA_DDR = %#08x\n", ddr );
+	DBG ( "*** SWPORTA_CTL = %#08x\n", readl ( gpio + 0x8 ) );
+	dr |= ( 1 << 4 );
+	writel ( dr, gpio + 0x0 );
+	ddr |= ( 1 << 4 );
+	writel ( ddr, gpio + 0x4 );
+	dr = readl ( gpio + 0x0 );
+	ddr = readl ( gpio + 0x4 );
+	DBG ( "*** SWPORTA_DR = %#08x\n", dr );
+	DBG ( "*** SWPORTA_DDR = %#08x\n", ddr );
+
+	// seems not to be needed
+	//
+	//writel ( 1, foo + 0x3f034 );
+	//DBG ( "*** REF_SSP_EN = %#08x\n",
+	//      readl ( foo + 0x3f034 ) );
+
+	//
+	DBG ( "*** vbus:\n" );
+	dr = readl ( foo + 0x6000 );
+	ddr = readl ( foo + 0x6004 );
+	DBG ( "*** SWPORTA_DR = %#08x\n", dr );
+	DBG ( "*** SWPORTA_DDR = %#08x\n", ddr );
+	DBG ( "*** SWPORTA_CTL = %#08x\n", readl ( foo + 0x6008 ) );
+	dr |= ( 1 << 0x16 );
+	ddr |= ( 1 << 0x16 );
+	writel ( dr, ( foo + 0x6000 ) );
+	writel ( ddr, ( foo + 0x6004 ) );
+	dr = readl ( foo + 0x6000 );
+	ddr = readl ( foo + 0x6004 );
+	DBG ( "*** SWPORTA_DR = %#08x\n", dr );
+	DBG ( "*** SWPORTA_DDR = %#08x\n", ddr );
+
+
+
+
 	/* Register xHCI device */
 	if ( ( rc = xhci_register ( xhci ) ) != 0 ) {
 		DBGC ( xhci, "XHCI %s could not register: %s\n",
