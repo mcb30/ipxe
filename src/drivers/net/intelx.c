@@ -130,6 +130,101 @@ static int intelx_reset ( struct intel_nic *intel ) {
 
 /******************************************************************************
  *
+ * I2C interface
+ *
+ ******************************************************************************
+ */
+
+/**
+ * Read I2C line status
+ *
+ * @v basher		Bit-bashing interface
+ * @v bit_id		Bit number
+ * @ret zero		Input is a logic 0
+ * @ret non-zero	Input is a logic 1
+ */
+static int intelx_i2c_read_bit ( struct bit_basher *basher,
+				 unsigned int bit_id ) {
+	struct intel_nic *intel =
+		container_of ( basher, struct intel_nic, i2cbit.basher );
+	uint32_t i2cctl;
+
+	/* Sanity check */
+	assert ( bit_id == I2C_BIT_SDA );
+
+	/* Read bit */
+	i2cctl = readl ( intel->regs + INTELX_I2CCTL );
+	return ( i2cctl & INTELX_I2CCTL_DATA_IN );
+}
+
+/**
+ * Write I2C line status
+ *
+ * @v basher		Bit-bashing interface
+ * @v bit_id		Bit number
+ * @v data		Value to write
+ */
+static void intelx_i2c_write_bit ( struct bit_basher *basher,
+				   unsigned int bit_id, unsigned long data ) {
+	struct intel_nic *intel =
+		container_of ( basher, struct intel_nic, i2cbit.basher );
+	static const uint8_t masks[] = {
+		[I2C_BIT_SCL] = INTELX_I2CCTL_CLK_OUT,
+		[I2C_BIT_SDA] = INTELX_I2CCTL_DATA_OUT,
+	};
+	uint32_t i2cctl;
+	uint32_t mask;
+
+	/* Sanity check */
+	assert ( bit_id < ( sizeof ( masks ) / sizeof ( masks[0] ) ) );
+
+	/* Write bit */
+	mask = masks[bit_id];
+	i2cctl = readl ( intel->regs + INTELX_I2CCTL );
+	i2cctl &= ~mask;
+	if ( data )
+		i2cctl |= mask;
+	writel ( i2cctl, ( intel->regs + INTELX_I2CCTL ) );
+}
+
+/** I2C bit-bashing interface operations */
+static struct bit_basher_operations intelx_i2c_basher_ops = {
+	.read = intelx_i2c_read_bit,
+	.write = intelx_i2c_write_bit,
+};
+
+/**
+ * Initialise I2C bus
+ *
+ * @v intel		Intel device
+ * @ret rc		Return status code
+ */
+static int intelx_i2c_init ( struct intel_nic *intel ) {
+	int rc;
+
+	/* Initialise bus */
+	if ( ( rc = init_i2c_bit_basher ( &intel->i2cbit,
+					  &intelx_i2c_basher_ops ) ) != 0 ) {
+		DBGC ( intel, "INTEL %p could not initialise I2C bus: %s\n",
+		       intel, strerror ( rc ) );
+		return rc;
+	}
+
+	/* Initialise PHY device */
+	init_i2c_eeprom ( &intel->phy, INTELX_PHY_ADDRESS );
+
+	//
+	struct i2c_interface *i2c = &intel->i2cbit.i2c;
+	uint8_t foo[0x40];
+	memset ( foo, 0xaa, sizeof ( foo ) );
+	i2c->read ( i2c, &intel->phy, 0, foo, sizeof ( foo ) );
+	DBGC_HDA ( intel, 0, foo, sizeof ( foo ) );
+
+	return 0;
+}
+
+/******************************************************************************
+ *
  * Link state
  *
  ******************************************************************************
@@ -142,7 +237,13 @@ static int intelx_reset ( struct intel_nic *intel ) {
  */
 static void intelx_check_link ( struct net_device *netdev ) {
 	struct intel_nic *intel = netdev->priv;
+	uint32_t autoc;
 	uint32_t links;
+
+	/* Read autonegotiation control register */
+	autoc = readl ( intel->regs + INTELX_AUTOC );
+	DBGC ( intel, "INTEL %p autonegotiation control is %08x\n",
+	       intel, autoc );
 
 	/* Read link status */
 	links = readl ( intel->regs + INTELX_LINKS );
@@ -257,6 +358,11 @@ static int intelx_open ( struct net_device *netdev ) {
 
 	/* Fill receive ring */
 	intel_refill_rx ( intel );
+
+	//
+	DBGC ( intel, "*** hacking AUTOC.LMS\n" );
+	//writel ( 0xc09c5004, intel->regs + INTELX_AUTOC );
+	writel ( ( 0xc09c1004 | ( 1 << 13 ) ), intel->regs + INTELX_AUTOC );
 
 	/* Update link state */
 	intelx_check_link ( netdev );
@@ -415,6 +521,11 @@ static int intelx_probe ( struct pci_device *pci ) {
 	dma_set_mask_64bit ( intel->dma );
 	netdev->dma = intel->dma;
 
+	//
+	uint32_t autoc;
+	autoc = readl ( intel->regs + INTELX_AUTOC );
+	DBGC ( intel, "*** autoc = %#08x\n", autoc );
+
 	/* Reset the NIC */
 	if ( ( rc = intelx_reset ( intel ) ) != 0 )
 		goto err_reset;
@@ -422,6 +533,10 @@ static int intelx_probe ( struct pci_device *pci ) {
 	/* Fetch MAC address */
 	if ( ( rc = intelx_fetch_mac ( intel, netdev->hw_addr ) ) != 0 )
 		goto err_fetch_mac;
+
+	/* Initialise I2C */
+	if ( ( rc = intelx_i2c_init ( intel ) ) != 0 )
+		goto err_i2c;
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
@@ -434,6 +549,7 @@ static int intelx_probe ( struct pci_device *pci ) {
 
 	unregister_netdev ( netdev );
  err_register_netdev:
+ err_i2c:
  err_fetch_mac:
 	intelx_reset ( intel );
  err_reset:

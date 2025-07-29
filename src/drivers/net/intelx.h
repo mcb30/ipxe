@@ -21,6 +21,16 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 /** Time to delay for device reset, in milliseconds */
 #define INTELX_RESET_DELAY_MS 20
 
+/** I2C control register */
+#define INTELX_I2CCTL 0x00028UL
+#define INTELX_I2CCTL_CLK_IN	0x00000001UL	/**< SCL input */
+#define INTELX_I2CCTL_CLK_OUT	0x00000002UL	/**< SCL output */
+#define INTELX_I2CCTL_DATA_IN	0x00000004UL	/**< SDA input */
+#define INTELX_I2CCTL_DATA_OUT	0x00000008UL	/**< SDA output */
+
+/** PHY I2C address */
+#define INTELX_PHY_ADDRESS 0x50
+
 /** Extended Interrupt Cause Read Register */
 #define INTELX_EICR 0x00800UL
 #define INTELX_EIRQ_RX0		0x00000001UL	/**< RX0 (via IVAR) */
@@ -109,6 +119,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define INTELX_MAXFRS_MFS_DEFAULT \
 	INTELX_MAXFRS_MFS ( ETH_FRAME_LEN + 4 /* VLAN */ + 4 /* CRC */ )
 #define INTELX_MAXFRS_MFS_MASK	INTELX_MAXFRS_MFS ( 0xffff )
+
+/** Auto Negotiation Control Register */
+#define INTELX_AUTOC 0x042a0UL
 
 /** Link Status Register */
 #define INTELX_LINKS 0x042a4UL

@@ -13,6 +13,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/if_ether.h>
 #include <ipxe/nvs.h>
 #include <ipxe/dma.h>
+#include <ipxe/i2c.h>
 
 /** Intel BAR size */
 #define INTEL_BAR_SIZE ( 128 * 1024 )
@@ -303,6 +304,11 @@ struct intel_nic {
 	uint32_t eerd_done;
 	/** EEPROM address shift */
 	unsigned int eerd_addr_shift;
+
+	/** I2C interface */
+	struct i2c_bit_basher i2cbit;
+	/** I2C PHY device */
+	struct i2c_device phy;
 
 	/** Mailbox */
 	struct intel_mailbox mbox;
