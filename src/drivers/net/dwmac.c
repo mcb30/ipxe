@@ -650,6 +650,8 @@ static void dwmac_remove ( struct dt_device *dt ) {
 /** DesignWare MAC compatible model identifiers */
 static const char * dwmac_ids[] = {
 	"thead,light-dwmac",
+	//
+	"starfive,jh7110-eqos-5.20",
 	"snps,dwmac",
 };
 
