@@ -210,9 +210,7 @@ static int i2c_select ( struct bit_basher *basher, struct i2c_device *i2cdev,
 	i2c_start ( basher );
 
 	/* Calculate address to appear on bus */
-	address = ( ( ( i2cdev->dev_addr |
-			( offset >> ( 8 * i2cdev->word_addr_len ) ) ) << 1 )
-		    | direction );
+	address = ( ( i2c_address ( i2cdev, offset ) << 1 ) | direction );
 
 	/* Send address a byte at a time */
 	for ( shift = ( 8 * ( i2cdev->dev_addr_len - 1 ) ) ;
@@ -271,7 +269,7 @@ static int i2c_reset ( struct bit_basher *basher ) {
 /**
  * Read data from I2C device via bit-bashing interface
  *
- * @v i2c		I2C interface
+ * @v i2c		I2C bus
  * @v i2cdev		I2C device
  * @v offset		Starting offset within the device
  * @v data		Data buffer
@@ -281,12 +279,12 @@ static int i2c_reset ( struct bit_basher *basher ) {
  * Note that attempting to read zero bytes of data is a valid way to
  * check for I2C device presence.
  */
-static int i2c_bit_read ( struct i2c_interface *i2c,
-			  struct i2c_device *i2cdev, unsigned int offset,
-			  uint8_t *data, unsigned int len ) {
+static int i2c_bit_read ( struct i2c_bus *i2c, struct i2c_device *i2cdev,
+			  unsigned int offset, void *data, size_t len ) {
 	struct i2c_bit_basher *i2cbit
 		= container_of ( i2c, struct i2c_bit_basher, i2c );
 	struct bit_basher *basher = &i2cbit->basher;
+	uint8_t *byte = data;
 	int rc = 0;
 
 	DBGC ( basher, "I2CBIT %p reading from device %x: ",
@@ -294,7 +292,7 @@ static int i2c_bit_read ( struct i2c_interface *i2c,
 
 	open_bit ( basher );
 
-	for ( ; ; data++, offset++ ) {
+	for ( ; ; byte++, offset++ ) {
 
 		/* Select device for writing */
 		if ( ( rc = i2c_select ( basher, i2cdev, offset,
@@ -315,8 +313,8 @@ static int i2c_bit_read ( struct i2c_interface *i2c,
 			break;
 
 		/* Read byte */
-		*data = i2c_recv_byte ( basher );
-		DBGC ( basher, "%02x ", *data );
+		*byte = i2c_recv_byte ( basher );
+		DBGC ( basher, "%02x ", *byte );
 	}
 	
 	DBGC ( basher, "%s\n", ( rc ? "failed" : "" ) );
@@ -328,7 +326,7 @@ static int i2c_bit_read ( struct i2c_interface *i2c,
 /**
  * Write data to I2C device via bit-bashing interface
  *
- * @v i2c		I2C interface
+ * @v i2c		I2C bus
  * @v i2cdev		I2C device
  * @v offset		Starting offset within the device
  * @v data		Data buffer
@@ -338,12 +336,12 @@ static int i2c_bit_read ( struct i2c_interface *i2c,
  * Note that attempting to write zero bytes of data is a valid way to
  * check for I2C device presence.
  */
-static int i2c_bit_write ( struct i2c_interface *i2c,
-			   struct i2c_device *i2cdev, unsigned int offset,
-			   const uint8_t *data, unsigned int len ) {
+static int i2c_bit_write ( struct i2c_bus *i2c, struct i2c_device *i2cdev,
+			   unsigned int offset, const void *data, size_t len ){
 	struct i2c_bit_basher *i2cbit
 		= container_of ( i2c, struct i2c_bit_basher, i2c );
 	struct bit_basher *basher = &i2cbit->basher;
+	const uint8_t *byte = data;
 	int rc = 0;
 
 	DBGC ( basher, "I2CBIT %p writing to device %x: ",
@@ -351,7 +349,7 @@ static int i2c_bit_write ( struct i2c_interface *i2c,
 
 	open_bit ( basher );
 
-	for ( ; ; data++, offset++ ) {
+	for ( ; ; byte++, offset++ ) {
 
 		/* Select device for writing */
 		if ( ( rc = i2c_select ( basher, i2cdev, offset,
@@ -367,8 +365,8 @@ static int i2c_bit_write ( struct i2c_interface *i2c,
 			break;
 		
 		/* Write data to device */
-		DBGC ( basher, "%02x ", *data );
-		if ( ( rc = i2c_send_byte ( basher, *data ) ) != 0 )
+		DBGC ( basher, "%02x ", *byte );
+		if ( ( rc = i2c_send_byte ( basher, *byte ) ) != 0 )
 			break;
 	}
 
@@ -378,23 +376,29 @@ static int i2c_bit_write ( struct i2c_interface *i2c,
 	return rc;
 }
 
+/** I2C bus operations */
+static struct i2c_operations i2c_bit_operations = {
+	.read = i2c_bit_read,
+	.write = i2c_bit_write,
+};
+
 /**
  * Initialise I2C bit-bashing interface
  *
  * @v i2cbit		I2C bit-bashing interface
  * @v bash_op		Bit-basher operations
  */
-int init_i2c_bit_basher ( struct i2c_bit_basher *i2cbit,
-			  struct bit_basher_operations *bash_op ) {
+int i2c_bit_init ( struct i2c_bit_basher *i2cbit,
+		   struct bit_basher_operations *bash_op ) {
+	struct i2c_bus *i2c = &i2cbit->i2c;
 	struct bit_basher *basher = &i2cbit->basher;
 	int rc;
 
 	/* Initialise data structures */
+	i2c_init_bus ( i2c, &i2c_bit_operations );
 	basher->op = bash_op;
 	assert ( basher->op->read != NULL );
 	assert ( basher->op->write != NULL );
-	i2cbit->i2c.read = i2c_bit_read;
-	i2cbit->i2c.write = i2c_bit_write;
 
 	/* Reset I2C bus */
 	if ( ( rc = i2c_reset ( basher ) ) != 0 ) {

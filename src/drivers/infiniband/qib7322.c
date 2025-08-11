@@ -1909,8 +1909,8 @@ static int qib7322_init_i2c ( struct qib7322 *qib7322 ) {
 	int rc;
 
 	/* Initialise bus */
-	if ( ( rc = init_i2c_bit_basher ( &qib7322->i2c,
-					  &qib7322_i2c_basher_ops ) ) != 0 ) {
+	if ( ( rc = i2c_bit_init ( &qib7322->i2c,
+				   &qib7322_i2c_basher_ops ) ) != 0 ) {
 		DBGC ( qib7322, "QIB7322 %p could not initialise I2C bus: %s\n",
 		       qib7322, strerror ( rc ) );
 		return rc;
@@ -1919,9 +1919,9 @@ static int qib7322_init_i2c ( struct qib7322 *qib7322 ) {
 	/* Probe for devices */
 	for ( i = 0 ; i < ( sizeof ( try_eeprom_address ) /
 			    sizeof ( try_eeprom_address[0] ) ) ; i++ ) {
-		init_i2c_eeprom ( &qib7322->eeprom, try_eeprom_address[i] );
-		if ( ( rc = i2c_check_presence ( &qib7322->i2c.i2c,
-						 &qib7322->eeprom ) ) == 0 ) {
+		i2c_init_single ( &qib7322->eeprom, &qib7322->i2c.i2c,
+				  try_eeprom_address[i] );
+		if ( ( rc = i2c_check_presence ( &qib7322->eeprom ) ) == 0 ) {
 			DBGC2 ( qib7322, "QIB7322 %p found EEPROM at %02x\n",
 				qib7322, try_eeprom_address[i] );
 			return 0;
@@ -1939,14 +1939,12 @@ static int qib7322_init_i2c ( struct qib7322 *qib7322 ) {
  * @ret rc		Return status code
  */
 static int qib7322_read_eeprom ( struct qib7322 *qib7322 ) {
-	struct i2c_interface *i2c = &qib7322->i2c.i2c;
 	union ib_guid *guid = &qib7322->guid;
 	int rc;
 
 	/* Read GUID */
-	if ( ( rc = i2c->read ( i2c, &qib7322->eeprom,
-				QIB7322_EEPROM_GUID_OFFSET, guid->bytes,
-				sizeof ( *guid ) ) ) != 0 ) {
+	if ( ( rc = i2c_read ( &qib7322->eeprom, QIB7322_EEPROM_GUID_OFFSET,
+			       guid->bytes, sizeof ( *guid ) ) ) != 0 ) {
 		DBGC ( qib7322, "QIB7322 %p could not read GUID: %s\n",
 		       qib7322, strerror ( rc ) );
 		return rc;
@@ -1959,9 +1957,9 @@ static int qib7322_read_eeprom ( struct qib7322 *qib7322 ) {
 		uint8_t serial[QIB7322_EEPROM_SERIAL_SIZE + 1];
 
 		serial[ sizeof ( serial ) - 1 ] = '\0';
-		if ( ( rc = i2c->read ( i2c, &qib7322->eeprom,
-					QIB7322_EEPROM_SERIAL_OFFSET, serial,
-					( sizeof ( serial ) - 1 ) ) ) != 0 ) {
+		if ( ( rc = i2c_read ( &qib7322->eeprom,
+				       QIB7322_EEPROM_SERIAL_OFFSET, serial,
+				       ( sizeof ( serial ) - 1 ) ) ) != 0 ) {
 			DBGC ( qib7322, "QIB7322 %p could not read serial: "
 			       "%s\n", qib7322, strerror ( rc ) );
 			return rc;

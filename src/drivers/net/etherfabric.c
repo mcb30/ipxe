@@ -2827,23 +2827,9 @@ static struct efab_phy_operations falcon_pm8358_phy_ops = {
 #define RLHN	0x05
 #define WLHO	0x0b
 
-static struct i2c_device i2c_pca9539 = {
-	.dev_addr = PCA9539,
-	.dev_addr_len = 1,
-	.word_addr_len = 1,
-};
-
-
-static struct i2c_device i2c_max6647 = {
-	.dev_addr = MAX6647,
-	.dev_addr_len = 1,
-	.word_addr_len = 1,
-};
-
 static int
 sfe4001_init ( struct efab_nic *efab )
 {
-	struct i2c_interface *i2c = &efab->i2c_bb.i2c;
 	efab_dword_t reg;
 	uint8_t in, cfg, out;
 	int count, rc;
@@ -2864,12 +2850,12 @@ sfe4001_init ( struct efab_nic *efab )
 
 	/* Set DSP over-temperature alert threshold */
 	cfg = MAX_TEMP_THRESH;
-	rc = i2c->write ( i2c, &i2c_max6647, WLHO, &cfg, EFAB_BYTE );
+	rc = i2c_write ( &efab->max6647, WLHO, &cfg, EFAB_BYTE );
 	if ( rc )
 		goto fail1;
 
 	/* Read it back and verify */
-	rc = i2c->read ( i2c, &i2c_max6647, RLHN, &in, EFAB_BYTE );
+	rc = i2c_read ( &efab->max6647, RLHN, &in, EFAB_BYTE );
 	if ( rc )
 		goto fail2;
 
@@ -2881,17 +2867,17 @@ sfe4001_init ( struct efab_nic *efab )
 	}
 
 	/* Clear any previous over-temperature alert */
-	rc = i2c->read ( i2c, &i2c_max6647, RSL, &in, EFAB_BYTE );
+	rc = i2c_read ( &efab->max6647, RSL, &in, EFAB_BYTE );
 	if ( rc )
 		goto fail4;
 
 	/* Enable port 0 and 1 outputs on IO expander */
 	cfg = 0x00;
-	rc = i2c->write ( i2c, &i2c_pca9539, P0_CONFIG, &cfg, EFAB_BYTE );
+	rc = i2c_write ( &efab->pca9539, P0_CONFIG, &cfg, EFAB_BYTE );
 	if ( rc )
 		goto fail5;
 	cfg = 0xff & ~(1 << P1_SPARE_LBN);
-	rc = i2c->write ( i2c, &i2c_pca9539, P1_CONFIG, &cfg, EFAB_BYTE );
+	rc = i2c_write ( &efab->pca9539, P1_CONFIG, &cfg, EFAB_BYTE );
 	if ( rc )
 		goto fail6;
 
@@ -2900,7 +2886,7 @@ sfe4001_init ( struct efab_nic *efab )
 		       (0 << P0_EN_3V3X_LBN) | (0 << P0_EN_5V_LBN) |
 		       (0 << P0_EN_1V0X_LBN));
 
-	rc = i2c->write ( i2c, &i2c_pca9539, P0_OUT, &out, EFAB_BYTE );
+	rc = i2c_write ( &efab->pca9539, P0_OUT, &out, EFAB_BYTE );
 	if ( rc )
 		goto fail7;
 
@@ -2912,7 +2898,7 @@ sfe4001_init ( struct efab_nic *efab )
 				(1 << P0_EN_3V3X_LBN) | (1 << P0_EN_5V_LBN)  | 
 				(1 << P0_X_TRST_LBN) );
 
-		rc = i2c->write ( i2c, &i2c_pca9539, P0_OUT, &out, EFAB_BYTE );
+		rc = i2c_write ( &efab->pca9539, P0_OUT, &out, EFAB_BYTE );
 		if ( rc )
 			goto fail8;
 
@@ -2920,7 +2906,7 @@ sfe4001_init ( struct efab_nic *efab )
 		
 		/* Turn on the 1V power rail */
 		out  &= ~( 1 << P0_EN_1V0X_LBN );
-		rc = i2c->write ( i2c, &i2c_pca9539, P0_OUT, &out, EFAB_BYTE );
+		rc = i2c_write ( &efab->pca9539, P0_OUT, &out, EFAB_BYTE );
 		if ( rc )
 			goto fail9;
 
@@ -2928,7 +2914,7 @@ sfe4001_init ( struct efab_nic *efab )
 		mdelay ( 1000 );
 
 		/* Check DSP is powered */
-		rc = i2c->read ( i2c, &i2c_pca9539, P1_IN, &in, EFAB_BYTE );
+		rc = i2c_read ( &efab->pca9539, P1_IN, &in, EFAB_BYTE );
 		if ( rc )
 			goto fail10;
 
@@ -2944,14 +2930,14 @@ fail8:
 fail7:
 	/* Turn off power rails */
 	out = 0xff;
-	(void) i2c->write ( i2c, &i2c_pca9539, P0_OUT, &out, EFAB_BYTE );
+	(void) i2c_write ( &efab->pca9539, P0_OUT, &out, EFAB_BYTE );
 	/* Disable port 1 outputs on IO expander */
 	out = 0xff;
-	(void) i2c->write ( i2c, &i2c_pca9539, P1_CONFIG, &out, EFAB_BYTE );
+	(void) i2c_write ( &efab->pca9539, P1_CONFIG, &out, EFAB_BYTE );
 fail6:
 	/* Disable port 0 outputs */
 	out = 0xff;
-	(void) i2c->write ( i2c, &i2c_pca9539, P1_CONFIG, &out, EFAB_BYTE );
+	(void) i2c_write ( &efab->pca9539, P1_CONFIG, &out, EFAB_BYTE );
 fail5:
 fail4:
 fail3:
@@ -2964,25 +2950,24 @@ fail1:
 static void
 sfe4001_fini ( struct efab_nic *efab )
 {
-	struct i2c_interface *i2c = &efab->i2c_bb.i2c;
 	uint8_t in, cfg, out;
 
 	EFAB_ERR ( "Turning off SFE4001\n" );
 
 	/* Turn off all power rails */
 	out = 0xff;
-	(void) i2c->write ( i2c, &i2c_pca9539, P0_OUT, &out, EFAB_BYTE );
+	(void) i2c_write ( &efab->pca9539, P0_OUT, &out, EFAB_BYTE );
 
 	/* Disable port 1 outputs on IO expander */
 	cfg = 0xff;
-	(void) i2c->write ( i2c, &i2c_pca9539, P1_CONFIG, &cfg, EFAB_BYTE );
+	(void) i2c_write ( &efab->pca9539, P1_CONFIG, &cfg, EFAB_BYTE );
 
 	/* Disable port 0 outputs on IO expander */
 	cfg = 0xff;
-	(void) i2c->write ( i2c, &i2c_pca9539, P0_CONFIG, &cfg, EFAB_BYTE );
+	(void) i2c_write ( &efab->pca9539, P0_CONFIG, &cfg, EFAB_BYTE );
 
 	/* Clear any over-temperature alert */
-	(void) i2c->read ( i2c, &i2c_max6647, RSL, &in, EFAB_BYTE );
+	(void) i2c_read ( &efab->max6647, RSL, &in, EFAB_BYTE );
 }
 
 struct efab_board_operations sfe4001_ops = {
@@ -3237,7 +3222,9 @@ falcon_probe_spi ( struct efab_nic *efab )
 
 	/* Configure the SPI and I2C bus */
 	efab->spi_bus.rw = falcon_spi_rw;
-	init_i2c_bit_basher ( &efab->i2c_bb, &falcon_i2c_bit_ops );
+	i2c_bit_init ( &efab->i2c_bb, &falcon_i2c_bit_ops );
+	i2c_init_single ( &efab->pca9539, &efab->i2c_bb.i2c, PCA9539 );
+	i2c_init_single ( &efab->max6647, &efab->i2c_bb.i2c, MAX6647 );
 
 	/* Configure the EEPROM SPI device. Generally, an Atmel 25040
 	 * (or similar) is used, but this is only possible if there is also

@@ -14,10 +14,11 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 /** An I2C device
  *
- * An I2C device represents a specific slave device on an I2C bus.  It
- * is accessed via an I2C interface.
+ * An I2C device represents a specific slave device on an I2C bus.
  */
 struct i2c_device {
+	/** I2C bus */
+	struct i2c_bus *i2c;
 	/** Address of this device
 	 *
 	 * The actual address sent on the bus will look like
@@ -49,48 +50,48 @@ struct i2c_device {
 	unsigned int word_addr_len;
 };
 
-/** An I2C interface
- *
- * An I2C interface provides access to an I2C bus, via which I2C
- * devices may be reached.
- */
-struct i2c_interface {
+/** I2C bus operations */
+struct i2c_operations {
 	/**
 	 * Read data from I2C device
 	 *
-	 * @v i2c		I2C interface
+	 * @v i2c		I2C bus
 	 * @v i2cdev		I2C device
 	 * @v offset		Starting offset within the device
 	 * @v data		Data buffer
 	 * @v len		Length of data buffer
 	 * @ret rc		Return status code
 	 */
-	int ( * read ) ( struct i2c_interface *i2c, struct i2c_device *i2cdev,
-			 unsigned int offset, uint8_t *data,
-			 unsigned int len );
+	int ( * read ) ( struct i2c_bus *i2c, struct i2c_device *i2cdev,
+			 unsigned int offset, void *data, size_t len );
 	/**
 	 * Write data to I2C device
 	 *
-	 * @v i2c		I2C interface
+	 * @v i2c		I2C bus
 	 * @v i2cdev		I2C device
 	 * @v offset		Starting offset within the device
 	 * @v data		Data buffer
 	 * @v len		Length of data buffer
 	 * @ret rc		Return status code
 	 */
-	int ( * write ) ( struct i2c_interface *i2c, struct i2c_device *i2cdev,
-			  unsigned int offset, const uint8_t *data,
-			  unsigned int len );
+	int ( * write ) ( struct i2c_bus *i2c, struct i2c_device *i2cdev,
+			  unsigned int offset, const void *data, size_t len );
 };
 
-/** A bit-bashing I2C interface
+/** An I2C bus */
+struct i2c_bus {
+	/** Bus operations */
+	struct i2c_operations *op;
+};
+
+/** A bit-bashing I2C bus
  *
  * This provides a standardised way to construct I2C buses via a
  * bit-bashing interface.
  */
 struct i2c_bit_basher {
-	/** I2C interface */
-	struct i2c_interface i2c;
+	/** I2C bus */
+	struct i2c_bus i2c;
 	/** Bit-bashing interface */
 	struct bit_basher basher;
 };
@@ -123,49 +124,132 @@ enum {
 #define I2C_RESET_MAX_CYCLES 32
 
 /**
+ * Read data from I2C device
+ *
+ * @v i2cdev		I2C device
+ * @v offset		Starting offset within the device
+ * @v data		Data buffer
+ * @v len		Length of data buffer
+ * @ret rc		Return status code
+ */
+static inline __attribute__ (( always_inline )) int
+i2c_read ( struct i2c_device *i2cdev, unsigned int offset, void *data,
+	   size_t len ) {
+	struct i2c_bus *i2c = i2cdev->i2c;
+
+	return i2c->op->read ( i2c, i2cdev, offset, data, len );
+}
+
+/**
+ * Write data to I2C device
+ *
+ * @v i2cdev		I2C device
+ * @v offset		Starting offset within the device
+ * @v data		Data buffer
+ * @v len		Length of data buffer
+ * @ret rc		Return status code
+ */
+static inline __attribute__ (( always_inline )) int
+i2c_write ( struct i2c_device *i2cdev, unsigned int offset, const void *data,
+	    size_t len ) {
+	struct i2c_bus *i2c = i2cdev->i2c;
+
+	return i2c->op->write ( i2c, i2cdev, offset, data, len );
+}
+
+/**
  * Check presence of I2C device
  *
- * @v i2c		I2C interface
  * @v i2cdev		I2C device
  * @ret rc		Return status code
  *
  * Checks for the presence of the device on the I2C bus by attempting
  * a zero-length write.
  */
-static inline int i2c_check_presence ( struct i2c_interface *i2c,
-				       struct i2c_device *i2cdev ) {
-	return i2c->write ( i2c, i2cdev, 0, NULL, 0 );
+static inline __attribute__ (( always_inline )) int
+i2c_check_presence ( struct i2c_device *i2cdev ) {
+
+	return i2c_write ( i2cdev, 0, NULL, 0 );
 }
 
-extern int init_i2c_bit_basher ( struct i2c_bit_basher *i2cbit,
-				 struct bit_basher_operations *bash_op );
-
 /**
- * Initialise generic I2C EEPROM device
+ * Calculate device address (including any word address overflow)
  *
  * @v i2cdev		I2C device
+ * @v offset		Starting offset within the device
+ * @ret address		Device address (including any word address overflow)
  */
-static inline __always_inline void
-init_i2c_eeprom ( struct i2c_device *i2cdev, unsigned int dev_addr ) {
+static inline unsigned int i2c_address ( struct i2c_device *i2cdev,
+					 unsigned int offset ) {
+
+	return ( i2cdev->dev_addr |
+		 ( offset >> ( 8 * i2cdev->word_addr_len ) ) );
+}
+
+/**
+ * Initialise I2C bus
+ *
+ * @v i2c		I2C bus
+ * @v op		Bus operations
+ */
+static inline __attribute__ (( always_inline )) void
+i2c_init_bus ( struct i2c_bus *i2c, struct i2c_operations *op ) {
+
+	i2c->op = op;
+}
+
+/**
+ * Initialise generic I2C device
+ *
+ * @v i2cdev		I2C device
+ * @v i2c		I2C bus
+ * @v dev_addr		Device address
+ * @v dev_addr_len	Device address length
+ * @v word_addr_len	Word address length
+ */
+static inline __attribute__ (( always_inline )) void
+i2c_init_device ( struct i2c_device *i2cdev, struct i2c_bus *i2c,
+		  unsigned int dev_addr, unsigned int dev_addr_len,
+		  unsigned int word_addr_len ) {
+
+	i2cdev->i2c = i2c;
 	i2cdev->dev_addr = dev_addr;
-	i2cdev->dev_addr_len = 1;
-	i2cdev->word_addr_len = 1;
+	i2cdev->dev_addr_len = dev_addr_len;
+	i2cdev->word_addr_len = word_addr_len;
 }
 
 /**
- * Initialise Atmel AT24C11
+ * Initialise generic single-byte addressed I2C device
  *
  * @v i2cdev		I2C device
+ * @v i2c		I2C bus
+ * @v dev_addr		Device address
+ * @v word_addr_len	Word address length
  */
-static inline __always_inline void
-init_at24c11 ( struct i2c_device *i2cdev ) {
+static inline __attribute__ (( always_inline )) void
+i2c_init_single ( struct i2c_device *i2cdev, struct i2c_bus *i2c,
+		  unsigned int dev_addr ) {
+
+	i2c_init_device ( i2cdev, i2c, dev_addr, 1, 1 );
+}
+
+/**
+ * Initialise solo I2C device (e.g. Atmel AT24C11)
+ *
+ * @v i2cdev		I2C device
+ * @v i2c		I2C bus
+ */
+static inline __attribute__ (( always_inline )) void
+i2c_init_solo ( struct i2c_device *i2cdev, struct i2c_bus *i2c ) {
+
 	/* This chip has no device address; it must be the only chip
 	 * on the bus.  The word address is contained entirely within
 	 * the device address field.
 	 */
-	i2cdev->dev_addr = 0;
-	i2cdev->dev_addr_len = 1;
-	i2cdev->word_addr_len = 0;
+	i2c_init_device ( i2cdev, i2c, 0, 1, 0 );
 }
+
+extern int i2c_bit_init ( struct i2c_bit_basher *i2cbit,
+			  struct bit_basher_operations *bash_op );
 
 #endif /* _IPXE_I2C_H */
