@@ -159,6 +159,8 @@ struct efab_nic {
 
 	/* I2C bit-bashed interface */
 	struct i2c_bit_basher i2c_bb;
+	struct i2c_device pca9539;
+	struct i2c_device max6647;
 
 	/** SPI bus and devices, and the user visible NVO area */
 	struct spi_bus spi_bus;

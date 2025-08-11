@@ -226,9 +226,9 @@ static int exanic_try_init_eeprom ( struct exanic *exanic,
 	}
 
 	/* Check for EEPROM presence */
-	init_i2c_eeprom ( &exanic->eeprom, EXANIC_EEPROM_ADDRESS );
-	if ( ( rc = i2c_check_presence ( &exanic->basher.i2c,
-					 &exanic->eeprom ) ) != 0 ) {
+	init_i2c_eeprom ( &exanic->eeprom, &exanic->basher.i2c,
+			  EXANIC_EEPROM_ADDRESS );
+	if ( ( rc = i2c_check_presence ( &exanic->eeprom ) ) != 0 ) {
 		DBGC2 ( exanic, "EXANIC %p found no EEPROM via %d/%d/%d\n",
 			exanic, exanic->i2cfg.setscl,
 			exanic->i2cfg.setsda, exanic->i2cfg.getsda );
@@ -271,7 +271,6 @@ static int exanic_init_eeprom ( struct exanic *exanic ) {
  * @ret rc		Return status code
  */
 static int exanic_fetch_mac ( struct exanic *exanic ) {
-	struct i2c_interface *i2c = &exanic->basher.i2c;
 	int rc;
 
 	/* Initialise EEPROM */
@@ -279,8 +278,8 @@ static int exanic_fetch_mac ( struct exanic *exanic ) {
 		return rc;
 
 	/* Fetch base MAC address */
-	if ( ( rc = i2c->read ( i2c, &exanic->eeprom, 0, exanic->mac,
-				sizeof ( exanic->mac ) ) ) != 0 ) {
+	if ( ( rc = i2c_read ( &exanic->eeprom, 0, exanic->mac,
+			       sizeof ( exanic->mac ) ) ) != 0 ) {
 		DBGC ( exanic, "EXANIC %p could not read MAC address: %s\n",
 		       exanic, strerror ( rc ) );
 		return rc;

@@ -1609,9 +1609,9 @@ static int linda_init_i2c ( struct linda *linda ) {
 	/* Probe for devices */
 	for ( i = 0 ; i < ( sizeof ( try_eeprom_address ) /
 			    sizeof ( try_eeprom_address[0] ) ) ; i++ ) {
-		init_i2c_eeprom ( &linda->eeprom, try_eeprom_address[i] );
-		if ( ( rc = i2c_check_presence ( &linda->i2c.i2c,
-						 &linda->eeprom ) ) == 0 ) {
+		init_i2c_eeprom ( &linda->eeprom, &linda->i2c.i2c,
+				  try_eeprom_address[i] );
+		if ( ( rc = i2c_check_presence ( &linda->eeprom ) ) == 0 ) {
 			DBGC2 ( linda, "Linda %p found EEPROM at %02x\n",
 				linda, try_eeprom_address[i] );
 			return 0;
@@ -1630,12 +1630,11 @@ static int linda_init_i2c ( struct linda *linda ) {
  * @ret rc		Return status code
  */
 static int linda_read_eeprom ( struct linda *linda, union ib_guid *guid ) {
-	struct i2c_interface *i2c = &linda->i2c.i2c;
 	int rc;
 
 	/* Read GUID */
-	if ( ( rc = i2c->read ( i2c, &linda->eeprom, LINDA_EEPROM_GUID_OFFSET,
-				guid->bytes, sizeof ( *guid ) ) ) != 0 ) {
+	if ( ( rc = i2c_read ( &linda->eeprom, LINDA_EEPROM_GUID_OFFSET,
+			       guid->bytes, sizeof ( *guid ) ) ) != 0 ) {
 		DBGC ( linda, "Linda %p could not read GUID: %s\n",
 		       linda, strerror ( rc ) );
 		return rc;
@@ -1648,9 +1647,9 @@ static int linda_read_eeprom ( struct linda *linda, union ib_guid *guid ) {
 		uint8_t serial[LINDA_EEPROM_SERIAL_SIZE + 1];
 
 		serial[ sizeof ( serial ) - 1 ] = '\0';
-		if ( ( rc = i2c->read ( i2c, &linda->eeprom,
-					LINDA_EEPROM_SERIAL_OFFSET, serial,
-					( sizeof ( serial ) - 1 ) ) ) != 0 ) {
+		if ( ( rc = i2c_read ( &linda->eeprom,
+				       LINDA_EEPROM_SERIAL_OFFSET, serial,
+				       ( sizeof ( serial ) - 1 ) ) ) != 0 ) {
 			DBGC ( linda, "Linda %p could not read serial: %s\n",
 			       linda, strerror ( rc ) );
 			return rc;
