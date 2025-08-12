@@ -84,6 +84,7 @@ SRCDIRS		+= drivers/block
 SRCDIRS		+= drivers/nvs
 SRCDIRS		+= drivers/bitbash
 SRCDIRS		+= drivers/gpio
+SRCDIRS		+= drivers/i2c
 SRCDIRS		+= drivers/infiniband
 SRCDIRS		+= drivers/infiniband/mlx_utils_flexboot/src
 SRCDIRS		+= drivers/infiniband/mlx_utils/src/public
