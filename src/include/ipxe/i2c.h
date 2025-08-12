@@ -11,6 +11,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <stdint.h>
 #include <ipxe/bitbash.h>
+#include <ipxe/device.h>
+#include <ipxe/refcnt.h>
 
 /** An I2C device
  *
@@ -73,8 +75,18 @@ struct i2c_operations {
 
 /** An I2C bus */
 struct i2c_bus {
+	/** Reference count */
+	struct refcnt refcnt;
+	/** List of I2C buses */
+	struct list_head list;
+	/** Generic device */
+	struct device *dev;
+
 	/** Bus operations */
 	struct i2c_operations *op;
+
+	/** Driver-private data */
+	void *priv;
 };
 
 /** A bit-bashing I2C bus
@@ -115,6 +127,53 @@ enum {
 
 /** Maximum number of cycles to use when attempting a bus reset */
 #define I2C_RESET_MAX_CYCLES 32
+
+extern struct i2c_operations null_i2c_operations;
+
+/**
+ * Get reference to I2C bus
+ *
+ * @v i2c		I2C bus
+ * @ret i2c		I2C bus
+ */
+static inline __attribute__ (( always_inline )) struct i2c_bus *
+i2c_get ( struct i2c_bus *i2c ) {
+	ref_get ( &i2c->refcnt );
+	return i2c;
+}
+
+/**
+ * Drop reference to I2C bus
+ *
+ * @v i2c		I2C bus
+ */
+static inline __attribute__ (( always_inline )) void
+i2c_put ( struct i2c_bus *i2c ) {
+	ref_put ( &i2c->refcnt );
+}
+
+/**
+ * Initialise I2C bus
+ *
+ * @v i2c		I2C bus
+ * @v op		Bus operations
+ */
+static inline __attribute__ (( always_inline )) void
+i2c_init ( struct i2c_bus *i2c, struct i2c_operations *op ) {
+
+	i2c->op = op;
+}
+
+/**
+ * Stop using I2C bus
+ *
+ * @v i2c		I2C bus
+ */
+static inline __attribute__ (( always_inline )) void
+i2c_nullify ( struct i2c_bus *i2c ) {
+
+	i2c->op = &null_i2c_operations;
+}
 
 /**
  * Read data from I2C device
@@ -180,18 +239,6 @@ static inline unsigned int i2c_address ( struct i2c_device *i2cdev,
 }
 
 /**
- * Initialise I2C bus
- *
- * @v i2c		I2C bus
- * @v op		Bus operations
- */
-static inline __attribute__ (( always_inline )) void
-i2c_init_bus ( struct i2c_bus *i2c, struct i2c_operations *op ) {
-
-	i2c->op = op;
-}
-
-/**
  * Initialise generic I2C device
  *
  * @v i2cdev		I2C device
@@ -238,6 +285,10 @@ i2c_init_solo ( struct i2c_device *i2cdev, struct i2c_bus *i2c ) {
 	 */
 	i2c_init_device ( i2cdev, i2c, 0, 0 );
 }
+
+extern struct i2c_bus * alloc_i2c ( size_t priv_len );
+extern int i2c_register ( struct i2c_bus *i2c );
+extern void i2c_unregister ( struct i2c_bus *i2c );
 
 extern int i2c_bit_init ( struct i2c_bit_basher *i2cbit,
 			  struct bit_basher_operations *bash_op );

@@ -254,7 +254,7 @@ static int dwi2c_probe ( struct dt_device *dt, unsigned int offset ) {
 	}
 	dt_set_drvdata ( dt, i2c );
 	i2c->dev = &dt->dev;
-	i2c_init_bus ( i2c, &dwi2c_operations );
+	i2c_init ( i2c, &dwi2c_operations );
 	dwi2c = i2c->priv;
 	dwi2c->name = dt->name;
 

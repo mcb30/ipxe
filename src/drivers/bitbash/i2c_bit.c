@@ -396,7 +396,7 @@ int i2c_bit_init ( struct i2c_bit_basher *i2cbit,
 	int rc;
 
 	/* Initialise data structures */
-	i2c_init_bus ( i2c, &i2c_bit_operations );
+	i2c_init ( i2c, &i2c_bit_operations );
 	basher->op = bash_op;
 	assert ( basher->op->read != NULL );
 	assert ( basher->op->write != NULL );
