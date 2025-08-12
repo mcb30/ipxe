@@ -203,22 +203,23 @@ static uint8_t i2c_recv_byte ( struct bit_basher *basher ) {
 static int i2c_select ( struct bit_basher *basher, struct i2c_device *i2cdev,
 			unsigned int offset, unsigned int direction ) {
 	unsigned int address;
-	int shift;
-	unsigned int byte;
+	uint8_t high;
+	uint8_t low;
 	int rc;
 
+	/* Generate start condition */
 	i2c_start ( basher );
 
 	/* Calculate address to appear on bus */
 	address = ( ( i2c_address ( i2cdev, offset ) << 1 ) | direction );
+	high = ( address >> 8 );
+	low = ( address >> 0 );
 
-	/* Send address a byte at a time */
-	for ( shift = ( 8 * ( i2cdev->dev_addr_len - 1 ) ) ;
-	      shift >= 0 ; shift -= 8 ) {
-		byte = ( ( address >> shift ) & 0xff );
-		if ( ( rc = i2c_send_byte ( basher, byte ) ) != 0 )
-			return rc;
-	}
+	/* Send address */
+	if ( high && ( ( rc = i2c_send_byte ( basher, high ) ) != 0 ) )
+		return rc;
+	if ( ( rc = i2c_send_byte ( basher, low ) ) != 0 )
+		return rc;
 
 	return 0;
 }

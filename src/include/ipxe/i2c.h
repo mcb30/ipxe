@@ -30,13 +30,6 @@ struct i2c_device {
 	 * defined word address length.
 	 */
 	unsigned int dev_addr;
-	/** Device address length, in bytes
-	 *
-	 * This is the number of bytes that comprise the device
-	 * address, defined to be the portion that terminates with the
-	 * read/write bit.
-	 */
-	unsigned int dev_addr_len;
 	/** Word adddress length, in bytes
 	 *
 	 * This is the number of bytes that comprise the word address,
@@ -204,17 +197,14 @@ i2c_init_bus ( struct i2c_bus *i2c, struct i2c_operations *op ) {
  * @v i2cdev		I2C device
  * @v i2c		I2C bus
  * @v dev_addr		Device address
- * @v dev_addr_len	Device address length
  * @v word_addr_len	Word address length
  */
 static inline __attribute__ (( always_inline )) void
 i2c_init_device ( struct i2c_device *i2cdev, struct i2c_bus *i2c,
-		  unsigned int dev_addr, unsigned int dev_addr_len,
-		  unsigned int word_addr_len ) {
+		  unsigned int dev_addr, unsigned int word_addr_len ) {
 
 	i2cdev->i2c = i2c;
 	i2cdev->dev_addr = dev_addr;
-	i2cdev->dev_addr_len = dev_addr_len;
 	i2cdev->word_addr_len = word_addr_len;
 }
 
@@ -230,7 +220,7 @@ static inline __attribute__ (( always_inline )) void
 i2c_init_single ( struct i2c_device *i2cdev, struct i2c_bus *i2c,
 		  unsigned int dev_addr ) {
 
-	i2c_init_device ( i2cdev, i2c, dev_addr, 1, 1 );
+	i2c_init_device ( i2cdev, i2c, dev_addr, 1 );
 }
 
 /**
@@ -246,7 +236,7 @@ i2c_init_solo ( struct i2c_device *i2cdev, struct i2c_bus *i2c ) {
 	 * on the bus.  The word address is contained entirely within
 	 * the device address field.
 	 */
-	i2c_init_device ( i2cdev, i2c, 0, 1, 0 );
+	i2c_init_device ( i2cdev, i2c, 0, 0 );
 }
 
 extern int i2c_bit_init ( struct i2c_bit_basher *i2cbit,
