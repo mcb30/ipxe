@@ -25,6 +25,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
 #include <assert.h>
@@ -181,6 +182,21 @@ static int gve_reset ( struct gve_nic *gve ) {
  *
  ******************************************************************************
  */
+
+/**
+ * Get operating mode name (for debugging)
+ *
+ * @v mode		Operating mode
+ * @ret name		Mode name
+ */
+static inline const char * gve_mode_name ( unsigned int mode ) {
+	static char buf[ 8 /* "XXX-XXX" + NUL */ ];
+
+	snprintf ( buf, sizeof ( buf ), "%s-%s",
+		   ( ( mode & GVE_MODE_DQO ) ? "DQO" : "GQI" ),
+		   ( ( mode & GVE_MODE_QPL ) ? "QPL" : "RDA" ) );
+	return buf;
+}
 
 /**
  * Allocate admin queue
@@ -489,6 +505,20 @@ static int gve_describe ( struct gve_nic *gve ) {
 	}
 	DBGC ( gve, "GVE %p supports options %#08x\n", gve, gve->options );
 
+	/* Select preferred operating mode */
+	if ( gve->options & ( 1 << GVE_OPT_GQI_QPL ) ) {
+		/* GQI-QPL: in-order queues, queue page list addressing */
+		gve->mode = GVE_MODE_QPL;
+	} else if ( gve->options & ( 1 << GVE_OPT_GQI_RDA ) ) {
+		/* GQI-RDA: in-order queues, raw DMA addressing */
+		gve->mode = 0;
+	} else {
+		/* No options matched: assume the original GQI-QPL mode */
+		gve->mode = GVE_MODE_QPL;
+	}
+	DBGC ( gve, "GVE %p using %s mode\n",
+	       gve, gve_mode_name ( gve->mode ) );
+
 	return 0;
 }
 
@@ -516,6 +546,7 @@ static int gve_configure ( struct gve_nic *gve ) {
 	cmd->conf.num_events = cpu_to_be32 ( events->count );
 	cmd->conf.num_irqs = cpu_to_be32 ( GVE_IRQ_COUNT );
 	cmd->conf.irq_stride = cpu_to_be32 ( sizeof ( irqs->irq[0] ) );
+	cmd->conf.format = GVE_FORMAT ( gve->mode );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -563,6 +594,10 @@ static int gve_register ( struct gve_nic *gve, struct gve_qpl *qpl ) {
 	unsigned int i;
 	int rc;
 
+	/* Do nothing if using raw DMA addressing */
+	if ( ! ( gve->mode & GVE_MODE_QPL ) )
+		return 0;
+
 	/* Build page address list */
 	for ( i = 0 ; i < qpl->count ; i++ ) {
 		addr = ( qpl->data + ( i * GVE_PAGE_SIZE ) );
@@ -594,6 +629,10 @@ static int gve_register ( struct gve_nic *gve, struct gve_qpl *qpl ) {
 static int gve_unregister ( struct gve_nic *gve, struct gve_qpl *qpl ) {
 	int rc;
 
+	/* Do nothing if using raw DMA addressing */
+	if ( ! ( gve->mode & GVE_MODE_QPL ) )
+		return 0;
+
 	/* Issue command */
 	if ( ( rc = gve_admin_simple ( gve, GVE_ADMIN_UNREGISTER,
 				       qpl->id ) ) != 0 ) {
@@ -607,9 +646,10 @@ static int gve_unregister ( struct gve_nic *gve, struct gve_qpl *qpl ) {
  * Construct command to create transmit queue
  *
  * @v queue		Transmit queue
+ * @v qpl		Queue page list ID
  * @v cmd		Admin queue command
  */
-static void gve_create_tx_param ( struct gve_queue *queue,
+static void gve_create_tx_param ( struct gve_queue *queue, uint32_t qpl,
 				  union gve_admin_command *cmd ) {
 	struct gve_admin_create_tx *create = &cmd->create_tx;
 	const struct gve_queue_type *type = queue->type;
@@ -618,7 +658,7 @@ static void gve_create_tx_param ( struct gve_queue *queue,
 	create->res = cpu_to_be64 ( dma ( &queue->res_map, queue->res ) );
 	create->desc =
 		cpu_to_be64 ( dma ( &queue->desc_map, queue->desc.tx ) );
-	create->qpl_id = cpu_to_be32 ( type->qpl );
+	create->qpl_id = cpu_to_be32 ( qpl );
 	create->notify_id = cpu_to_be32 ( type->irq );
 }
 
@@ -626,9 +666,10 @@ static void gve_create_tx_param ( struct gve_queue *queue,
  * Construct command to create receive queue
  *
  * @v queue		Receive queue
+ * @v qpl		Queue page list ID
  * @v cmd		Admin queue command
  */
-static void gve_create_rx_param ( struct gve_queue *queue,
+static void gve_create_rx_param ( struct gve_queue *queue, uint32_t qpl,
 				  union gve_admin_command *cmd ) {
 	struct gve_admin_create_rx *create = &cmd->create_rx;
 	const struct gve_queue_type *type = queue->type;
@@ -640,7 +681,7 @@ static void gve_create_rx_param ( struct gve_queue *queue,
 		cpu_to_be64 ( dma ( &queue->desc_map, queue->desc.rx ) );
 	create->cmplt =
 		cpu_to_be64 ( dma ( &queue->cmplt_map, queue->cmplt.rx ) );
-	create->qpl_id = cpu_to_be32 ( type->qpl );
+	create->qpl_id = cpu_to_be32 ( qpl );
 	create->bufsz = cpu_to_be16 ( GVE_BUF_SIZE );
 }
 
@@ -656,6 +697,7 @@ static int gve_create_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	union gve_admin_command *cmd;
 	unsigned int db_off;
 	unsigned int evt_idx;
+	uint32_t qpl;
 	int rc;
 
 	/* Reset queue */
@@ -665,7 +707,8 @@ static int gve_create_queue ( struct gve_nic *gve, struct gve_queue *queue ) {
 	/* Construct request */
 	cmd = gve_admin_command ( gve );
 	cmd->hdr.opcode = type->create;
-	type->param ( queue, cmd );
+	qpl = ( ( gve->mode & GVE_MODE_QPL ) ? type->qpl : GVE_RAW_QPL );
+	type->param ( queue, qpl, cmd );
 
 	/* Issue command */
 	if ( ( rc = gve_admin ( gve ) ) != 0 )
@@ -796,6 +839,8 @@ static int gve_alloc_qpl ( struct gve_nic *gve, struct gve_qpl *qpl,
 	qpl->data = dma_umalloc ( gve->dma, &qpl->map, len, GVE_ALIGN );
 	if ( ! qpl->data )
 		return -ENOMEM;
+	qpl->base = ( ( gve->mode & GVE_MODE_QPL ) ?
+		      0 : dma ( &qpl->map, qpl->data ) );
 
 	DBGC ( gve, "GVE %p QPL %#08x at [%08lx,%08lx)\n",
 	       gve, qpl->id, virt_to_phys ( qpl->data ),
@@ -818,20 +863,34 @@ static void gve_free_qpl ( struct gve_nic *nic __unused,
 }
 
 /**
- * Get buffer address (within queue page list address space)
+ * Get buffer offset (within queue page list)
  *
  * @v queue		Descriptor queue
  * @v index		Buffer index
  * @ret addr		Buffer address within queue page list address space
  */
 static inline __attribute__ (( always_inline)) size_t
-gve_address ( struct gve_queue *queue, unsigned int index ) {
+gve_offset ( struct gve_queue *queue, unsigned int index ) {
 
 	/* We allocate sufficient pages for the maximum fill level of
 	 * buffers, and reuse the pages in strict rotation as we
 	 * progress through the queue.
 	 */
 	return ( ( index & ( queue->fill - 1 ) ) * GVE_BUF_SIZE );
+}
+
+/**
+ * Get buffer address (within queue page list address space)
+ *
+ * @v queue		Descriptor queue
+ * @v index		Buffer index
+ * @ret addr		Buffer address within queue page list address space
+ */
+static inline __attribute__ (( always_inline)) physaddr_t
+gve_address ( struct gve_queue *queue, unsigned int index ) {
+
+	/* Pages are currently allocated as a single contiguous block */
+	return ( queue->qpl.base + gve_offset ( queue, index ) );
 }
 
 /**
@@ -845,7 +904,7 @@ static inline __attribute__ (( always_inline )) void *
 gve_buffer ( struct gve_queue *queue, unsigned int index ) {
 
 	/* Pages are currently allocated as a single contiguous block */
-	return ( queue->qpl.data + gve_address ( queue, index ) );
+	return ( queue->qpl.data + gve_offset ( queue, index ) );
 }
 
 /**
@@ -1296,7 +1355,7 @@ static int gve_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 			"%#08zx\n", gve, index, desc->pkt.type,
 			desc->pkt.count, be16_to_cpu ( desc->pkt.len ),
 			be16_to_cpu ( desc->pkt.total ),
-			gve_address ( tx, index ) );
+			gve_offset ( tx, index ) );
 	}
 	assert ( ( tx->prod - tx->cons ) <= tx->fill );
 
@@ -1371,7 +1430,7 @@ static void gve_poll_rx ( struct net_device *netdev ) {
 		len = be16_to_cpu ( cmplt->pkt.len );
 		DBGC2 ( gve, "GVE %p RX %#04x %#02x:%#02x len %#04zx at "
 			"%#08zx\n", gve, index, cmplt->pkt.seq,
-			cmplt->pkt.flags, len, gve_address ( rx, index ) );
+			cmplt->pkt.flags, len, gve_offset ( rx, index ) );
 
 		/* Accumulate a complete packet */
 		if ( cmplt->pkt.flags & GVE_RXF_ERROR ) {
