@@ -559,7 +559,7 @@ static int gve_describe ( struct gve_nic *gve ) {
 	DBGC ( gve, "GVE %p supports options %#08x\n", gve, gve->options );
 
 	/* Select preferred operating mode */
-	if ( gve->options & ( 1 << GVE_OPT_GQI_QPL ) ) {
+	if ( 0 && gve->options & ( 1 << GVE_OPT_GQI_QPL ) ) {
 		/* GQI-QPL: in-order queues, queue page list addressing */
 		gve->mode = GVE_MODE_QPL;
 	} else if ( gve->options & ( 1 << GVE_OPT_GQI_RDA ) ) {
