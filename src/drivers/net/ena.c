@@ -1352,6 +1352,9 @@ static int ena_membases ( struct ena_nic *ena, struct pci_device *pci,
 		       ena, PCI_ARGS ( pci ), pci->membase );
 	}
 
+	//
+	//bridge->prefmembase = ( bridge->membase + 128 * 1024 );
+
 	/* Place memory BAR at start of prefetchable window, if applicable */
 	if ( *prefmemsize && ( ! *prefmembase ) ) {
 		pci_bar_set ( pci, ENA_MEM_BAR, bridge->prefmembase );
