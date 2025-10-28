@@ -776,6 +776,7 @@ static int ena_llq_config ( struct ena_nic *ena ) {
 	uint16_t desc;
 	uint16_t stride;
 	uint16_t mode;
+	uint64_t check;
 	int rc;
 
 	/* Construct request */
@@ -821,6 +822,35 @@ static int ena_llq_config ( struct ena_nic *ena ) {
 		DBGC ( ena, "ENA %p LLQ does not support two-descriptor "
 		       "entries\n", ena );
 		return -ENOTSUP;
+	}
+
+	/* Check for a broken prefetchable memory BAR (as found on
+	 * AMD-based 7th generation systems).
+	 *
+	 * Despite being nominally prefetchable memory, reads from
+	 * this BAR will always return zero.  Reads are never used in
+	 * normal operation and so this does not actually cause any
+	 * problem in practice.
+	 *
+	 * We cannot directly test that writes are reaching the
+	 * device.  However, a device that is not responding to writes
+	 * will also fail to respond to reads and so we will read back
+	 * an all-ones pattern from a broken device.  We can therefore
+	 * perform a single read and check for any non-zero value to
+	 * indicate a device that will not respond to writes.
+	 *
+	 * To guard against future hardware revisions that may return
+	 * the data that was previously written (rather than always
+	 * returning zero), we write an explicit zero before
+	 * performing the read.
+	 */
+	writeq ( 0, ena->mem );
+	mb();
+	check = readq ( ena->mem );
+	if ( check != 0 ) {
+		DBGC ( ena, "ENA %p has broken prefetchable memory (read "
+		       "%#016llx)\n", ena, ( ( unsigned long long ) check ) );
+		return -EIO;
 	}
 
 	/* Enable a minimal configuration */
