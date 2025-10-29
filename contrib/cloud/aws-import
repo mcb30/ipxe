@@ -13,13 +13,21 @@ import boto3
 BLOCKSIZE = 512 * 1024
 
 
-def detect_architecture(image):
-    """Detect CPU architecture"""
+def detect_uefi(image):
+    """Identify UEFI CPU architecture(s)"""
     mdir = subprocess.run(['mdir', '-b', '-i', image, '::/EFI/BOOT'],
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if any(b'BOOTAA64.EFI' in x for x in mdir.stdout.splitlines()):
-        return 'arm64'
-    return 'x86_64'
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          check=False)
+    mapping = {
+        b'BOOTX64.EFI': 'x86_64',
+        b'BOOTAA64.EFI': 'arm64',
+    }
+    uefi = [
+        arch
+        for filename, arch in mapping.items()
+        if filename in mdir.stdout
+    ]
+    return uefi
 
 
 def create_snapshot(region, description, image, tags):
@@ -61,8 +69,8 @@ def delete_images(region, filters, retain):
         resource.Snapshot(snapshot_id).delete()
 
 
-def import_image(region, name, family, architecture, image, public, overwrite,
-                 retain):
+def import_image(region, name, family, architecture, bootmode, image, public,
+                 overwrite, retain):
     """Import an AMI image"""
     client = boto3.client('ec2', region_name=region)
     resource = boto3.resource('ec2', region_name=region)
@@ -92,6 +100,7 @@ def import_image(region, name, family, architecture, image, public, overwrite,
                                           'VolumeType': 'standard',
                                       },
                                   }],
+                                  BootMode=bootmode,
                                   EnaSupport=True,
                                   Name=description,
                                   TagSpecifications=[{
@@ -138,8 +147,12 @@ parser.add_argument('--wiki', '-w', metavar='FILE',
 parser.add_argument('image', nargs='+', help="iPXE disk image")
 args = parser.parse_args()
 
-# Detect CPU architectures
-architectures = {image: detect_architecture(image) for image in args.image}
+# Detect CPU architectures and boot modes
+uefis = {image: detect_uefi(image) for image in args.image}
+architectures = {image: next(iter(uefis[image]), 'x86_64')
+                 for image in args.image}
+bootmodes = {image: 'uefi' if uefis[image] else 'legacy-bios'
+             for image in args.image}
 
 # Use default family name if none specified
 if not args.family:
@@ -162,6 +175,7 @@ with ThreadPoolExecutor(max_workers=len(imports)) as executor:
                                name=args.name,
                                family=args.family,
                                architecture=architectures[image],
+                               bootmode=bootmodes[image],
                                image=image,
                                public=args.public,
                                overwrite=args.overwrite,
