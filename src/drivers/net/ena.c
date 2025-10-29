@@ -1357,7 +1357,7 @@ static int ena_membases ( struct ena_nic *ena, struct pci_device *pci,
 
 	//
 	//bridge->prefmembase = ( bridge->membase + 128 * 1024 );
-	bridge->prefmembase = ( ( bridge->prefmemlimit + 1 ) - ( 128 * 1024 ) );
+	//bridge->prefmembase = ( ( bridge->prefmemlimit + 1 ) - ( 128 * 1024 ) );
 
 	/* Place memory BAR at start of prefetchable window, if applicable */
 	if ( *prefmemsize && ( ! *prefmembase ) ) {
@@ -1482,38 +1482,6 @@ static int ena_probe ( struct pci_device *pci ) {
 	 */
 	if ( ena->mem && ( ena->features & ENA_FEATURE_LLQ ) )
 		ena_llq_config ( ena );
-
-	//
-	if ( 0 ) {
-		struct pci_bridge *bridge;
-		while ( pci->busdevfn ) {
-			uint32_t cfg[256 / 4];
-			unsigned int i;
-			for ( i = 0 ; i < (256 / 4) ; i++ ) {
-				pci_read_config_dword ( pci, i * 4,
-							&cfg[i] );
-			}
-			DBGC ( ena, "*** PCI " PCI_FMT ":\n",
-			       PCI_ARGS ( pci ) );
-			DBGC_HDA ( ena, 0, cfg, sizeof ( cfg ) );
-			bridge = pcibridge_find ( pci );
-			if ( ! bridge )
-				break;
-			pci = bridge->pci;
-		}
-		struct pci_device temp;
-		memset ( &temp, 0, sizeof ( temp ) );
-		pci = &temp;
-		uint32_t cfg[256 / 4];
-		unsigned int i;
-		for ( i = 0 ; i < (256 / 4) ; i++ ) {
-			pci_read_config_dword ( pci, i * 4,
-						&cfg[i] );
-		}
-		DBGC ( ena, "*** PCI " PCI_FMT ":\n",
-		       PCI_ARGS ( pci ) );
-		DBGC_HDA ( ena, 0, cfg, sizeof ( cfg ) );
-	}
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
