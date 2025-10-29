@@ -850,7 +850,7 @@ static int ena_llq_config ( struct ena_nic *ena ) {
 	if ( check != 0 ) {
 		DBGC ( ena, "ENA %p has broken prefetchable memory (read "
 		       "%#016llx)\n", ena, ( ( unsigned long long ) check ) );
-		//return -EIO;
+		return -EIO;
 	}
 
 	/* Enable a minimal configuration */
@@ -1351,13 +1351,6 @@ static int ena_membases ( struct ena_nic *ena, struct pci_device *pci,
 		DBGC ( ena, "ENA %p at " PCI_FMT " claiming mem %08lx\n",
 		       ena, PCI_ARGS ( pci ), pci->membase );
 	}
-
-	//
-	pci_bar_set ( pci, PCI_BASE_ADDRESS_1, 0x88702000 );
-
-	//
-	//bridge->prefmembase = ( bridge->membase + 128 * 1024 );
-	//bridge->prefmembase = ( ( bridge->prefmemlimit + 1 ) - ( 128 * 1024 ) );
 
 	/* Place memory BAR at start of prefetchable window, if applicable */
 	if ( *prefmemsize && ( ! *prefmembase ) ) {
