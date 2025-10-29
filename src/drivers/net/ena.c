@@ -1378,10 +1378,9 @@ static int ena_probe ( struct pci_device *pci ) {
 	}
 
 	//
-	pci_write_config_word ( pci, PCI_COMMAND, 0x0 );
-	mdelay ( 100 );
+	//pci_write_config_word ( pci, PCI_COMMAND, 0x0 );
+	//mdelay ( 100 );
 	pci_write_config_word ( pci, PCI_COMMAND, 0x0406 );
-
 
 	/* Map registers */
 	ena->regs = pci_ioremap ( pci, pci->membase, ENA_REGS_SIZE );
