@@ -850,7 +850,7 @@ static int ena_llq_config ( struct ena_nic *ena ) {
 	if ( check != 0 ) {
 		DBGC ( ena, "ENA %p has broken prefetchable memory (read "
 		       "%#016llx)\n", ena, ( ( unsigned long long ) check ) );
-		return -EIO;
+		//return -EIO;
 	}
 
 	/* Enable a minimal configuration */
@@ -1353,7 +1353,11 @@ static int ena_membases ( struct ena_nic *ena, struct pci_device *pci,
 	}
 
 	//
+	pci_bar_set ( pci, PCI_BASE_ADDRESS_1, 0x88702000 );
+
+	//
 	//bridge->prefmembase = ( bridge->membase + 128 * 1024 );
+	bridge->prefmembase = ( ( bridge->prefmemlimit + 1 ) - ( 128 * 1024 ) );
 
 	/* Place memory BAR at start of prefetchable window, if applicable */
 	if ( *prefmemsize && ( ! *prefmembase ) ) {
@@ -1409,6 +1413,12 @@ static int ena_probe ( struct pci_device *pci ) {
 				   &prefmemsize ) ) != 0 ) {
 		goto err_membases;
 	}
+
+	//
+	pci_write_config_word ( pci, PCI_COMMAND, 0x0 );
+	mdelay ( 100 );
+	pci_write_config_word ( pci, PCI_COMMAND, 0x0406 );
+
 
 	/* Map registers */
 	ena->regs = pci_ioremap ( pci, pci->membase, ENA_REGS_SIZE );
@@ -1472,6 +1482,38 @@ static int ena_probe ( struct pci_device *pci ) {
 	 */
 	if ( ena->mem && ( ena->features & ENA_FEATURE_LLQ ) )
 		ena_llq_config ( ena );
+
+	//
+	if ( 0 ) {
+		struct pci_bridge *bridge;
+		while ( pci->busdevfn ) {
+			uint32_t cfg[256 / 4];
+			unsigned int i;
+			for ( i = 0 ; i < (256 / 4) ; i++ ) {
+				pci_read_config_dword ( pci, i * 4,
+							&cfg[i] );
+			}
+			DBGC ( ena, "*** PCI " PCI_FMT ":\n",
+			       PCI_ARGS ( pci ) );
+			DBGC_HDA ( ena, 0, cfg, sizeof ( cfg ) );
+			bridge = pcibridge_find ( pci );
+			if ( ! bridge )
+				break;
+			pci = bridge->pci;
+		}
+		struct pci_device temp;
+		memset ( &temp, 0, sizeof ( temp ) );
+		pci = &temp;
+		uint32_t cfg[256 / 4];
+		unsigned int i;
+		for ( i = 0 ; i < (256 / 4) ; i++ ) {
+			pci_read_config_dword ( pci, i * 4,
+						&cfg[i] );
+		}
+		DBGC ( ena, "*** PCI " PCI_FMT ":\n",
+		       PCI_ARGS ( pci ) );
+		DBGC_HDA ( ena, 0, cfg, sizeof ( cfg ) );
+	}
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
