@@ -1345,7 +1345,6 @@ static int ena_probe ( struct pci_device *pci ) {
 	struct ena_host_info *info;
 	unsigned long prefmembase;
 	unsigned long prefmemsize;
-	uint16_t command;
 	int rc;
 
 	/* Allocate and initialise net device */
@@ -1377,13 +1376,6 @@ static int ena_probe ( struct pci_device *pci ) {
 				   &prefmemsize ) ) != 0 ) {
 		goto err_membases;
 	}
-
-	//
-	pci_read_config_word ( pci, PCI_COMMAND, &command );
-	command &= ~PCI_COMMAND_MEM;
-	pci_write_config_word ( pci, PCI_COMMAND, command );
-	command |= PCI_COMMAND_MEM;
-	pci_write_config_word ( pci, PCI_COMMAND, command );
 
 	/* Map registers */
 	ena->regs = pci_ioremap ( pci, pci->membase, ENA_REGS_SIZE );
