@@ -33,6 +33,7 @@ jobs:
                ${{ env.bindir }}/8086100e.mrom \
                ${{ env.bindir }}/ipxe.dsk \
                ${{ env.bindir }}/ipxe.iso \
+               ${{ env.bindir }}/ipxe.lkrn \
                ${{ env.bindir }}/ipxe.pxe \
                ${{ env.bindir }}/ipxe.usb \
                ${{ env.bindir }}/undionly.kpxe
