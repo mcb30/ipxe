@@ -184,6 +184,9 @@ jobs:
           path: artifacts
           pattern: bin{,-*}
 
+      - run: |
+          find artifacts
+
       - name: Combine
         run: |
           ./src/util/genfsimg -o artifacts/ipxe.iso \
@@ -203,6 +206,4 @@ jobs:
           if-no-files-found: error
           path: artifacts/ipxe.iso
 
-      - run: |
-          find artifacts
-          # PUBLISH ONLY IF MASTER!
+# PUBLISH ONLY IF MASTER!
