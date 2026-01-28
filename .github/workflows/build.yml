@@ -173,7 +173,7 @@ jobs:
       - bios
       - uefi
     container:
-      image: ghcr.io/ipxe/ipxe-builder-x86_64
+      image: ghcr.io/ipxe/ipxe-signer
     steps:
 
       - name: Check out code
