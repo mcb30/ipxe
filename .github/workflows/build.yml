@@ -43,6 +43,7 @@ jobs:
           name: ${{ env.bindir }}
           if-no-files-found: error
           path: |
+            src/${{ env.bindir }}/ipxe.lkrn
             src/${{ env.bindir }}/ipxe.iso
             src/${{ env.bindir }}/ipxe.pxe
             src/${{ env.bindir }}/ipxe.usb
@@ -186,7 +187,7 @@ jobs:
       - name: Combine
         run: |
           ./src/util/genfsimg -o artifacts/ipxe.iso \
-                              artifacts/bin/ipxe.lkrn \
+                              artifacts/bin-x86_64-pcbios/ipxe.lkrn \
                               artifacts/bin-arm32-efi/ipxe.efi \
                               artifacts/bin-arm64-efi/ipxe.efi \
                               artifacts/bin-i386-efi/ipxe.efi \
