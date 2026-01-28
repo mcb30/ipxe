@@ -163,3 +163,21 @@ jobs:
         working-directory: src
         run: |
           ${{ matrix.exec }} ${{ env.bindir }}/tests.linux
+
+  rolling:
+    name: Rolling release
+    runs-on: ubuntu-latest
+    needs:
+      - bios
+      - sbi
+      - uefi
+    steps:
+
+      - name: Download
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          pattern: bin{,-*}
+
+      - run: |
+          find artifacts
