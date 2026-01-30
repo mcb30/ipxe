@@ -268,7 +268,7 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           path: artifacts
-          name: '{bin,bin-*}'
+          pattern: '{bin,bin-*}'
 
       - name: List
         run: |
