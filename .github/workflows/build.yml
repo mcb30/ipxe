@@ -8,7 +8,7 @@ env:
 jobs:
 
   bios:
-    name: BIOS
+    name: BIOS / ${{ matrix.arch }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -49,7 +49,7 @@ jobs:
             src/${{ env.bindir }}/undionly.kpxe
 
   sbi:
-    name: SBI
+    name: SBI / ${{ matrix.arch }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -83,7 +83,7 @@ jobs:
             src/${{ env.bindir }}/ipxe.sbi
 
   uefi:
-    name: UEFI
+    name: UEFI / ${{ matrix.arch }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -123,7 +123,7 @@ jobs:
             src/${{ env.bindir }}/snponly.efi
 
   tests:
-    name: Tests (${{ matrix.arch }})
+    name: Tests / ${{ matrix.arch }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -213,66 +213,97 @@ jobs:
             ipxe.usb
 
   publish:
-    name: Publish
+    name: Publish / Build
     runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'push' &&
-      github.ref == 'refs/heads/master' &&
-      vars.ROLLING_PREFIX
     needs:
       - bios
       - sbi
       - uefi
       - tests
       - combine
-    strategy:
-      fail-fast: false
-      matrix:
-        bindir:
-          - bin
-          - bin-arm32-efi
-          - bin-arm64-efi
-          - bin-combi
-          - bin-i386-efi
-          - bin-loong64-efi
-          - bin-riscv32
-          - bin-riscv32-efi
-          - bin-riscv64
-          - bin-riscv64-efi
-          - bin-x86_64-efi
-          - bin-x86_64-pcbios
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/master' &&
+      fromJSON ( vars.PUBLISH_PAGES || 'false' )
     env:
-      tag: ${{ vars.ROLLING_PREFIX }}/${{ matrix.bindir }}
+      binaries: >-
+        bin/ipxe.lkrn
+        bin/ipxe.pxe
+        bin/undionly.kpxe
+        bin-arm32-efi/ipxe.efi
+        bin-arm32-efi/snponly.efi
+        bin-arm64-efi/ipxe.efi
+        bin-arm64-efi/snponly.efi
+        bin-i386-efi/ipxe.efi
+        bin-i386-efi/snponly.efi
+        bin-loong64-efi/ipxe.efi
+        bin-loong64-efi/snponly.efi
+        bin-riscv32/ipxe.lkrn
+        bin-riscv32/ipxe.sbi
+        bin-riscv32-efi/ipxe.efi
+        bin-riscv32-efi/snponly.efi
+        bin-riscv64/ipxe.lkrn
+        bin-riscv64/ipxe.sbi
+        bin-riscv64-efi/ipxe.efi
+        bin-riscv64-efi/snponly.efi
+        bin-x86_64-efi/ipxe.efi
+        bin-x86_64-efi/snponly.efi
+        bin-x86_64-pcbios/ipxe.lkrn
+        bin-x86_64-pcbios/ipxe.pxe
+        bin-x86_64-pcbios/undionly.kpxe
+      toplevel: >-
+        bin/ipxe.pxe
+        bin/undionly.kpxe
+        bin-combi/ipxe.iso
+        bin-combi/ipxe.usb
+        bin-x86_64-efi/ipxe.efi
+        bin-x86_64-efi/snponly.efi
     steps:
 
-      - name: Check out code
-        uses: actions/checkout@v6
-
-      - name: Rolling tag
-        run: |
-          git tag -f ${{ env.tag }} ${{ github.sha }}
+      - name: Configure
+        id: pages
+        uses: actions/configure-pages@v5
 
       - name: Download
         uses: actions/download-artifact@v7
         with:
-          path: ${{ matrix.bindir }}
-          name: ${{ matrix.bindir }}
+          path: artifacts
+          name: '{bin,bin-*}'
 
-      - name: List artifacts
+      - name: List
         run: |
-          find ${{ matrix.bindir }} -type f
+          find artifacts -type f
 
-      - name: Update release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Build
         run: |
-          git push -f origin ${{ env.tag }}
-          gh release view ${{ env.tag }} >/dev/null 2>&1 || \
-              gh release create ${{ env.tag }} --prerelease
-          gh release edit ${{ env.tag }} \
-              --prerelease \
-              --tag ${{ env.tag }} \
-              --target ${{ github.sha }} \
-              --title ${{ env.tag }} \
-              --notes "Rolling release of ${{ matrix.bindir }} directory"
-          gh release upload ${{ env.tag }} --clobber ${{ matrix.bindir }}/*
+          mkdir pages
+          for i in ${{ env.binaries }} ; do
+              mkdir -p pages/$(dirname $i)
+              cp artifacts/$i pages/$i
+          done
+          for i in ${{ env.toplevel }} ; do
+              cp artifacts/$i pages/
+          done
+
+      - name: Upload
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages
+
+  deploy:
+    name: Publish / Deploy
+    runs-on: ubuntu-latest
+    needs:
+      - publish
+    if: needs.publish.result == 'success'
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v4
