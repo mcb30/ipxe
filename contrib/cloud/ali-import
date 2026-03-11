@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date
+import io
+import subprocess
+from uuid import uuid4
+
+import alibabacloud_credentials as credentials
+import alibabacloud_credentials.client
+import alibabacloud_credentials.models
+import alibabacloud_ecs20140526 as ecs
+import alibabacloud_ecs20140526.client
+import alibabacloud_ecs20140526.models
+import alibabacloud_oss_v2 as oss
+import alibabacloud_tea_openapi as openapi
+import alibabacloud_tea_openapi.client
+import alibabacloud_tea_openapi.models
+
+IPXE_STORAGE_PREFIX = 'ipxe-upload-temp-'
+
+def all_regions(region='cn-hangzhou'):
+    """Get list of all regions"""
+    cred = credentials.client.Client()
+    conf = openapi.models.Config(credential=cred, region_id=region)
+    client = ecs.client.Client(conf)
+    rsp = client.describe_regions(ecs.models.DescribeRegionsRequest())
+    return sorted(x.region_id for x in rsp.body.regions.region)
+
+def delete_temp_bucket(client, bucket):
+    """Remove temporary bucket"""
+    assert bucket.startswith(IPXE_STORAGE_PREFIX)
+    req = oss.models.ListObjectsV2Request(
+        bucket=bucket,
+        prefix=IPXE_STORAGE_PREFIX,
+    )
+    rsp = client.list_objects_v2(req)
+    for obj in rsp.contents or ():
+        assert obj.key.startswith(IPXE_STORAGE_PREFIX)
+        req = oss.models.DeleteObjectRequest(bucket=bucket, key=obj.key)
+        client.delete_object(req)
+    req = oss.models.DeleteBucketRequest(bucket=bucket)
+    client.delete_bucket(req)
+
+def create_temp_bucket(client):
+    """Create temporary bucket (and remove any stale temporary buckets)"""
+    req = oss.models.ListBucketsRequest(prefix=IPXE_STORAGE_PREFIX)
+    rsp = client.list_buckets(req)
+    for bucket in rsp.buckets or ():
+        delete_temp_bucket(client, bucket.name)
+    bucket = '%s%s' % (IPXE_STORAGE_PREFIX, uuid4())
+    req = oss.models.PutBucketRequest(bucket=bucket)
+    rsp = client.put_bucket(req)
+    return bucket
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="Import Alibaba Cloud image")
+parser.add_argument('--region', '-r', action='append',
+                    help="AliCloud region(s)")
+parser.add_argument('image', nargs='+', help="iPXE disk image")
+args = parser.parse_args()
+
+
+# Use all regions if none specified
+if not args.region:
+    args.region = all_regions()
+
+print(args.region)
+
+
+
+cred = oss.credentials.EnvironmentVariableCredentialsProvider()
+conf = oss.config.Config(credentials_provider=cred, region='eu-west-1')
+client = oss.client.Client(conf)
+bucket = create_temp_bucket(client)
+print(bucket)
