@@ -2,6 +2,7 @@
 
 import argparse
 import base64
+from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 import io
@@ -29,56 +30,49 @@ OSS_FORBIDDEN_REGION_CODE = 'ForbidCreateNewBucket'
 
 IPXE_STORAGE_PREFIX = 'ipxe-upload-temp-'
 
-def ecs_client(region=None):
-    """Get elastic compute service client"""
-    cred = credentials.client.Client()
-    conf = openapi.models.Config(
-        credential=cred,
-        region_id=region,
-        endpoint=ECS_ENDPOINT if region is None else None,
-    )
-    client = ecs.client.Client(conf)
-    return client
-
-def fc_client(region):
-    """Get function compute client"""
-    cred = credentials.client.Client()
-    conf = openapi.models.Config(credential=cred, region_id=region)
-    client = fc.client.Client(conf)
-    return client
-
-def oss_client(region):
-    """Get object storage client"""
-    cred = oss.credentials.EnvironmentVariableCredentialsProvider()
-    conf = oss.config.Config(credentials_provider=cred, region=region)
-    client = oss.client.Client(conf)
-    return client
+Clients = namedtuple('Clients', ['ecs', 'fc', 'oss'])
 
 def all_regions():
     """Get list of all regions"""
-    client = ecs_client()
+    cred = credentials.client.Client()
+    conf = openapi.models.Config(credential=cred, endpoint=ECS_ENDPOINT)
+    client = ecs.client.Client(conf)
     req = ecs.models.DescribeRegionsRequest()
     rsp = client.describe_regions(req)
     regions = sorted(x.region_id for x in rsp.body.regions.region)
     return regions
 
+def all_clients(region):
+    """Get clients for a region"""
+    cred = credentials.client.Client()
+    conf = openapi.models.Config(credential=cred, region_id=region)
+    osscred = oss.credentials.EnvironmentVariableCredentialsProvider()
+    ossconf = oss.config.Config(credentials_provider=osscred, region=region)
+    clients = Clients(
+        ecs=ecs.client.Client(conf),
+        fc=fc.client.Client(conf),
+        oss=oss.client.Client(ossconf),
+    )
+    return clients
+
+def delete_temp_functions(clients):
+    """Delete temporary functions"""
+    req = fc.models.ListFunctionsRequest(prefix=IPXE_STORAGE_PREFIX)
+    rsp = clients.fs.list_functions(req)
+    print(rsp)
 
 
-
-
-def create_temp_function(region):
+def create_temp_function(clients):
     """Create function to bypass moronic Chinese censorship restrictions"""
-    client = fc_client(region)
     func = '''
-    const fs = require("fs"), path = "/mnt/oss/";
-    exports.handler = async (event, context) => {
-      let name = context.http.headers["x-filename"];
-      if (name) {
-        fs.writeFileSync(path + name, event);
-      } else {
-        for (const x of fs.readdirSync(p))
-          fs.unlinkSync(path + x);
-      }
+    const fs = require("fs");
+    const path = "/mnt/oss/";
+    exports.handler = async (event) => {
+      const req = JSON.parse(event)
+      for (const name of fs.readdirSync(patb))
+        fs.unlinkSync(path + name);
+      for (const name in req)
+        fs.writeFileSync(path + name, Buffer.from(req[name], "base64"))
     };
     '''.lstrip()
     buf = io.BytesIO()
@@ -93,40 +87,40 @@ def create_temp_function(region):
         handler='index.handler',
     )
     req = fc.models.CreateFunctionRequest(body=body)
-    rsp = client.create_function(req)
+    rsp = clients.fc.create_function(req)
     return name
 
-def delete_temp_bucket(region, bucket):
+def delete_temp_bucket(clients, bucket):
     """Remove temporary bucket"""
-    client = oss_client(region)
     assert bucket.startswith(IPXE_STORAGE_PREFIX)
     req = oss.models.ListObjectsV2Request(
         bucket=bucket,
         prefix=IPXE_STORAGE_PREFIX,
     )
-    #rsp = client.list_objects_v2(req)
-    #objs = [oss.models.DeleteObject(x.key) for x in rsp.contents or ()]
-    objs = ()
+    rsp = clients.oss.list_objects_v2(req)
+    objs = [oss.models.DeleteObject(x.key) for x in rsp.contents or ()]
     for obj in objs:
         assert obj.key.startswith(IPXE_STORAGE_PREFIX)
     req = oss.models.DeleteMultipleObjectsRequest(bucket=bucket, objects=objs)
     if objs:
-        client.delete_multiple_objects(req)
+        clients.oss.delete_multiple_objects(req)
     req = oss.models.DeleteBucketRequest(bucket=bucket)
-    client.delete_bucket(req)
+    clients.oss.delete_bucket(req)
 
-def create_temp_bucket(region):
-    """Create temporary bucket (and remove any stale temporary buckets)"""
-    client = oss_client(region)
+def delete_temp_buckets(clients, region):
+    """Delete stale temporary buckets"""
     req = oss.models.ListBucketsRequest(prefix=IPXE_STORAGE_PREFIX)
-    rsp = client.list_buckets(req)
+    rsp = clients.oss.list_buckets(req)
     buckets = [x.name for x in rsp.buckets or () if x.region == region]
     for bucket in buckets:
-        delete_temp_bucket(region, bucket)
+        delete_temp_bucket(clients, bucket)
+
+def create_temp_bucket(clients):
+    """Create temporary bucket (and remove any stale temporary buckets)"""
     bucket = '%s%s' % (IPXE_STORAGE_PREFIX, uuid4())
     req = oss.models.PutBucketRequest(bucket=bucket)
     try:
-        rsp = client.put_bucket(req)
+        rsp = clients.oss.put_bucket(req)
     except oss.exceptions.OperationError as exc:
         # AliCloud provides no other way to detect non-functional regions
         if exc.unwrap().code == OSS_FORBIDDEN_REGION_CODE:
@@ -135,14 +129,22 @@ def create_temp_bucket(region):
             raise exc
     return bucket
 
-def upload_image(region, bucket, image):
+def upload_image(clients, bucket, image):
     """Upload disk image to bucket"""
-    client = oss_client(region)
     key = '%s%s' % (IPXE_STORAGE_PREFIX, uuid4())
     req = oss.models.PutObjectRequest(bucket=bucket, key=key)
-    rsp = client.put_object_from_file(req, image)
+    rsp = clients.oss.put_object_from_file(req, image)
     return key
 
+def import_images(clients, region, images):
+    """Import images to region (if possible)"""
+    #delete_temp_functions(clients)
+    delete_temp_buckets(clients, region)
+    bucket = create_temp_bucket(clients)
+    if bucket is None:
+        return
+    keys = [upload_image(clients, bucket, x) for x in images]
+    delete_temp_bucket(clients, bucket)
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Import Alibaba Cloud image")
@@ -151,49 +153,19 @@ parser.add_argument('--region', '-r', action='append',
 parser.add_argument('image', nargs='+', help="iPXE disk image")
 args = parser.parse_args()
 
-
 # Use all regions if none specified
 if not args.region:
     args.region = all_regions()
 
-# Create temporary function in each region
+# Construct per-region clients (must be done in the top-level thread)
+clients = {region: all_clients(region) for region in args.region}
+
+# Use one thread per region since we don't trust AliCloud library thread safety
 with ThreadPoolExecutor(max_workers=len(args.region)) as executor:
-    futures = {executor.submit(create_temp_function, region=region): region
+    futures = {executor.submit(import_images,
+                               clients=clients[region],
+                               region=region,
+                               images=args.image): region
                for region in args.region}
     functions = {futures[future]: future.result()
                  for future in as_completed(futures)}
-
-# Create temporary bucket in each region
-with ThreadPoolExecutor(max_workers=len(args.region)) as executor:
-    futures = {executor.submit(create_temp_bucket, region=region): region
-               for region in args.region}
-    buckets = {futures[future]: future.result()
-               for future in as_completed(futures)}
-
-print(buckets)
-
-# Import images
-imports = [
-    (region, image)
-    for region in args.region
-    for image in args.image
-    if buckets[region] is not None
-]
-with ThreadPoolExecutor(max_workers=len(imports)) as executor:
-    futures = {executor.submit(import_image,
-                               region=region,
-                               bucket=buckets[region],
-                               image=image): (region, image)
-               for region, image in imports}
-    results = {futures[future]: future.result()
-               for future in as_completed(futures)}
-
-print(results)
-
-# Clean up temporary buckets
-with ThreadPoolExecutor(max_workers=len(args.region)) as executor:
-    futures = [executor.submit(delete_temp_bucket,
-                               region=region,
-                               bucket=buckets[region])
-               for region in args.region]
-
