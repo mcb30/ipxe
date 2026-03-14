@@ -20,15 +20,31 @@ import alibabacloud_fc20230330 as fc
 import alibabacloud_fc20230330.client
 import alibabacloud_fc20230330.models
 import alibabacloud_oss_v2 as oss
+import alibabacloud_sts20150401 as sts
+import alibabacloud_sts20150401.client
+import alibabacloud_sts20150401.models
 import alibabacloud_tea_openapi as openapi
 import alibabacloud_tea_openapi.client
 import alibabacloud_tea_openapi.models
 
 ECS_ENDPOINT = 'ecs.aliyuncs.com'
+STS_ENDPOINT = 'sts.aliyuncs.com'
 FC_NODE_RUNTIME = 'nodejs20'
 OSS_FORBIDDEN_REGION_CODE = 'ForbidCreateNewBucket'
 
 IPXE_STORAGE_PREFIX = 'ipxe-upload-temp-'
+
+IPXE_CENSORSHIP_BYPASS_FUNCTION = '''
+const fs = require("fs");
+const path = "/mnt/oss/";
+exports.handler = async (event) => {
+  const req = JSON.parse(event)
+  for (const name of fs.readdirSync(patb))
+    fs.unlinkSync(path + name);
+  for (const name in req)
+    fs.writeFileSync(path + name, Buffer.from(req[name], "base64"))
+};
+'''
 
 Clients = namedtuple('Clients', ['ecs', 'fc', 'oss'])
 
@@ -42,49 +58,52 @@ def all_regions():
     regions = sorted(x.region_id for x in rsp.body.regions.region)
     return regions
 
-def all_clients(region):
+def account_id():
+    """Get account ID"""
+    cred = credentials.client.Client()
+    conf = openapi.models.Config(credential=cred, endpoint=STS_ENDPOINT)
+    client = sts.client.Client(conf)
+    rsp = client.get_caller_identity()
+    return rsp.body.account_id
+
+def all_clients(region, account):
     """Get clients for a region"""
     cred = credentials.client.Client()
-    conf = openapi.models.Config(credential=cred, region_id=region)
+    ecsconf = openapi.models.Config(credential=cred, region_id=region)
+    fcep = '%s.%s.fc.aliyuncs.com' % (account, region)
+    fcconf = openapi.models.Config(credential=cred, endpoint=fcep)
     osscred = oss.credentials.EnvironmentVariableCredentialsProvider()
     ossconf = oss.config.Config(credentials_provider=osscred, region=region)
     clients = Clients(
-        ecs=ecs.client.Client(conf),
-        fc=fc.client.Client(conf),
+        ecs=ecs.client.Client(ecsconf),
+        fc=fc.client.Client(fcconf),
         oss=oss.client.Client(ossconf),
     )
     return clients
 
-def delete_temp_functions(clients):
-    """Delete temporary functions"""
-    req = fc.models.ListFunctionsRequest(prefix=IPXE_STORAGE_PREFIX)
-    rsp = clients.fs.list_functions(req)
-    print(rsp)
-
+def delete_temp_function(clients, func):
+    """Remove temporary function"""
+    assert func.startswith(IPXE_STORAGE_PREFIX)
+    clients.fc.delete_function(func)
 
 def create_temp_function(clients):
-    """Create function to bypass moronic Chinese censorship restrictions"""
-    func = '''
-    const fs = require("fs");
-    const path = "/mnt/oss/";
-    exports.handler = async (event) => {
-      const req = JSON.parse(event)
-      for (const name of fs.readdirSync(patb))
-        fs.unlinkSync(path + name);
-      for (const name in req)
-        fs.writeFileSync(path + name, Buffer.from(req[name], "base64"))
-    };
-    '''.lstrip()
+    """Create temporary function (and remove any stale temporary functions)"""
+    req = fc.models.ListFunctionsRequest(prefix=IPXE_STORAGE_PREFIX)
+    rsp = clients.fc.list_functions(req)
+    funcs = [x.function_name for x in rsp.body.functions or ()]
+    for func in funcs:
+        delete_temp_function(clients, func)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w') as zfh:
-        zfh.writestr('index.js', func)
+        zfh.writestr('index.js', IPXE_CENSORSHIP_BYPASS_FUNCTION)
     zf = base64.b64encode(buf.getvalue()).decode()
     code = fc.models.InputCodeLocation(zip_file=zf)
     name = '%s%s' % (IPXE_STORAGE_PREFIX, uuid4())
     body = fc.models.CreateFunctionInput(
+        code=code,
         function_name=name,
-        runtime=FC_NODE_RUNTIME,
         handler='index.handler',
+        runtime=FC_NODE_RUNTIME,
     )
     req = fc.models.CreateFunctionRequest(body=body)
     rsp = clients.fc.create_function(req)
@@ -107,17 +126,15 @@ def delete_temp_bucket(clients, bucket):
     req = oss.models.DeleteBucketRequest(bucket=bucket)
     clients.oss.delete_bucket(req)
 
-def delete_temp_buckets(clients, region):
-    """Delete stale temporary buckets"""
-    req = oss.models.ListBucketsRequest(prefix=IPXE_STORAGE_PREFIX)
+def create_temp_bucket(clients, region):
+    """Create temporary bucket (and remove any stale temporary buckets)"""
+    prefix = '%s%s-' % (IPXE_STORAGE_PREFIX, region)
+    bucket = '%s%s' % (prefix, uuid4())
+    req = oss.models.ListBucketsRequest(prefix=prefix)
     rsp = clients.oss.list_buckets(req)
-    buckets = [x.name for x in rsp.buckets or () if x.region == region]
+    buckets = [x.name for x in rsp.buckets or ()]
     for bucket in buckets:
         delete_temp_bucket(clients, bucket)
-
-def create_temp_bucket(clients):
-    """Create temporary bucket (and remove any stale temporary buckets)"""
-    bucket = '%s%s' % (IPXE_STORAGE_PREFIX, uuid4())
     req = oss.models.PutBucketRequest(bucket=bucket)
     try:
         rsp = clients.oss.put_bucket(req)
@@ -138,13 +155,13 @@ def upload_image(clients, bucket, image):
 
 def import_images(clients, region, images):
     """Import images to region (if possible)"""
-    #delete_temp_functions(clients)
-    delete_temp_buckets(clients, region)
-    bucket = create_temp_bucket(clients)
+    func = create_temp_function(clients)
+    bucket = create_temp_bucket(clients, region)
     if bucket is None:
         return
     keys = [upload_image(clients, bucket, x) for x in images]
     delete_temp_bucket(clients, bucket)
+    delete_temp_function(clients, func)
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Import Alibaba Cloud image")
@@ -158,7 +175,8 @@ if not args.region:
     args.region = all_regions()
 
 # Construct per-region clients (must be done in the top-level thread)
-clients = {region: all_clients(region) for region in args.region}
+account = account_id()
+clients = {region: all_clients(region, account) for region in args.region}
 
 # Use one thread per region since we don't trust AliCloud library thread safety
 with ThreadPoolExecutor(max_workers=len(args.region)) as executor:
