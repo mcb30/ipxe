@@ -5,6 +5,7 @@ import base64
 from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
+import http
 import io
 import json
 import subprocess
@@ -44,15 +45,25 @@ OSS_FORBIDDEN_REGION_CODE = 'ForbidCreateNewBucket'
 
 IPXE_STORAGE_PREFIX = 'ipxe-upload-temp-'
 
-IPXE_CENSORSHIP_BYPASS_FUNCTION = '''
-const fs = require("fs");
-const mountpoint = "/mnt/bucket/";
-exports.handler = async (event) => {
-  const req = JSON.parse(event)
-  for (const name of fs.readdirSync(mountpoint))
-    fs.unlinkSync(mountpoint + name);
-  for (const name in req)
-    fs.writeFileSync(mountpoint + name, Buffer.from(req[name], "base64"))
+IPXE_CENSORSHIP_BYPASS_FUNCTION = f'''
+const prefix = "{IPXE_STORAGE_PREFIX}";
+''' + '''
+const OSS = require("ali-oss");
+exports.handler = async (event, context) => {
+  const payload = JSON.parse(event.toString());
+  const store = new OSS({
+    region: "oss-" + context.region,
+    internal: true,
+    bucket: payload.bucket,
+    accessKeyId: context.credentials.accessKeyId,
+    accessKeySecret: context.credentials.accessKeySecret,
+    stsToken: context.credentials.securityToken,
+  });
+  const files = ((await store.listV2({prefix: prefix})).objects || []);
+  if (files.length > 0) {
+    await store.deleteMulti(files.map(x => x.name));
+  }
+
 };
 '''
 
@@ -129,46 +140,29 @@ def create_temp_function(clients, role):
     rsp = clients.fc.create_function(req)
     return name
 
-def call_temp_function(clients, func, bucket, params):
+def call_temp_function(clients, func, bucket, files):
     """Call temporary function"""
-    req = oss.models.GetBucketInfoRequest(bucket=bucket)
-    rsp = clients.oss.get_bucket_info(req)
-    endpoint = 'http://%s' % rsp.bucket_info.intranet_endpoint
-    mountpoint = fc.models.OSSMountPoint(
-        bucket_name=bucket,
-        endpoint=endpoint,
-        mount_dir='/mnt/bucket',
-    )
-    mountconf = fc.models.OSSMountConfig([mountpoint])
-    body = fc.models.UpdateFunctionInput(oss_mount_config=mountconf)
-    req = fc.models.UpdateFunctionRequest(body=body)
-    clients.fc.update_function(func, req)
-    body = json.dumps(params)
+    body = {
+        'bucket': bucket,
+    }
     hdr = fc.models.InvokeFunctionHeaders(
         x_fc_invocation_type='Sync',
         x_fc_log_type='Tail',
     )
-    req = fc.models.InvokeFunctionRequest(body=body)
+    req = fc.models.InvokeFunctionRequest(body=json.dumps(body))
     run = util.models.RuntimeOptions()
     rsp = clients.fc.invoke_function_with_options(func, req, hdr, run)
-    print(rsp)
-    print(rsp.body.getvalue())
+    log = base64.b64decode(rsp.headers.get('x-fc-log-result', b'')).decode()
+    print(log)
+    if rsp.status_code != http.HTTPStatus.OK:
+        raise RuntimeError(rsp)
+    if 'x-fc-error-type' in rsp.headers:
+        raise RuntimeError(log)
 
 def delete_temp_bucket(clients, func, bucket):
     """Remove temporary bucket"""
     assert bucket.startswith(IPXE_STORAGE_PREFIX)
     call_temp_function(clients, func, bucket, None)
-    #req = oss.models.ListObjectsV2Request(
-    #    bucket=bucket,
-    #    prefix=IPXE_STORAGE_PREFIX,
-    #)
-    #rsp = clients.oss.list_objects_v2(req)
-    #objs = [oss.models.DeleteObject(x.key) for x in rsp.contents or ()]
-    #for obj in objs:
-    #    assert obj.key.startswith(IPXE_STORAGE_PREFIX)
-    #req = oss.models.DeleteMultipleObjectsRequest(bucket=bucket, objects=objs)
-    #if objs:
-    #    clients.oss.delete_multiple_objects(req)
     req = oss.models.DeleteBucketRequest(bucket=bucket)
     clients.oss.delete_bucket(req)
 
