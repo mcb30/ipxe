@@ -6,6 +6,7 @@ from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 import io
+import json
 import subprocess
 from uuid import uuid4
 import zipfile
@@ -29,10 +30,16 @@ import alibabacloud_sts20150401.models
 import alibabacloud_tea_openapi as openapi
 import alibabacloud_tea_openapi.client
 import alibabacloud_tea_openapi.models
+import alibabacloud_tea_util as util
+import alibabacloud_tea_util.client
+import alibabacloud_tea_util.models
 
 ECS_ENDPOINT = 'ecs.aliyuncs.com'
+RAM_ENDPOINT = 'ram.aliyuncs.com'
 STS_ENDPOINT = 'sts.aliyuncs.com'
+
 FC_NODE_RUNTIME = 'nodejs20'
+
 OSS_FORBIDDEN_REGION_CODE = 'ForbidCreateNewBucket'
 
 IPXE_STORAGE_PREFIX = 'ipxe-upload-temp-'
@@ -42,7 +49,7 @@ const fs = require("fs");
 const mountpoint = "/mnt/bucket/";
 exports.handler = async (event) => {
   const req = JSON.parse(event)
-  for (const name of fs.readdirSync(patb))
+  for (const name of fs.readdirSync(mountpoint))
     fs.unlinkSync(mountpoint + name);
   for (const name in req)
     fs.writeFileSync(mountpoint + name, Buffer.from(req[name], "base64"))
@@ -69,8 +76,17 @@ def account_id():
     rsp = client.get_caller_identity()
     return rsp.body.account_id
 
+def role_arn(name):
+    """Get role resource name"""
+    cred = credentials.client.Client()
+    conf = openapi.models.Config(credential=cred, endpoint=RAM_ENDPOINT)
+    client = ram.client.Client(conf)
+    req = ram.models.GetRoleRequest(role_name=name)
+    rsp = client.get_role(req)
+    return rsp.body.role.arn
+
 def all_clients(region, account):
-    """Get clients for a region"""
+    """Construct all per-region clients"""
     cred = credentials.client.Client()
     ecsconf = openapi.models.Config(credential=cred, region_id=region)
     fcep = '%s.%s.fc.aliyuncs.com' % (account, region)
@@ -106,6 +122,7 @@ def create_temp_function(clients, role):
         code=code,
         function_name=name,
         handler='index.handler',
+        role=role,
         runtime=FC_NODE_RUNTIME,
     )
     req = fc.models.CreateFunctionRequest(body=body)
@@ -116,7 +133,6 @@ def call_temp_function(clients, func, bucket, params):
     """Call temporary function"""
     req = oss.models.GetBucketInfoRequest(bucket=bucket)
     rsp = clients.oss.get_bucket_info(req)
-    print(rsp.bucket_info)
     endpoint = 'http://%s' % rsp.bucket_info.intranet_endpoint
     mountpoint = fc.models.OSSMountPoint(
         bucket_name=bucket,
@@ -128,36 +144,43 @@ def call_temp_function(clients, func, bucket, params):
     req = fc.models.UpdateFunctionRequest(body=body)
     clients.fc.update_function(func, req)
     body = json.dumps(params)
-    req = fcs.models.InvokeFunctionRequest(body=body)
-    rsp = clients.fcs.invoke_function(func, req)
+    hdr = fc.models.InvokeFunctionHeaders(
+        x_fc_invocation_type='Sync',
+        x_fc_log_type='Tail',
+    )
+    req = fc.models.InvokeFunctionRequest(body=body)
+    run = util.models.RuntimeOptions()
+    rsp = clients.fc.invoke_function_with_options(func, req, hdr, run)
+    print(rsp)
+    print(rsp.body.getvalue())
 
 def delete_temp_bucket(clients, func, bucket):
     """Remove temporary bucket"""
     assert bucket.startswith(IPXE_STORAGE_PREFIX)
     call_temp_function(clients, func, bucket, None)
-    req = oss.models.ListObjectsV2Request(
-        bucket=bucket,
-        prefix=IPXE_STORAGE_PREFIX,
-    )
-    rsp = clients.oss.list_objects_v2(req)
-    objs = [oss.models.DeleteObject(x.key) for x in rsp.contents or ()]
-    for obj in objs:
-        assert obj.key.startswith(IPXE_STORAGE_PREFIX)
-    req = oss.models.DeleteMultipleObjectsRequest(bucket=bucket, objects=objs)
-    if objs:
-        clients.oss.delete_multiple_objects(req)
+    #req = oss.models.ListObjectsV2Request(
+    #    bucket=bucket,
+    #    prefix=IPXE_STORAGE_PREFIX,
+    #)
+    #rsp = clients.oss.list_objects_v2(req)
+    #objs = [oss.models.DeleteObject(x.key) for x in rsp.contents or ()]
+    #for obj in objs:
+    #    assert obj.key.startswith(IPXE_STORAGE_PREFIX)
+    #req = oss.models.DeleteMultipleObjectsRequest(bucket=bucket, objects=objs)
+    #if objs:
+    #    clients.oss.delete_multiple_objects(req)
     req = oss.models.DeleteBucketRequest(bucket=bucket)
     clients.oss.delete_bucket(req)
 
 def create_temp_bucket(clients, region, func):
     """Create temporary bucket (and remove any stale temporary buckets)"""
     prefix = '%s%s-' % (IPXE_STORAGE_PREFIX, region)
-    bucket = '%s%s' % (prefix, uuid4())
     req = oss.models.ListBucketsRequest(prefix=prefix)
     rsp = clients.oss.list_buckets(req)
     buckets = [x.name for x in rsp.buckets or ()]
     for bucket in buckets:
         delete_temp_bucket(clients, func, bucket)
+    bucket = '%s%s' % (prefix, uuid4())
     req = oss.models.PutBucketRequest(bucket=bucket)
     try:
         rsp = clients.oss.put_bucket(req)
@@ -190,7 +213,7 @@ def import_images(clients, region, fcrole, images):
 parser = argparse.ArgumentParser(description="Import Alibaba Cloud image")
 parser.add_argument('--region', '-r', action='append',
                     help="AliCloud region(s)")
-parser.add_argument('--fcrole', '-f', default="AliyunFcDefaultRole",
+parser.add_argument('--fc-role', '-F', default="AliyunFcDefaultRole",
                     help="AliCloud role for censorship bypass function")
 parser.add_argument('image', nargs='+', help="iPXE disk image")
 args = parser.parse_args()
@@ -198,6 +221,9 @@ args = parser.parse_args()
 # Use all regions if none specified
 if not args.region:
     args.region = all_regions()
+
+# Look up resource names
+fcrole = role_arn(args.fc_role)
 
 # Construct per-region clients (must be done in the top-level thread)
 account = account_id()
@@ -208,7 +234,7 @@ with ThreadPoolExecutor(max_workers=len(args.region)) as executor:
     futures = {executor.submit(import_images,
                                clients=clients[region],
                                region=region,
-                               fcrole=args.fcrole,
+                               fcrole=fcrole,
                                images=args.image): region
                for region in args.region}
     functions = {futures[future]: future.result()
