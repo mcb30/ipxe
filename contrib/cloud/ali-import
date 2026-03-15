@@ -98,6 +98,22 @@ exports.handler = async (event, context) => {
 '''
 
 Clients = namedtuple('Clients', ['ecs', 'fc', 'oss'])
+Image = namedtuple('Image', ['path', 'key', 'arch', 'mode'])
+
+def image(filename):
+    """Construct image description"""
+    mdir = subprocess.run(['mdir', '-b', '-i', filename, '::/EFI/BOOT'],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          check=False)
+    mapping = {
+        b'BOOTX64.EFI': 'x86_64',
+        b'BOOTAA64.EFI': 'arm64',
+    }
+    uefi = [arch for name, arch in mapping.items() if name in mdir.stdout]
+    arch = uefi[0] if len(uefi) == 1 else None if uefi else 'x86_64'
+    mode = 'uefi' if uefi else 'bios'
+    key = '%s%s' % (IPXE_STORAGE_PREFIX, uuid4())
+    return Image(Path(filename), key, arch, mode)
 
 def all_regions():
     """Get list of all regions"""
@@ -187,7 +203,6 @@ def call_temp_function(clients, func, bucket, files):
     )
     rsp = clients.fc.invoke_function_with_options(func, req, hdr, run)
     log = base64.b64decode(rsp.headers.get('x-fc-log-result', b'')).decode()
-    print(log)
     if rsp.status_code != http.HTTPStatus.OK:
         raise RuntimeError(rsp)
     if 'x-fc-error-type' in rsp.headers:
@@ -222,20 +237,16 @@ def create_temp_bucket(clients, region, func):
 
 def upload_images(clients, func, bucket, images):
     """Upload disk images to bucket"""
-    keys = {'%s%s' % (IPXE_STORAGE_PREFIX, uuid4()): x for x in images}
-    files = {x: Path(keys[x]).read_bytes() for x in keys}
+    files = {x.key: x.path.read_bytes() for x in images}
     call_temp_function(clients, func, bucket, files)
-    return keys
 
 def import_images(clients, region, fcrole, images):
     """Import images to region (if possible)"""
     func = create_temp_function(clients, fcrole)
     bucket = create_temp_bucket(clients, region, func)
-    if bucket is None:
-        return
-    keys = upload_images(clients, func, bucket, images)
-    print(keys)
-    delete_temp_bucket(clients, func, bucket)
+    if bucket is not None:
+        upload_images(clients, func, bucket, images)
+        delete_temp_bucket(clients, func, bucket)
     delete_temp_function(clients, func)
 
 # Parse command-line arguments
@@ -258,13 +269,17 @@ fcrole = role_arn(args.fc_role)
 account = account_id()
 clients = {region: all_clients(region, account) for region in args.region}
 
+# Construct image list
+images = [image(x) for x in args.image]
+print(images)
+
 # Use one thread per region since we don't trust AliCloud library thread safety
 with ThreadPoolExecutor(max_workers=len(args.region)) as executor:
     futures = {executor.submit(import_images,
                                clients=clients[region],
                                region=region,
                                fcrole=fcrole,
-                               images=args.image): region
+                               images=images): region
                for region in args.region}
     functions = {futures[future]: future.result()
                  for future in as_completed(futures)}
