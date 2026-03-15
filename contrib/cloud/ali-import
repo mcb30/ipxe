@@ -98,22 +98,27 @@ exports.handler = async (event, context) => {
 '''
 
 Clients = namedtuple('Clients', ['ecs', 'fc', 'oss'])
-Image = namedtuple('Image', ['path', 'key', 'arch', 'mode'])
+Image = namedtuple('Image', ['path', 'family', 'name', 'key', 'arch', 'mode'])
 
-def image(filename):
+def image(filename, basefamily, basename):
     """Construct image description"""
-    mdir = subprocess.run(['mdir', '-b', '-i', filename, '::/EFI/BOOT'],
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          check=False)
     mapping = {
         b'BOOTX64.EFI': 'x86_64',
         b'BOOTAA64.EFI': 'arm64',
     }
-    uefi = [arch for name, arch in mapping.items() if name in mdir.stdout]
-    arch = uefi[0] if len(uefi) == 1 else None if uefi else 'x86_64'
-    mode = 'uefi' if uefi else 'bios'
+    mdir = subprocess.run(['mdir', '-b', '-i', filename, '::/EFI/BOOT'],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          check=False)
+    uefi = [v for k, v in mapping.items() if k in mdir.stdout]
+    suffix = ('-uefi-%s' % uefi[0].replace('_', '-') if len(uefi) == 1 else
+              '-uefi-multi' if uefi else '')
+    path = Path(filename)
+    family = '%s%s' % (basefamily, suffix)
+    name = '%s%s' % (basename, suffix)
     key = '%s%s' % (IPXE_STORAGE_PREFIX, uuid4())
-    return Image(Path(filename), key, arch, mode)
+    arch = uefi[0] if len(uefi) == 1 else None if uefi else 'x86_64'
+    mode = 'UEFI' if uefi else 'BIOS'
+    return Image(path, family, name, key, arch, mode)
 
 def all_regions():
     """Get list of all regions"""
@@ -240,23 +245,89 @@ def upload_images(clients, func, bucket, images):
     files = {x.key: x.path.read_bytes() for x in images}
     call_temp_function(clients, func, bucket, files)
 
-def import_images(clients, region, fcrole, images):
+def delete_images(clients, region, name):
+    """Delete existing images"""
+    req = ecs.models.DescribeImagesRequest(
+        region_id=region,
+        image_name=name,
+        image_owner_alias='self',
+    )
+    rsp = clients.ecs.describe_images(req)
+    for image in rsp.body.images.image or ():
+        req = ecs.models.DeleteImageRequest(
+            region_id=region,
+            image_id=image.image_id
+        )
+        rsp = clients.ecs.delete_image(req)
+
+def import_image(clients, region, public, overwrite, bucket, image):
+    """Import image"""
+    if overwrite:
+        delete_images(clients, region, image.name)
+    disk = ecs.models.ImportImageRequestDiskDeviceMapping(
+        disk_image_size = 1,
+        format = 'RAW',
+        ossbucket = bucket,
+        ossobject = image.key,
+    )
+    req = ecs.models.ImportImageRequest(
+        region_id=region,
+        image_name=image.name,
+        architecture=image.arch,
+        boot_mode=image.mode,
+        disk_device_mapping=[disk],
+    )
+    rsp = clients.ecs.import_image(req)
+    image_id = rsp.body.image_id
+    req = ecs.models.ModifyImageAttributeRequest(
+        region_id=region,
+        image_id=image_id,
+        image_family=image.family,
+    )
+    rsp = clients.ecs.modify_image_attribute(req)
+    if public:
+        req = ecs.models.ModifyImageSharePermissionRequest(
+            region_id=region,
+            image_id=image_id,
+            is_public=True,
+        )
+        rsp = clients.ecs.modify_image_share_permission(req)
+    return image_id
+
+def import_images(clients, region, public, overwrite, fcrole, images):
     """Import images to region (if possible)"""
     func = create_temp_function(clients, fcrole)
     bucket = create_temp_bucket(clients, region, func)
     if bucket is not None:
         upload_images(clients, func, bucket, images)
+        image_ids = [
+            import_image(clients, region, public, overwrite, bucket, image)
+            for image in images
+        ]
         delete_temp_bucket(clients, func, bucket)
     delete_temp_function(clients, func)
+    return image_ids
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Import Alibaba Cloud image")
+parser.add_argument('--name', '-n',
+                    help="Base image name")
+parser.add_argument('--family', '-f', default='ipxe',
+                    help="Base family name")
+parser.add_argument('--public', '-p', action='store_true',
+                    help="Make image public")
+parser.add_argument('--overwrite', action='store_true',
+                    help="Overwrite any existing image with same name")
 parser.add_argument('--region', '-r', action='append',
                     help="AliCloud region(s)")
 parser.add_argument('--fc-role', '-F', default="AliyunFcDefaultRole",
                     help="AliCloud role for censorship bypass function")
 parser.add_argument('image', nargs='+', help="iPXE disk image")
 args = parser.parse_args()
+
+# Use default name if none specified
+if not args.name:
+    args.name = '%s-%s' % (args.family, date.today().strftime('%Y%m%d'))
 
 # Use all regions if none specified
 if not args.region:
@@ -270,14 +341,15 @@ account = account_id()
 clients = {region: all_clients(region, account) for region in args.region}
 
 # Construct image list
-images = [image(x) for x in args.image]
-print(images)
+images = [image(x, args.family, args.name) for x in args.image]
 
 # Use one thread per region since we don't trust AliCloud library thread safety
 with ThreadPoolExecutor(max_workers=len(args.region)) as executor:
     futures = {executor.submit(import_images,
                                clients=clients[region],
                                region=region,
+                               overwrite=args.overwrite,
+                               public=args.public,
                                fcrole=fcrole,
                                images=images): region
                for region in args.region}
