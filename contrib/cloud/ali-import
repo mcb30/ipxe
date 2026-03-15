@@ -41,8 +41,11 @@ RAM_ENDPOINT = 'ram.aliyuncs.com'
 STS_ENDPOINT = 'sts.aliyuncs.com'
 
 FC_NODE_RUNTIME = 'nodejs20'
+FC_CONNECT_TIMEOUT_MS = 10000
+FC_READ_TIMEOUT_MS = 60000
 
 OSS_FORBIDDEN_REGION_CODE = 'ForbidCreateNewBucket'
+OSS_BUCKET_NAME_LEN = 63
 
 IPXE_STORAGE_PREFIX = 'ipxe-upload-temp-'
 
@@ -164,7 +167,10 @@ def call_temp_function(clients, func, bucket, files):
         'files': {k: base64.b64encode(v).decode() for k, v in files.items()},
     }
     req = fc.models.InvokeFunctionRequest(body=json.dumps(body))
-    run = util.models.RuntimeOptions()
+    run = util.models.RuntimeOptions(
+        connect_timeout=FC_CONNECT_TIMEOUT_MS,
+        read_timeout=FC_READ_TIMEOUT_MS,
+    )
     rsp = clients.fc.invoke_function_with_options(func, req, hdr, run)
     log = base64.b64decode(rsp.headers.get('x-fc-log-result', b'')).decode()
     print(log)
@@ -188,7 +194,7 @@ def create_temp_bucket(clients, region, func):
     buckets = [x.name for x in rsp.buckets or ()]
     for bucket in buckets:
         delete_temp_bucket(clients, func, bucket)
-    bucket = '%s%s' % (prefix, uuid4())
+    bucket = ('%s%s' % (prefix, uuid4()))[:OSS_BUCKET_NAME_LEN]
     req = oss.models.PutBucketRequest(bucket=bucket)
     try:
         rsp = clients.oss.put_bucket(req)
