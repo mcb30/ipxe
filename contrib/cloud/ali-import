@@ -20,6 +20,9 @@ import alibabacloud_fc20230330 as fc
 import alibabacloud_fc20230330.client
 import alibabacloud_fc20230330.models
 import alibabacloud_oss_v2 as oss
+import alibabacloud_ram20150501 as ram
+import alibabacloud_ram20150501.client
+import alibabacloud_ram20150501.models
 import alibabacloud_sts20150401 as sts
 import alibabacloud_sts20150401.client
 import alibabacloud_sts20150401.models
@@ -36,13 +39,13 @@ IPXE_STORAGE_PREFIX = 'ipxe-upload-temp-'
 
 IPXE_CENSORSHIP_BYPASS_FUNCTION = '''
 const fs = require("fs");
-const path = "/mnt/oss/";
+const mountpoint = "/mnt/bucket/";
 exports.handler = async (event) => {
   const req = JSON.parse(event)
   for (const name of fs.readdirSync(patb))
-    fs.unlinkSync(path + name);
+    fs.unlinkSync(mountpoint + name);
   for (const name in req)
-    fs.writeFileSync(path + name, Buffer.from(req[name], "base64"))
+    fs.writeFileSync(mountpoint + name, Buffer.from(req[name], "base64"))
 };
 '''
 
@@ -86,7 +89,7 @@ def delete_temp_function(clients, func):
     assert func.startswith(IPXE_STORAGE_PREFIX)
     clients.fc.delete_function(func)
 
-def create_temp_function(clients):
+def create_temp_function(clients, role):
     """Create temporary function (and remove any stale temporary functions)"""
     req = fc.models.ListFunctionsRequest(prefix=IPXE_STORAGE_PREFIX)
     rsp = clients.fc.list_functions(req)
@@ -109,9 +112,29 @@ def create_temp_function(clients):
     rsp = clients.fc.create_function(req)
     return name
 
-def delete_temp_bucket(clients, bucket):
+def call_temp_function(clients, func, bucket, params):
+    """Call temporary function"""
+    req = oss.models.GetBucketInfoRequest(bucket=bucket)
+    rsp = clients.oss.get_bucket_info(req)
+    print(rsp.bucket_info)
+    endpoint = 'http://%s' % rsp.bucket_info.intranet_endpoint
+    mountpoint = fc.models.OSSMountPoint(
+        bucket_name=bucket,
+        endpoint=endpoint,
+        mount_dir='/mnt/bucket',
+    )
+    mountconf = fc.models.OSSMountConfig([mountpoint])
+    body = fc.models.UpdateFunctionInput(oss_mount_config=mountconf)
+    req = fc.models.UpdateFunctionRequest(body=body)
+    clients.fc.update_function(func, req)
+    body = json.dumps(params)
+    req = fcs.models.InvokeFunctionRequest(body=body)
+    rsp = clients.fcs.invoke_function(func, req)
+
+def delete_temp_bucket(clients, func, bucket):
     """Remove temporary bucket"""
     assert bucket.startswith(IPXE_STORAGE_PREFIX)
+    call_temp_function(clients, func, bucket, None)
     req = oss.models.ListObjectsV2Request(
         bucket=bucket,
         prefix=IPXE_STORAGE_PREFIX,
@@ -126,7 +149,7 @@ def delete_temp_bucket(clients, bucket):
     req = oss.models.DeleteBucketRequest(bucket=bucket)
     clients.oss.delete_bucket(req)
 
-def create_temp_bucket(clients, region):
+def create_temp_bucket(clients, region, func):
     """Create temporary bucket (and remove any stale temporary buckets)"""
     prefix = '%s%s-' % (IPXE_STORAGE_PREFIX, region)
     bucket = '%s%s' % (prefix, uuid4())
@@ -134,7 +157,7 @@ def create_temp_bucket(clients, region):
     rsp = clients.oss.list_buckets(req)
     buckets = [x.name for x in rsp.buckets or ()]
     for bucket in buckets:
-        delete_temp_bucket(clients, bucket)
+        delete_temp_bucket(clients, func, bucket)
     req = oss.models.PutBucketRequest(bucket=bucket)
     try:
         rsp = clients.oss.put_bucket(req)
@@ -153,20 +176,22 @@ def upload_image(clients, bucket, image):
     rsp = clients.oss.put_object_from_file(req, image)
     return key
 
-def import_images(clients, region, images):
+def import_images(clients, region, fcrole, images):
     """Import images to region (if possible)"""
-    func = create_temp_function(clients)
-    bucket = create_temp_bucket(clients, region)
+    func = create_temp_function(clients, fcrole)
+    bucket = create_temp_bucket(clients, region, func)
     if bucket is None:
         return
     keys = [upload_image(clients, bucket, x) for x in images]
-    delete_temp_bucket(clients, bucket)
+    delete_temp_bucket(clients, func, bucket)
     delete_temp_function(clients, func)
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Import Alibaba Cloud image")
 parser.add_argument('--region', '-r', action='append',
                     help="AliCloud region(s)")
+parser.add_argument('--fcrole', '-f', default="AliyunFcDefaultRole",
+                    help="AliCloud role for censorship bypass function")
 parser.add_argument('image', nargs='+', help="iPXE disk image")
 args = parser.parse_args()
 
@@ -183,6 +208,7 @@ with ThreadPoolExecutor(max_workers=len(args.region)) as executor:
     futures = {executor.submit(import_images,
                                clients=clients[region],
                                region=region,
+                               fcrole=args.fcrole,
                                images=args.image): region
                for region in args.region}
     functions = {futures[future]: future.result()
