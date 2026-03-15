@@ -8,6 +8,7 @@ from datetime import date
 import http
 import io
 import json
+from pathlib import Path
 import subprocess
 from uuid import uuid4
 import zipfile
@@ -59,11 +60,23 @@ exports.handler = async (event, context) => {
     accessKeySecret: context.credentials.accessKeySecret,
     stsToken: context.credentials.securityToken,
   });
-  const files = ((await store.listV2({prefix: prefix})).objects || []);
-  if (files.length > 0) {
-    await store.deleteMulti(files.map(x => x.name));
+  {
+    const objects = (await store.listV2({prefix: prefix})).objects;
+    const filenames = (objects || []).map(x => x.name).sort();
+    if (filenames.length > 0) {
+      console.log("Deleting: " + filenames.join(", "))
+      await store.deleteMulti(filenames)
+    }
   }
-
+  {
+    const filenames = Object.keys(payload.files).sort();
+    if (filenames.length > 0) {
+      console.log("Creating: " + filenames.join(", "))
+      await Promise.all(Object.entries(payload.files).map(
+        ([k, v]) => store.put(k, Buffer.from(v, "base64"))
+      ));
+    }
+  }
 };
 '''
 
@@ -142,13 +155,14 @@ def create_temp_function(clients, role):
 
 def call_temp_function(clients, func, bucket, files):
     """Call temporary function"""
-    body = {
-        'bucket': bucket,
-    }
     hdr = fc.models.InvokeFunctionHeaders(
         x_fc_invocation_type='Sync',
         x_fc_log_type='Tail',
     )
+    body = {
+        'bucket': bucket,
+        'files': {k: base64.b64encode(v).decode() for k, v in files.items()},
+    }
     req = fc.models.InvokeFunctionRequest(body=json.dumps(body))
     run = util.models.RuntimeOptions()
     rsp = clients.fc.invoke_function_with_options(func, req, hdr, run)
@@ -162,7 +176,7 @@ def call_temp_function(clients, func, bucket, files):
 def delete_temp_bucket(clients, func, bucket):
     """Remove temporary bucket"""
     assert bucket.startswith(IPXE_STORAGE_PREFIX)
-    call_temp_function(clients, func, bucket, None)
+    call_temp_function(clients, func, bucket, {})
     req = oss.models.DeleteBucketRequest(bucket=bucket)
     clients.oss.delete_bucket(req)
 
@@ -186,12 +200,12 @@ def create_temp_bucket(clients, region, func):
             raise exc
     return bucket
 
-def upload_image(clients, bucket, image):
-    """Upload disk image to bucket"""
-    key = '%s%s' % (IPXE_STORAGE_PREFIX, uuid4())
-    req = oss.models.PutObjectRequest(bucket=bucket, key=key)
-    rsp = clients.oss.put_object_from_file(req, image)
-    return key
+def upload_images(clients, func, bucket, images):
+    """Upload disk images to bucket"""
+    keys = {'%s%s' % (IPXE_STORAGE_PREFIX, uuid4()): x for x in images}
+    files = {x: Path(keys[x]).read_bytes() for x in keys}
+    call_temp_function(clients, func, bucket, files)
+    return keys
 
 def import_images(clients, region, fcrole, images):
     """Import images to region (if possible)"""
@@ -199,7 +213,8 @@ def import_images(clients, region, fcrole, images):
     bucket = create_temp_bucket(clients, region, func)
     if bucket is None:
         return
-    keys = [upload_image(clients, bucket, x) for x in images]
+    keys = upload_images(clients, func, bucket, images)
+    print(keys)
     delete_temp_bucket(clients, func, bucket)
     delete_temp_function(clients, func)
 
