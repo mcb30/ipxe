@@ -13,6 +13,7 @@ help() {
     echo "where OPTIONS are:"
     echo " -h         show this help"
     echo " -e SHIM    specify an EFI shim helper"
+    echo " -l LOG     add a console log partition (in kB)"
     echo " -o FILE    save image to file"
     echo " -p PAD     pad filesystem (in kB)"
     echo " -s SCRIPT  use executable script"
@@ -144,12 +145,13 @@ copy_syslinux_file() {
 
 # Parse command-line options
 #
+LOGSIZE=
 OUTFILE=
 PAD=0
 SCRIPT=
 SHIMAA64=
 SHIMX64=
-while getopts "he:o:p:s:" OPTION ; do
+while getopts "he:l:o:p:s:" OPTION ; do
     case "${OPTION}" in
 	h)
 	    help
@@ -169,6 +171,9 @@ while getopts "he:o:p:s:" OPTION ; do
 		    echo "${SHIM}: unsupported shim architecture" >&2
 		    exit 1
 	    esac
+	    ;;
+	l)
+	    LOGSIZE="${OPTARG}"
 	    ;;
 	o)
 	    OUTFILE="${OPTARG}"
@@ -224,6 +229,10 @@ case "${OUTFILE}" in
 	PARTSECT=1
 	;;
 esac
+if [ "${PARTSECT}" -eq 0 -a -n "${LOGSIZE}" ] ; then
+    echo "${0}: cannot create a log partition in an ISO image" >&2
+    exit 1
+fi
 
 # Copy files to temporary working directory
 #
@@ -356,6 +365,12 @@ if [ -n "${FATIMG}" ] ; then
     mcopy -s "${FATDIR}"/* z:
     if [ "${BIOSDIR}" = "${FATDIR}" ] ; then
 	syslinux --offset "$(( PARTSECT * 512 ))" "${FATIMG}"
+    fi
+    if [ -n "${LOGSIZE}" ] ; then
+	echo "iPXE LOG" >> "${FATIMG}"
+	echo "" >> "${FATIMG}"
+	truncate -s "$(( FATSIZE + LOGSIZE ))K" "${FATIMG}"
+	echo "$(( FATSIZE * 2 )),,e0" | sfdisk -q -a "${FATIMG}"
     fi
 fi
 
