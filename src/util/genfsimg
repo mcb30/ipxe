@@ -97,15 +97,13 @@ efi_boot_arch() {
     esac
 }
 
-# Copy syslinux file
+# Find syslinux file
 #
-copy_syslinux_file() {
+find_syslinux_file() {
     local FILENAME
-    local DESTDIR
     local SRCDIR
 
     FILENAME="${1}"
-    DESTDIR="${2}"
 
     for SRCDIR in \
 	/usr/lib/syslinux \
@@ -122,12 +120,26 @@ copy_syslinux_file() {
 	/usr/lib/ISOLINUX \
 	; do
 	if [ -e "${SRCDIR}/${FILENAME}" ] ; then
-	    install -m 644 "${SRCDIR}/${FILENAME}" "${DESTDIR}/"
+	    echo "${SRCDIR}/${FILENAME}"
 	    return 0
 	fi
     done
     echo "${0}: could not find ${FILENAME}" >&2
     return 1
+}
+
+# Copy syslinux file
+#
+copy_syslinux_file() {
+    local FILENAME
+    local DESTDIR
+    local SRCFILE
+
+    FILENAME="${1}"
+    DESTDIR="${2}"
+
+    SRCFILE=$(find_syslinux_file "${FILENAME}")
+    install -m 644 "${SRCFILE}" "${DESTDIR}/"
 }
 
 # Parse command-line options
@@ -190,7 +202,9 @@ fi
 WORKDIR=$(mktemp -d "${OUTFILE}.XXXXXX")
 ISODIR="${WORKDIR}/iso"
 FATDIR="${WORKDIR}/fat"
+MTOOLSRC="${WORKDIR}/mtoolsrc"
 mkdir -p "${ISODIR}" "${FATDIR}"
+export MTOOLSRC
 
 # Configure output
 #
@@ -200,12 +214,14 @@ case "${OUTFILE}" in
 	FATIMG="${ISODIR}/esp.img"
 	BIOSDIR="${ISODIR}"
 	SYSLINUXCFG="${ISODIR}/isolinux.cfg"
+	PARTSECT=0
 	;;
     *)
 	ISOIMG=
 	FATIMG="${OUTFILE}"
 	BIOSDIR="${FATDIR}"
 	SYSLINUXCFG="${FATDIR}/syslinux.cfg"
+	PARTSECT=1
 	;;
 esac
 
@@ -313,7 +329,7 @@ if [ -n "${FATIMG}" ] ; then
     FATSIZE=$(du -s -k "${FATDIR}" | cut -f1)
     FATSIZE=$(( FATSIZE + PAD + 256 ))
     touch "${FATIMG}"
-    if [ "${FATSIZE}" -le "1440" ] ; then
+    if [ "${PARTSECT}" -eq 0 -a "${FATSIZE}" -le "1440" ] ; then
 	FATSIZE=1440
 	FATARGS="-f 1440"
     else
@@ -325,11 +341,21 @@ if [ -n "${FATIMG}" ] ; then
 	FATSERIAL=$(( SOURCE_DATE_EPOCH % 100000000 ))
 	FATARGS="${FATARGS} -N ${FATSERIAL}"
     fi
+    if [ "${PARTSECT}" -ne 0 ] ; then
+	MBRBIN=$(find_syslinux_file "mbr.bin")
+	cp "${MBRBIN}" "${FATIMG}"
+    fi
     truncate -s "${FATSIZE}K" "${FATIMG}"
-    mformat -v iPXE -i "${FATIMG}" ${FATARGS} ::
-    mcopy -i "${FATIMG}" -s "${FATDIR}"/* ::
+    echo "drive z:" > "${MTOOLSRC}"
+    echo "file=\"${FATIMG}\"" >> "${MTOOLSRC}"
+    if [ "${PARTSECT}" -ne 0 ] ; then
+	echo "partition=1" >> "${MTOOLSRC}"
+	echo "${PARTSECT},,c,*" | sfdisk -q "${FATIMG}"
+    fi
+    mformat -v iPXE ${FATARGS} z:
+    mcopy -s "${FATDIR}"/* z:
     if [ "${BIOSDIR}" = "${FATDIR}" ] ; then
-	syslinux "${FATIMG}"
+	syslinux --offset "$(( PARTSECT * 512 ))" "${FATIMG}"
     fi
 fi
 
