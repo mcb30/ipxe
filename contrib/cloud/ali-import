@@ -7,9 +7,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
 import http
 import io
-from itertools import cycle
+from itertools import cycle, groupby
 import json
 import logging
+from operator import itemgetter
 from pathlib import Path
 import subprocess
 import tempfile
@@ -80,7 +81,7 @@ exports.handler = async (event, context) => {
   const payload = JSON.parse(event.toString());
   console.log(JSON.stringify(payload));
   const sources = payload.sources || {};
-  const dst = new OSS({
+  const dest = new OSS({
     region: "oss-" + context.region,
     internal: true,
     bucket: payload.bucket,
@@ -98,16 +99,23 @@ exports.handler = async (event, context) => {
   if (del.length)
     console.log("Deleting: " + del.sort().join(", "));
   const copy = async (key) => {
-    const url = sources[key];
-    console.log("Downloading " + key + " from " + url);
-    const download = await fetch(url);
-    if (! download.ok)
-      throw new Error("Download failed: " + download.status);
-    const content = await download.arrayBuffer();
-    console.log("Downloaded " + key);
-    console.log("Uploading " + key);
-    await dest.put(key, Buffer.from(content));
-    console.log("Uploaded " + key);
+    for (const url of sources[key]) {
+      console.log("Downloading " + key + " from " + url);
+      try {
+        const download = await fetch(url);
+        if (! download.ok)
+          throw new Error(download.status);
+        const content = await download.arrayBuffer();
+        console.log("Downloaded " + key);
+        console.log("Uploading " + key);
+        await dest.put(key, Buffer.from(content));
+        console.log("Uploaded " + key);
+        return;
+      } catch (err) {
+        console.error("Download failed", err);
+      }
+    }
+    throw new Error("All downloads failed for " + key);
   };
   await Promise.all([
     ...add.map(copy),
@@ -315,13 +323,17 @@ def upload_object(clients, bucket, image):
     rsp = clients.oss.presign(req)
     return rsp.url
 
-def copy_objects(clients, bucket, func, uploads, source):
+def copy_objects(clients, bucket, func, uploads):
     """Copy disk image objects to censored bucket from uncensored bucket"""
-    logger.info("upload %s via %s" % (clients.region, source))
+    logger.info("upload %s (censored)" % clients.region)
     payload = {
         'bucket': bucket,
-        'sources': {image.key: uploads[(source, image)]
-                    for region, image in uploads if region == source},
+        'sources': {
+            key: [url for key, url in urls]
+            for key, urls in groupby(sorted(
+                ((image.key, url) for (region, image), url in uploads.items())
+            ), key=itemgetter(0))
+        }
     }
     call_temp_function(clients, func, payload)
 
@@ -524,19 +536,14 @@ if not uploads:
     parser.error("At least one working non-Chinese region is required")
 
 # Copy image objects to each censored region with usable OSS and usable FC
-copies = [(region, censored) for region, censored in zip(
-    cycle(region for region in regions
-          if buckets[region] and not funcs[region]),
-    (region for region in regions if buckets[region] and funcs[region]),
-)]
 with ThreadPoolExecutor(max_workers=workers) as executor:
     futures = {executor.submit(copy_objects,
-                               clients=clients[censored],
-                               bucket=buckets[censored],
-                               func=funcs[censored],
-                               uploads=uploads,
-                               source=region): censored
-               for region, censored in copies}
+                               clients=clients[region],
+                               bucket=buckets[region],
+                               func=funcs[region],
+                               uploads=uploads): region
+               for region in regions
+               if buckets[region] and funcs[region]}
     done = {futures[x]: x.result() for x in as_completed(futures)}
 
 # Import images in each region with usable OSS
