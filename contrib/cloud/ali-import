@@ -186,7 +186,7 @@ def all_clients(region, account):
 
 def delete_temp_function(clients, func):
     """Remove temporary function"""
-    logger.info("delete function %s:%s" % (clients.region, func))
+    logger.info("delete function %s %s" % (clients.region, func))
     assert func.startswith(IPXE_STORAGE_PREFIX)
     clients.fc.delete_function(func)
 
@@ -221,7 +221,7 @@ def create_temp_function(clients, role):
     )
     req = fc.models.CreateFunctionRequest(body=body)
     rsp = clients.fc.create_function(req)
-    logger.info("create function %s:%s" % (clients.region, func))
+    logger.info("create function %s %s" % (clients.region, func))
     return func
 
 def call_temp_function(clients, func, payload):
@@ -247,7 +247,7 @@ def call_temp_function(clients, func, payload):
 
 def delete_temp_bucket(clients, func, bucket):
     """Remove temporary bucket"""
-    logger.info("delete bucket %s:%s" % (clients.region, bucket))
+    logger.info("delete bucket %s %s" % (clients.region, bucket))
     assert bucket.startswith(IPXE_STORAGE_PREFIX)
     # Delete bucket contents
     if not clients.censored:
@@ -296,19 +296,19 @@ def create_temp_bucket(clients, func):
         if exc.unwrap().code == OSS_FORBIDDEN_REGION_CODE:
             return None
         raise exc
-    logger.info("create bucket %s:%s" % (clients.region, bucket))
+    logger.info("create bucket %s %s" % (clients.region, bucket))
     return bucket
 
 def upload_object(clients, bucket, image):
     """Upload disk image object to uncensored bucket"""
-    logger.info("upload %s:%s as %s" % (clients.region, image.name, image.key))
+    logger.info("upload %s %s" % (clients.region, image.name))
     req = oss.models.PutObjectRequest(bucket=bucket, key=image.key)
     rsp = clients.oss.put_object_from_file(req, image.path)
     return True
 
 def copy_objects(clients, bucket, images, censored, func, dest):
     """Copy disk image objects to censored bucket from uncensored bucket"""
-    logger.info("copy %s:* to %s" % (clients.region, censored.region))
+    logger.info("upload %s via %s" % (censored.region, clients.region))
     payload = {
         'source': {
             'region': clients.region,
@@ -329,7 +329,7 @@ def delete_image(clients, name):
     )
     rsp = clients.ecs.describe_images(req)
     for image in rsp.body.images.image or ():
-        logger.info("delete image %s:%s (%s)" %
+        logger.info("delete image %s %s (%s)" %
                     (clients.region, image.image_name, image.image_id))
         if image.is_public:
             req = ecs.models.ModifyImageSharePermissionRequest(
@@ -381,7 +381,7 @@ def wait_for_image(clients, image_id):
 
 def import_image(clients, image, bucket):
     """Import image"""
-    logger.info("import %s:%s" % (clients.region, image.name))
+    logger.info("import %s %s" % (clients.region, image.name))
     disk = ecs.models.ImportImageRequestDiskDeviceMapping(
         disk_image_size = 1,
         format = 'RAW',
@@ -400,14 +400,14 @@ def import_image(clients, image, bucket):
     task_id = rsp.body.task_id
     wait_for_task(clients, task_id)
     wait_for_image(clients, image_id)
-    logger.info("image %s:%s (%s)" %
+    logger.info("image %s %s (%s)" %
                 (clients.region, image.name, image_id))
     return image_id
 
 def copy_image(clients, image, image_id, censored):
     """Copy imported image to censored region"""
-    logger.info("copy %s:%s to %s" %
-                (clients.region, image.name, censored.region))
+    logger.info("import %s %s via %s" %
+                (censored.region, image.name, clients.region))
     req = ecs.models.CopyImageRequest(
         region_id=clients.region,
         image_id=image_id,
@@ -417,12 +417,12 @@ def copy_image(clients, image, image_id, censored):
     rsp = clients.ecs.copy_image(req)
     copy_id = rsp.body.image_id
     wait_for_image(censored, copy_id)
-    logger.info("image %s:%s (%s)" % (censored.region, image.name, copy_id))
+    logger.info("image %s %s (%s)" % (censored.region, image.name, copy_id))
     return copy_id
 
 def finalise_image(clients, image, image_id):
     """Finalise image attributes and permissions"""
-    logger.info("finalise %s:%s (%s)" % (clients.region, image.name, image_id))
+    logger.info("finalise %s %s (%s)" % (clients.region, image.name, image_id))
     req = ecs.models.ModifyImageAttributeRequest(
         region_id=clients.region,
         image_id=image_id,
