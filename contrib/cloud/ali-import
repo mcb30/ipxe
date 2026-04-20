@@ -79,13 +79,7 @@ const OSS = require("ali-oss");
 exports.handler = async (event, context) => {
   const payload = JSON.parse(event.toString());
   console.log(JSON.stringify(payload));
-  const src = payload.source && new OSS({
-    region: "oss-" + payload.source.region,
-    bucket: payload.source.bucket,
-    accessKeyId: context.credentials.accessKeyId,
-    accessKeySecret: context.credentials.accessKeySecret,
-    stsToken: context.credentials.securityToken,
-  });
+  const sources = payload.sources || {};
   const dst = new OSS({
     region: "oss-" + context.region,
     internal: true,
@@ -94,8 +88,8 @@ exports.handler = async (event, context) => {
     accessKeySecret: context.credentials.accessKeySecret,
     stsToken: context.credentials.securityToken,
   });
-  const add = payload.keys || [];
-  const del = ((await dst.listV2({prefix: prefix})).objects || [])
+  const add = Object.keys(sources);
+  const del = ((await dest.listV2({prefix: prefix})).objects || [])
     .map(x => x.name).filter(x => ! add.includes(x));
   assert(add.every(x => x.startsWith(prefix)));
   assert(del.every(x => x.startsWith(prefix)));
@@ -103,10 +97,23 @@ exports.handler = async (event, context) => {
     console.log("Creating: " + add.sort().join(", "));
   if (del.length)
     console.log("Deleting: " + del.sort().join(", "));
+  const copy = async (key) => {
+    const url = sources[key];
+    console.log("Downloading " + key + " from " + url);
+    const download = await fetch(url);
+    if (! download.ok)
+      throw new Error("Download failed: " + download.status);
+    const content = await download.arrayBuffer();
+    console.log("Downloaded " + key);
+    console.log("Uploading " + key);
+    await dest.put(key, Buffer.from(content));
+    console.log("Uploaded " + key);
+  };
   await Promise.all([
-    ...add.map(async (x) => dst.putStream(x, (await src.getStream(x)).stream)),
-    ...(del.length ? [dst.deleteMulti(del)] : []),
+    ...add.map(copy),
+    ...(del.length ? [dest.deleteMulti(del)] : []),
   ]);
+  console.log("Finished");
 };
 '''
 
@@ -304,21 +311,19 @@ def upload_object(clients, bucket, image):
     logger.info("upload %s %s" % (clients.region, image.name))
     req = oss.models.PutObjectRequest(bucket=bucket, key=image.key)
     rsp = clients.oss.put_object_from_file(req, image.path)
-    return True
+    req = oss.models.GetObjectRequest(bucket=bucket, key=image.key)
+    rsp = clients.oss.presign(req)
+    return rsp.url
 
-def copy_objects(clients, bucket, images, censored, func, dest):
+def copy_objects(clients, bucket, func, uploads, source):
     """Copy disk image objects to censored bucket from uncensored bucket"""
-    logger.info("upload %s via %s" % (censored.region, clients.region))
+    logger.info("upload %s via %s" % (clients.region, source))
     payload = {
-        'source': {
-            'region': clients.region,
-            'bucket': bucket,
-        },
-        'bucket': dest,
-        'keys': [x.key for x in images],
+        'bucket': bucket,
+        'sources': {image.key: uploads[(source, image)]
+                    for region, image in uploads if region == source},
     }
-    call_temp_function(censored, func, payload)
-    return True
+    call_temp_function(clients, func, payload)
 
 def delete_image(clients, name):
     """Remove existing image (if applicable)"""
@@ -514,8 +519,8 @@ with ThreadPoolExecutor(max_workers=workers) as executor:
                                image=image): (region, image)
                for region, image in imports
                if buckets[region] and not funcs[region]}
-    uploaded = {futures[x]: x.result() for x in as_completed(futures)}
-if not uploaded:
+    uploads = {futures[x]: x.result() for x in as_completed(futures)}
+if not uploads:
     parser.error("At least one working non-Chinese region is required")
 
 # Copy image objects to each censored region with usable OSS and usable FC
@@ -526,12 +531,11 @@ copies = [(region, censored) for region, censored in zip(
 )]
 with ThreadPoolExecutor(max_workers=workers) as executor:
     futures = {executor.submit(copy_objects,
-                               clients=clients[region],
-                               bucket=buckets[region],
-                               images=images,
-                               censored=clients[censored],
+                               clients=clients[censored],
+                               bucket=buckets[censored],
                                func=funcs[censored],
-                               dest=buckets[censored]): censored
+                               uploads=uploads,
+                               source=region): censored
                for region, censored in copies}
     done = {futures[x]: x.result() for x in as_completed(futures)}
 
