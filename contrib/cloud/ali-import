@@ -246,10 +246,7 @@ def delete_temp_bucket(clients, func, bucket):
     """Remove temporary bucket"""
     logger.info("%s: deleting bucket %s" % (clients.region, bucket))
     assert bucket.startswith(IPXE_STORAGE_PREFIX)
-    if clients.censored:
-        payload = {'bucket': bucket}
-        call_temp_function(clients, func, payload)
-    else:
+    if not clients.censored:
         req = oss.models.ListObjectsV2Request(
             bucket=bucket,
             prefix=IPXE_STORAGE_PREFIX,
@@ -262,6 +259,9 @@ def delete_temp_bucket(clients, func, bucket):
                 objects=[oss.models.DeleteObject(x) for x in delete],
             )
             rsp = clients.oss.delete_multiple_objects(req)
+    elif func:
+        payload = {'bucket': bucket}
+        call_temp_function(clients, func, payload)
     req = oss.models.DeleteBucketRequest(bucket=bucket)
     rsp = clients.oss.delete_bucket(req)
 
@@ -291,6 +291,7 @@ def upload_object(clients, bucket, image):
                 (clients.region, image.name, image.key))
     req = oss.models.PutObjectRequest(bucket=bucket, key=image.key)
     rsp = clients.oss.put_object_from_file(req, image.path)
+    return True
 
 def copy_objects(clients, bucket, images, censored, func, dest):
     """Copy disk image objects to censored bucket from uncensored bucket"""
@@ -303,7 +304,8 @@ def copy_objects(clients, bucket, images, censored, func, dest):
         'bucket': dest,
         'keys': [x.key for x in images],
     }
-    return call_temp_function(censored, func, payload)
+    call_temp_function(censored, func, payload)
+    return True
 
 def delete_image(clients, name):
     """Remove existing image (if applicable)"""
@@ -519,18 +521,19 @@ with ThreadPoolExecutor(max_workers=workers) as executor:
                                func=funcs[censored],
                                dest=buckets[censored]): censored
                for region, censored in copies}
-    done = {futures[x]: x.result() for x in as_completed(futures)}
+    copied = {futures[x]: x.result() for x in as_completed(futures)}
 
-# Import images to uncensored regions
+# Import images to uncensored regions and to censored regions with working FC
 with ThreadPoolExecutor(max_workers=workers) as executor:
     futures = {executor.submit(import_image,
                                clients=clients[region],
                                image=image,
                                bucket=buckets[region]): (region, image)
-               for region, image in imports if buckets[region]}
+               for region, image in imports
+               if uploaded.get((region, image)) or copied.get(region)}
     results = {futures[x]: x.result() for x in as_completed(futures)}
 
-# Copy images to censored regions
+# Copy images to censored regions without working FC
 #
 # Copies are rate-limited by source region, so spread the copies
 # across all available uncensored regions.
