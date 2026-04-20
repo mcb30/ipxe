@@ -69,7 +69,7 @@ IPXE_STORAGE_PREFIX = 'ipxe-upload-temp-'
 # For regions where both OSS and Function Compute are unusable, we
 # resort to using CopyImage to copy an imported image from a less
 # dysfunctional region.  The CopyImage API call is extremely slow and
-# so we cannot viably rely on this as the only mechanism.
+# so we use this only as a mechanism of last resort.
 #
 IPXE_CENSORSHIP_BYPASS_FUNCTION = f'''
 const prefix = "{IPXE_STORAGE_PREFIX}";
@@ -186,7 +186,7 @@ def all_clients(region, account):
 
 def delete_temp_function(clients, func):
     """Remove temporary function"""
-    logger.info("%s: deleting function %s" % (clients.region, func))
+    logger.info("delete function %s:%s" % (clients.region, func))
     assert func.startswith(IPXE_STORAGE_PREFIX)
     clients.fc.delete_function(func)
 
@@ -201,6 +201,9 @@ def create_temp_function(clients, role):
     funcs = [x.function_name for x in rsp.body.functions or ()]
     for func in funcs:
         delete_temp_function(clients, func)
+    if not clients.censored:
+        # Functions are not required in uncensored regions
+        return None
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w') as zfh:
         zfh.writestr('index.js', IPXE_CENSORSHIP_BYPASS_FUNCTION)
@@ -218,7 +221,7 @@ def create_temp_function(clients, role):
     )
     req = fc.models.CreateFunctionRequest(body=body)
     rsp = clients.fc.create_function(req)
-    logger.info("%s: created function %s" % (clients.region, func))
+    logger.info("create function %s:%s" % (clients.region, func))
     return func
 
 def call_temp_function(clients, func, payload):
@@ -244,9 +247,11 @@ def call_temp_function(clients, func, payload):
 
 def delete_temp_bucket(clients, func, bucket):
     """Remove temporary bucket"""
-    logger.info("%s: deleting bucket %s" % (clients.region, bucket))
+    logger.info("delete bucket %s:%s" % (clients.region, bucket))
     assert bucket.startswith(IPXE_STORAGE_PREFIX)
+    # Delete bucket contents
     if not clients.censored:
+        # Uncensored region: use OSS API calls to delete contents
         req = oss.models.ListObjectsV2Request(
             bucket=bucket,
             prefix=IPXE_STORAGE_PREFIX,
@@ -260,8 +265,14 @@ def delete_temp_bucket(clients, func, bucket):
             )
             rsp = clients.oss.delete_multiple_objects(req)
     elif func:
+        # Censored region with FC: use function to delete contents
         payload = {'bucket': bucket}
         call_temp_function(clients, func, payload)
+    else:
+        # Censored region without FC: assume bucket must be empty,
+        # since we could not have uploaded to it in the first place
+        pass
+    # Delete the now-empty bucket
     req = oss.models.DeleteBucketRequest(bucket=bucket)
     rsp = clients.oss.delete_bucket(req)
 
@@ -273,29 +284,31 @@ def create_temp_bucket(clients, func):
     buckets = [x.name for x in rsp.buckets or ()]
     for bucket in buckets:
         delete_temp_bucket(clients, func, bucket)
+    if clients.censored and not func:
+        # We cannot use OSS in censored regions with no Function Compute
+        return None
     bucket = ('%s%s' % (prefix, uuid4()))[:OSS_BUCKET_NAME_LEN]
     req = oss.models.PutBucketRequest(bucket=bucket)
     try:
         rsp = clients.oss.put_bucket(req)
     except oss.exceptions.OperationError as exc:
-        # AliCloud provides no other way to detect non-functional regions
+        # AliCloud provides no other way to detect non-working regions
         if exc.unwrap().code == OSS_FORBIDDEN_REGION_CODE:
             return None
         raise exc
-    logger.info("%s: created bucket %s" % (clients.region, bucket))
+    logger.info("create bucket %s:%s" % (clients.region, bucket))
     return bucket
 
 def upload_object(clients, bucket, image):
     """Upload disk image object to uncensored bucket"""
-    logger.info("%s: uploading %s as %s" %
-                (clients.region, image.name, image.key))
+    logger.info("upload %s:%s as %s" % (clients.region, image.name, image.key))
     req = oss.models.PutObjectRequest(bucket=bucket, key=image.key)
     rsp = clients.oss.put_object_from_file(req, image.path)
     return True
 
 def copy_objects(clients, bucket, images, censored, func, dest):
     """Copy disk image objects to censored bucket from uncensored bucket"""
-    logger.info("%s: copying bucket to %s" % (clients.region, censored.region))
+    logger.info("copy %s:* to %s" % (clients.region, censored.region))
     payload = {
         'source': {
             'region': clients.region,
@@ -316,7 +329,7 @@ def delete_image(clients, name):
     )
     rsp = clients.ecs.describe_images(req)
     for image in rsp.body.images.image or ():
-        logger.info("%s: deleting %s (%s)" %
+        logger.info("delete image %s:%s (%s)" %
                     (clients.region, image.image_name, image.image_id))
         if image.is_public:
             req = ecs.models.ModifyImageSharePermissionRequest(
@@ -368,7 +381,7 @@ def wait_for_image(clients, image_id):
 
 def import_image(clients, image, bucket):
     """Import image"""
-    logger.info("%s: importing %s" % (clients.region, image.name))
+    logger.info("import %s:%s" % (clients.region, image.name))
     disk = ecs.models.ImportImageRequestDiskDeviceMapping(
         disk_image_size = 1,
         format = 'RAW',
@@ -387,14 +400,14 @@ def import_image(clients, image, bucket):
     task_id = rsp.body.task_id
     wait_for_task(clients, task_id)
     wait_for_image(clients, image_id)
-    logger.info("%s: imported %s (%s)" %
+    logger.info("image %s:%s (%s)" %
                 (clients.region, image.name, image_id))
     return image_id
 
 def copy_image(clients, image, image_id, censored):
     """Copy imported image to censored region"""
-    logger.info("%s: copying %s (%s) to %s" %
-                (clients.region, image.name, image_id, censored.region))
+    logger.info("copy %s:%s to %s" %
+                (clients.region, image.name, censored.region))
     req = ecs.models.CopyImageRequest(
         region_id=clients.region,
         image_id=image_id,
@@ -404,14 +417,12 @@ def copy_image(clients, image, image_id, censored):
     rsp = clients.ecs.copy_image(req)
     copy_id = rsp.body.image_id
     wait_for_image(censored, copy_id)
-    logger.info("%s: copied %s (%s) to %s" %
-                (clients.region, image.name, copy_id, censored.region))
+    logger.info("image %s:%s (%s)" % (censored.region, image.name, copy_id))
     return copy_id
 
 def finalise_image(clients, image, image_id):
     """Finalise image attributes and permissions"""
-    logger.info("%s: finalising %s (%s)" %
-                (clients.region, image.name, image_id))
+    logger.info("finalise %s:%s (%s)" % (clients.region, image.name, image_id))
     req = ecs.models.ModifyImageAttributeRequest(
         region_id=clients.region,
         image_id=image_id,
@@ -439,7 +450,7 @@ parser.add_argument('--overwrite', action='store_true',
                     help="Overwrite any existing image with same name")
 parser.add_argument('--region', '-r', action='append',
                     help="AliCloud region(s)")
-parser.add_argument('--fc-role', '-F', default="AliyunFcDefaultRole",
+parser.add_argument('--role', '-R', default="AliyunFcDefaultRole",
                     help="AliCloud role for censorship bypass function")
 parser.add_argument('image', nargs='+', help="iPXE disk image")
 args = parser.parse_args()
@@ -448,6 +459,7 @@ args = parser.parse_args()
 loglevels = [logging.WARNING, logging.INFO, logging.DEBUG]
 verbosity = min(args.verbose, (len(loglevels) - 1))
 logging.basicConfig(level=loglevels[verbosity])
+logging.getLogger('apscheduler').setLevel(logging.WARNING)
 
 # Use default name if none specified
 if not args.name:
@@ -463,7 +475,7 @@ imports = [(region, image) for region in regions for image in images]
 workers = len(imports)
 
 # Look up resource names
-fcrole = role_arn(args.fc_role)
+fcrole = role_arn(args.role)
 
 # Construct per-region clients
 account = account_id()
@@ -478,7 +490,7 @@ if args.overwrite:
                    for region, image in imports}
         done = {futures[x]: x.result() for x in as_completed(futures)}
 
-# Create temporary function in each region with working FC
+# Create temporary function in each censored region with usable FC
 with ThreadPoolExecutor(max_workers=workers) as executor:
     futures = {executor.submit(create_temp_function,
                                clients=clients[region],
@@ -486,7 +498,7 @@ with ThreadPoolExecutor(max_workers=workers) as executor:
                for region in regions}
     funcs = {futures[x]: x.result() for x in as_completed(futures)}
 
-# Create temporary bucket in each region with working OSS
+# Create temporary bucket in each region with usable OSS
 with ThreadPoolExecutor(max_workers=workers) as executor:
     futures = {executor.submit(create_temp_bucket,
                                clients=clients[region],
@@ -494,23 +506,23 @@ with ThreadPoolExecutor(max_workers=workers) as executor:
                for region in regions}
     buckets = {futures[x]: x.result() for x in as_completed(futures)}
 
-# Upload image objects directly to uncensored regions with working OSS
+# Upload image objects directly to each uncensored region with usable OSS
 with ThreadPoolExecutor(max_workers=workers) as executor:
     futures = {executor.submit(upload_object,
                                clients=clients[region],
                                bucket=buckets[region],
                                image=image): (region, image)
                for region, image in imports
-               if buckets[region] and not clients[region].censored}
+               if buckets[region] and not funcs[region]}
     uploaded = {futures[x]: x.result() for x in as_completed(futures)}
 if not uploaded:
     parser.error("At least one working non-Chinese region is required")
 
-# Copy image objects to censored regions with working FC
+# Copy image objects to each censored region with usable OSS and usable FC
 copies = [(region, censored) for region, censored in zip(
     cycle(region for region in regions
-          if buckets[region] and not clients[region].censored),
-    (region for region in regions if clients[region].censored and funcs[region])
+          if buckets[region] and not funcs[region]),
+    (region for region in regions if buckets[region] and funcs[region]),
 )]
 with ThreadPoolExecutor(max_workers=workers) as executor:
     futures = {executor.submit(copy_objects,
@@ -521,22 +533,21 @@ with ThreadPoolExecutor(max_workers=workers) as executor:
                                func=funcs[censored],
                                dest=buckets[censored]): censored
                for region, censored in copies}
-    copied = {futures[x]: x.result() for x in as_completed(futures)}
+    done = {futures[x]: x.result() for x in as_completed(futures)}
 
-# Import images to uncensored regions and to censored regions with working FC
+# Import images in each region with usable OSS
 with ThreadPoolExecutor(max_workers=workers) as executor:
     futures = {executor.submit(import_image,
                                clients=clients[region],
                                image=image,
                                bucket=buckets[region]): (region, image)
-               for region, image in imports
-               if uploaded.get((region, image)) or copied.get(region)}
+               for region, image in imports if buckets[region]}
     results = {futures[x]: x.result() for x in as_completed(futures)}
 
-# Copy images to censored regions without working FC
+# Copy images to regions without usable OSS
 #
 # Copies are rate-limited by source region, so spread the copies
-# across all available uncensored regions.
+# across all available regions with imported images.
 #
 copies = [(region, censored, image) for region, (censored, image) in zip(
     cycle(region for region in regions if buckets[region]),
@@ -550,7 +561,8 @@ with ThreadPoolExecutor(max_workers=workers) as executor:
                                image_id=results[(region, image)]):
                (censored, image)
                for region, censored, image in copies}
-    results.update({futures[x]: x.result() for x in as_completed(futures)})
+    copied = {futures[x]: x.result() for x in as_completed(futures)}
+    results.update(copied)
 
 # Finalise images
 with ThreadPoolExecutor(max_workers=workers) as executor:
