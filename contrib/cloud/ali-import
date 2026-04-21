@@ -12,6 +12,7 @@ import json
 import logging
 from operator import itemgetter
 from pathlib import Path
+import random
 import subprocess
 import tempfile
 import time
@@ -49,10 +50,11 @@ STS_ENDPOINT = 'sts.aliyuncs.com'
 
 FC_NODE_RUNTIME = 'nodejs20'
 FC_MAX_ATTEMPTS = 5
+FC_TIMEOUT_SEC = 120
+FC_READ_TIMEOUT_MS = (FC_TIMEOUT_SEC * 1000)
 FC_CONNECT_TIMEOUT_MS = 10000
-FC_READ_TIMEOUT_MS = 60000
-FC_TIMEOUT_SEC = 60
 FC_MEMORY_SIZE_MB = 128
+FC_SOURCE_COUNT = 10
 
 OSS_FORBIDDEN_REGION_CODE = 'ForbidCreateNewBucket'
 OSS_BUCKET_NAME_LEN = 63
@@ -102,7 +104,7 @@ exports.handler = async (event, context) => {
     for (const url of sources[key]) {
       console.log("Downloading " + key + " from " + url);
       try {
-        const download = await fetch(url);
+        const download = await fetch(url, {signal: AbortSignal.timeout(15000)});
         if (! download.ok)
           throw new Error(download.status);
         const content = await download.arrayBuffer();
@@ -329,7 +331,7 @@ def copy_objects(clients, bucket, func, uploads):
     payload = {
         'bucket': bucket,
         'sources': {
-            key: [url for key, url in urls]
+            key: random.choices([url for key, url in urls], k=FC_SOURCE_COUNT)
             for key, urls in groupby(sorted(
                 ((image.key, url) for (region, image), url in uploads.items())
             ), key=itemgetter(0))
