@@ -49,10 +49,7 @@ RAM_ENDPOINT = 'ram.aliyuncs.com'
 STS_ENDPOINT = 'sts.aliyuncs.com'
 
 FC_NODE_RUNTIME = 'nodejs20'
-FC_MAX_ATTEMPTS = 5
 FC_TIMEOUT_SEC = 120
-FC_READ_TIMEOUT_MS = (FC_TIMEOUT_SEC * 1000)
-FC_CONNECT_TIMEOUT_MS = 10000
 FC_MEMORY_SIZE_MB = 128
 FC_SOURCE_COUNT = 10
 
@@ -60,6 +57,29 @@ OSS_FORBIDDEN_REGION_CODE = 'ForbidCreateNewBucket'
 OSS_BUCKET_NAME_LEN = 63
 
 IPXE_STORAGE_PREFIX = 'ipxe-upload-temp-'
+
+# Experimentation suggests Alibaba Cloud API calls are extremely
+# unreliable, with a failure rate around 1%.  It is therefore
+# necessary to allow for retrying basically every API call.
+#
+# Some API calls (e.g. DescribeImages or ModifyImageAttribute) are
+# naturally idempotent and so safe to retry.  Some non-idempotent API
+# calls (e.g. CopyImage) support explicit idempotence tokens.  The
+# remaining API calls may simply fail on a retry, if the original
+# request happened to succeed but failed to return a response.
+#
+# We could write convoluted retry logic around the non-idempotent
+# calls, but this would substantially increase the complexity of the
+# already unnecessarily complex code.  For now, we assume that
+# retrying non-idempotent requests is probably more likely to fix
+# transient failures than to cause additional problems.
+#
+RUNTIME_OPTS = util.models.RuntimeOptions(
+    autoretry=True,
+    max_attempts=5,
+    connect_timeout=10000,
+    read_timeout=120000,
+)
 
 # For regions in mainland China, the Chinese state censorship laws
 # prohibit direct access to OSS bucket contents.
@@ -91,9 +111,11 @@ exports.handler = async (event, context) => {
     accessKeySecret: context.credentials.accessKeySecret,
     stsToken: context.credentials.securityToken,
   });
-  const add = Object.keys(sources);
-  const del = ((await dest.listV2({prefix: prefix})).objects || [])
-    .map(x => x.name).filter(x => ! add.includes(x));
+  const current = ((await dest.listV2({prefix: prefix})).objects || [])
+    .map(x => x.name);
+  const wanted = Object.keys(sources);
+  const add = wanted.filter(x => ! current.includes(x));
+  const del = current.filter(x => ! wanted.includes(x));
   assert(add.every(x => x.startsWith(prefix)));
   assert(del.every(x => x.startsWith(prefix)));
   if (add.length)
@@ -205,15 +227,15 @@ def delete_temp_function(clients, func):
     """Remove temporary function"""
     logger.info("delete function %s %s" % (clients.region, func))
     assert func.startswith(IPXE_STORAGE_PREFIX)
-    clients.fc.delete_function(func)
+    clients.fc.delete_function_with_options(func, {}, RUNTIME_OPTS)
 
 def create_temp_function(clients, role):
     """Create temporary function (and remove any stale temporary functions)"""
     req = fc.models.ListFunctionsRequest(prefix=IPXE_STORAGE_PREFIX)
     try:
-        rsp = clients.fc.list_functions(req)
+        rsp = clients.fc.list_functions_with_options(req, {}, RUNTIME_OPTS)
     except openapi.client.UnretryableException:
-        # AliCloud provides no other way to detect non-functional regions
+        # AliCloud provides no other way to detect non-working regions
         return None
     funcs = [x.function_name for x in rsp.body.functions or ()]
     for func in funcs:
@@ -237,7 +259,7 @@ def create_temp_function(clients, role):
         timeout=FC_TIMEOUT_SEC,
     )
     req = fc.models.CreateFunctionRequest(body=body)
-    rsp = clients.fc.create_function(req)
+    rsp = clients.fc.create_function_with_options(req, {}, RUNTIME_OPTS)
     logger.info("create function %s %s" % (clients.region, func))
     return func
 
@@ -249,13 +271,7 @@ def call_temp_function(clients, func, payload):
     )
     body = json.dumps(payload)
     req = fc.models.InvokeFunctionRequest(body=body)
-    run = util.models.RuntimeOptions(
-        autoretry=True,
-        max_attempts=FC_MAX_ATTEMPTS,
-        connect_timeout=FC_CONNECT_TIMEOUT_MS,
-        read_timeout=FC_READ_TIMEOUT_MS,
-    )
-    rsp = clients.fc.invoke_function_with_options(func, req, hdr, run)
+    rsp = clients.fc.invoke_function_with_options(func, req, hdr, RUNTIME_OPTS)
     log = base64.b64decode(rsp.headers.get('x-fc-log-result', b'')).decode()
     if rsp.status_code != http.HTTPStatus.OK:
         raise RuntimeError(rsp)
@@ -346,7 +362,7 @@ def delete_image(clients, name):
         image_name=name,
         image_owner_alias='self',
     )
-    rsp = clients.ecs.describe_images(req)
+    rsp = clients.ecs.describe_images_with_options(req, RUNTIME_OPTS)
     for image in rsp.body.images.image or ():
         logger.info("delete image %s %s (%s)" %
                     (clients.region, image.image_name, image.image_id))
@@ -356,12 +372,14 @@ def delete_image(clients, name):
                 image_id=image.image_id,
                 is_public=False,
             )
-            rsp = clients.ecs.modify_image_share_permission(req)
+            rsp = clients.ecs.modify_image_share_permission_with_options(
+                req, RUNTIME_OPTS
+            )
         req = ecs.models.DeleteImageRequest(
             region_id=clients.region,
             image_id=image.image_id
         )
-        rsp = clients.ecs.delete_image(req)
+        rsp = clients.ecs.delete_image_with_options(req, RUNTIME_OPTS)
 
 def wait_for_task(clients, task_id):
     """Wait for task to complete"""
@@ -371,7 +389,7 @@ def wait_for_task(clients, task_id):
             region_id=clients.region,
             task_ids=task_id,
         )
-        rsp = clients.ecs.describe_tasks(req)
+        rsp = clients.ecs.describe_tasks_with_options(req, RUNTIME_OPTS)
         assert len(rsp.body.task_set.task) == 1
         assert rsp.body.task_set.task[0].task_id == task_id
         status = rsp.body.task_set.task[0].task_status
@@ -388,7 +406,7 @@ def wait_for_image(clients, image_id):
             region_id=clients.region,
             image_id=image_id,
         )
-        rsp = clients.ecs.describe_images(req)
+        rsp = clients.ecs.describe_images_with_options(req, RUNTIME_OPTS)
         if len(rsp.body.images.image):
             assert len(rsp.body.images.image) == 1
             assert rsp.body.images.image[0].image_id == image_id
@@ -413,8 +431,9 @@ def import_image(clients, image, bucket):
         architecture=image.arch,
         boot_mode=image.mode,
         disk_device_mapping=[disk],
+        client_token=str(uuid4()),
     )
-    rsp = clients.ecs.import_image(req)
+    rsp = clients.ecs.import_image_with_options(req, RUNTIME_OPTS)
     image_id = rsp.body.image_id
     task_id = rsp.body.task_id
     wait_for_task(clients, task_id)
@@ -432,8 +451,9 @@ def copy_image(clients, image, image_id, censored):
         image_id=image_id,
         destination_region_id=censored.region,
         destination_image_name=image.name,
+        client_token=str(uuid4()),
     )
-    rsp = clients.ecs.copy_image(req)
+    rsp = clients.ecs.copy_image_with_options(req, RUNTIME_OPTS)
     copy_id = rsp.body.image_id
     wait_for_image(censored, copy_id)
     logger.info("image %s %s (%s)" % (censored.region, image.name, copy_id))
@@ -447,14 +467,16 @@ def finalise_image(clients, image, image_id):
         image_id=image_id,
         image_family=image.family,
     )
-    rsp = clients.ecs.modify_image_attribute(req)
+    rsp = clients.ecs.modify_image_attribute_with_options(req, RUNTIME_OPTS)
     if image.public:
         req = ecs.models.ModifyImageSharePermissionRequest(
             region_id=clients.region,
             image_id=image_id,
             is_public=True,
         )
-        rsp = clients.ecs.modify_image_share_permission(req)
+        rsp = clients.ecs.modify_image_share_permission_with_options(
+            req, RUNTIME_OPTS
+        )
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Import Alibaba Cloud image")
