@@ -58,6 +58,9 @@ OSS_BUCKET_NAME_LEN = 63
 
 IPXE_STORAGE_PREFIX = 'ipxe-upload-temp-'
 
+POLL_INTERVAL_SEC = 5
+POLL_MAX_RETRIES = 100
+
 # Experimentation suggests Alibaba Cloud API calls are extremely
 # unreliable, with a failure rate around 1%.  It is therefore
 # necessary to allow for retrying basically every API call.
@@ -383,13 +386,17 @@ def delete_image(clients, name):
 
 def wait_for_task(clients, task_id):
     """Wait for task to complete"""
-    while True:
-        time.sleep(5)
+    status = 'Unknowable'
+    for i in range(POLL_MAX_RETRIES):
+        time.sleep(POLL_INTERVAL_SEC)
         req = ecs.models.DescribeTasksRequest(
             region_id=clients.region,
             task_ids=task_id,
         )
-        rsp = clients.ecs.describe_tasks_with_options(req, RUNTIME_OPTS)
+        try:
+            rsp = clients.ecs.describe_tasks_with_options(req, RUNTIME_OPTS)
+        except openapi.client.UnretryableException:
+            continue
         assert len(rsp.body.task_set.task) == 1
         assert rsp.body.task_set.task[0].task_id == task_id
         status = rsp.body.task_set.task[0].task_status
@@ -400,13 +407,17 @@ def wait_for_task(clients, task_id):
 
 def wait_for_image(clients, image_id):
     """Wait for image to become available"""
-    while True:
-        time.sleep(5)
+    status = 'Unknowable'
+    for i in range(POLL_MAX_RETRIES):
+        time.sleep(POLL_INTERVAL_SEC)
         req = ecs.models.DescribeImagesRequest(
             region_id=clients.region,
             image_id=image_id,
         )
-        rsp = clients.ecs.describe_images_with_options(req, RUNTIME_OPTS)
+        try:
+            rsp = clients.ecs.describe_images_with_options(req, RUNTIME_OPTS)
+        except openapi.client.UnretryableException:
+            continue
         if len(rsp.body.images.image):
             assert len(rsp.body.images.image) == 1
             assert rsp.body.images.image[0].image_id == image_id
