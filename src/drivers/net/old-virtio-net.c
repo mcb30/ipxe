@@ -34,7 +34,10 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/ethernet.h>
 #include <ipxe/virtio-pci.h>
 #include <ipxe/virtio-ring.h>
-#include "virtio-net.h"
+#include "old-virtio-net.h"
+
+#undef ERRFILE
+#define ERRFILE ERRFILE_virtio_net
 
 /*
  * Virtio network device driver
