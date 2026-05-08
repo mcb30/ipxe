@@ -36,6 +36,10 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/virtio-ring.h>
 #include "old-virtio-net.h"
 
+//
+#include <ipxe/virtio.h>
+
+
 #undef ERRFILE
 #define ERRFILE ERRFILE_virtio_net
 
@@ -669,6 +673,21 @@ err_map_common:
  * @ret rc	Return status code
  */
 static int virtnet_probe ( struct pci_device *pci ) {
+
+
+	//
+	static struct virtio_device virtio;
+	static struct virtio_queue queue;
+	static const struct virtio_features features = {
+		.feat = { 0, 0x1 },
+	};
+	virtio_pci_map ( &virtio, pci );
+	virtio_init ( &virtio, &features );
+	virtio_queue_init ( &queue, 0 );
+	virtio_enable ( &virtio, &queue, 128 );
+	return 0;
+
+
 	int found_modern = 0;
 	int rc = virtnet_probe_modern ( pci, &found_modern );
 	if ( ! found_modern && pci->device < 0x1040 ) {

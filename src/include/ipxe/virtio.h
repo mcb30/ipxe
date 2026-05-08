@@ -12,6 +12,7 @@ FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <ipxe/dma.h>
+#include <ipxe/pci.h>
 
 /** Virtio page alignment */
 #define VIRTIO_PAGE 4096
@@ -107,8 +108,8 @@ FILE_SECBOOT ( PERMITTED );
 /** PCI queue doorbell notification offset register */
 #define VIRTIO_PCI_DBOFF 0x1e
 
-/** PCI queue buffer descriptor array base address register */
-#define VIRTIO_PCI_BUF 0x20
+/** PCI queue descriptor array base address register */
+#define VIRTIO_PCI_DESC 0x20
 
 /** PCI queue submission queue base address register */
 #define VIRTIO_PCI_SQ 0x28
@@ -119,26 +120,26 @@ FILE_SECBOOT ( PERMITTED );
 /** @} */
 
 /** A virtio buffer descriptor */
-struct virtio_buf {
+struct virtio_desc {
 	/** Buffer address */
 	uint64_t addr;
 	/** Buffer length */
 	uint32_t len;
 	/** Flags */
 	uint16_t flags;
-	/** Next buffer index */
+	/** Next descriptor index */
 	uint16_t next;
 } __attribute__ (( packed ));
 
-/** Next buffer index is valid */
-#define VIRTIO_BUF_FL_NEXT 0x0001
+/** Next descriptor index is valid */
+#define VIRTIO_DESC_FL_NEXT 0x0001
 
 /** Buffer is write-only */
-#define VIRTIO_BUF_FL_WRITE 0x0002
+#define VIRTIO_DESC_FL_WRITE 0x0002
 
 /** A virtio submission queue entry */
 struct virtio_sqe {
-	/** Starting buffer index */
+	/** Starting descriptor index */
 	uint16_t index;
 } __attribute__ (( packed ));
 
@@ -157,7 +158,7 @@ struct virtio_sq {
 
 /** A virtio completion queue entry */
 struct virtio_cqe {
-	/** Starting buffer index */
+	/** Starting descriptor index */
 	uint32_t index;
 	/** Length written */
 	uint32_t len;
@@ -183,8 +184,8 @@ struct virtio_queue {
 	size_t len;
 	/** DMA mapping */
 	struct dma_mapping map;
-	/** Buffer descriptor array (and start of DMA allocation) */
-	struct virtio_buf *buf;
+	/** Descriptor array (and start of DMA allocation) */
+	struct virtio_desc *desc;
 	/** Submission queue */
 	struct virtio_sq *sq;
 	/** Completion queue */
@@ -216,16 +217,16 @@ virtio_align ( size_t size ) {
 }
 
 /**
- * Calculate (unaligned) buffer descriptor array size
+ * Calculate (unaligned) descriptor array size
  *
  * @v queue		Virtio queue
  * @v count		Queue size
  */
 static inline __attribute__ (( always_inline )) size_t
-virtio_buf_size ( unsigned int count ) {
-	struct virtio_buf *buf;
+virtio_desc_size ( unsigned int count ) {
+	struct virtio_desc *desc;
 
-	return ( count * sizeof ( buf[0] ) );
+	return ( count * sizeof ( desc[0] ) );
 }
 
 /**
@@ -325,5 +326,12 @@ struct virtio_operations {
 	void ( * enable ) ( struct virtio_device *virtio,
 			    struct virtio_queue *queue );
 };
+
+extern int virtio_pci_map ( struct virtio_device *virtio,
+			    struct pci_device *pci );
+extern int virtio_init ( struct virtio_device *virtio,
+			 const struct virtio_features *driver );
+extern int virtio_enable ( struct virtio_device *virtio,
+			   struct virtio_queue *queue, unsigned int count );
 
 #endif /* _IPXE_VIRTIO_H */

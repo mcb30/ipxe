@@ -137,7 +137,7 @@ static void virtio_legacy_size ( struct virtio_device *virtio,
 	count = ioread16 ( virtio->common + VIRTIO_LEG_SIZE );
 
 	/* Calculate queue length */
-	len = virtio_buf_size ( count );
+	len = virtio_desc_size ( count );
 	len = virtio_align ( len + virtio_sq_size ( count ) );
 	len = virtio_align ( len + virtio_cq_size ( count ) );
 
@@ -155,14 +155,14 @@ static void virtio_legacy_size ( struct virtio_device *virtio,
 static void virtio_legacy_enable ( struct virtio_device *virtio,
 				   struct virtio_queue *queue ) {
 	unsigned int count = queue->count;
-	void *base = queue->buf;
+	void *base = queue->desc;
 	size_t len;
 
 	/* Select queue */
 	iowrite16 ( queue->index, virtio->common + VIRTIO_LEG_SEL );
 
 	/* Lay out queue regions */
-	len = virtio_buf_size ( count );
+	len = virtio_desc_size ( count );
 	queue->sq = ( base + len );
 	len = virtio_align ( len + virtio_sq_size ( count ) );
 	queue->cq = ( base + len );
@@ -170,7 +170,7 @@ static void virtio_legacy_enable ( struct virtio_device *virtio,
 	assert ( len == queue->len );
 
 	/* Program queue base page address */
-	iowrite32 ( ( dma ( &queue->map, queue->buf ) / VIRTIO_PAGE ),
+	iowrite32 ( ( dma ( &queue->map, queue->desc ) / VIRTIO_PAGE ),
 		    virtio->common + VIRTIO_LEG_BASE );
 }
 
@@ -320,7 +320,7 @@ static void virtio_pci_size ( struct virtio_device *virtio,
 	iowrite16 ( count, virtio->common + VIRTIO_PCI_SIZE );
 
 	/* Calculate queue length */
-	len = virtio_align ( virtio_buf_size ( count ) );
+	len = virtio_align ( virtio_desc_size ( count ) );
 	len = virtio_align ( len + virtio_sq_size ( count ) );
 	len = virtio_align ( len + virtio_cq_size ( count ) );
 
@@ -362,14 +362,14 @@ static void virtio_pci_address ( struct virtio_device *virtio,
 static void virtio_pci_enable ( struct virtio_device *virtio,
 				struct virtio_queue *queue ) {
 	unsigned int count = queue->count;
-	void *base = queue->buf;
+	void *base = queue->desc;
 	size_t len;
 
 	/* Select queue */
 	iowrite16 ( queue->index, virtio->common + VIRTIO_PCI_SEL );
 
 	/* Lay out queue regions */
-	len = virtio_align ( virtio_buf_size ( count ) );
+	len = virtio_align ( virtio_desc_size ( count ) );
 	queue->sq = ( base + len );
 	len = virtio_align ( len + virtio_sq_size ( count ) );
 	queue->cq = ( base + len );
@@ -377,7 +377,7 @@ static void virtio_pci_enable ( struct virtio_device *virtio,
 	assert ( len == queue->len );
 
 	/* Program queue addresses */
-	virtio_pci_address ( virtio, queue, queue->buf, VIRTIO_PCI_BUF );
+	virtio_pci_address ( virtio, queue, queue->desc, VIRTIO_PCI_DESC );
 	virtio_pci_address ( virtio, queue, queue->sq, VIRTIO_PCI_SQ );
 	virtio_pci_address ( virtio, queue, queue->cq, VIRTIO_PCI_CQ );
 
@@ -421,9 +421,9 @@ static void * virtio_pci_map_cap ( struct virtio_device *virtio,
 
 		/* Check length */
 		pci_read_config_byte ( pci, ( pos + PCI_CAP_LEN ), &len );
-		if ( len <= VIRTIO_PCI_CAP_END ) {
+		if ( len < VIRTIO_PCI_CAP_END ) {
 			DBGC ( virtio, "VIRTIO %s capability +%#02x too "
-			       "short\n", virtio->name, pos );
+			       "short (%zd bytes)\n", virtio->name, pos, len );
 			continue;
 		}
 
@@ -438,8 +438,8 @@ static void * virtio_pci_map_cap ( struct virtio_device *virtio,
 		/* Check type */
 		if ( typ != type )
 			continue;
-		DBGC ( virtio, "VIRTIO %s capability type %d BAR%d+%#x\n",
-		       virtio->name, type, bar, offset );
+		DBGC2 ( virtio, "VIRTIO %s capability type %d BAR%d+%#x\n",
+			virtio->name, type, bar, offset );
 
 		/* Check BAR */
 		reg = PCI_BASE_ADDRESS ( bar );
@@ -539,7 +539,7 @@ int virtio_reset ( struct virtio_device *virtio ) {
  * @v virtio		Virtio device
  * @v stat		Additional driver status bits
  */
-void virtio_status ( struct virtio_device *virtio, unsigned int stat ) {
+static void virtio_status ( struct virtio_device *virtio, unsigned int stat ) {
 
 	/* Set new driver status bits */
 	virtio->stat |= stat;
@@ -558,28 +558,29 @@ static void virtio_negotiate ( struct virtio_device *virtio,
 			       const struct virtio_features *driver ) {
 	struct virtio_features *supported = &virtio->supported;
 	struct virtio_features *negotiated = &virtio->negotiated;
-	unsigned int i;
+	int words;
+	int i;
 
 	/* Get device supported features */
 	virtio->op->supported ( virtio );
-	DBGC ( virtio, "VIRTIO %s supported ", virtio->name );
-	for ( i = 0 ; i < ( sizeof ( supported->feat ) /
-			    sizeof ( supported->feat[0] ) ) ; i++ ) {
-		DBGC ( virtio, "%s%08x", ( i ? ":" : "" ),
-		       supported->feat[i] );
-	}
-	DBGC ( virtio, "\n" );
 
-	/* Negotiate features */
-	DBGC ( virtio, "VIRTIO %s negotiated ", virtio->name );
-	for ( i = 0 ; i < ( sizeof ( supported->feat ) /
-			    sizeof ( supported->feat[0] ) ) ; i++ ) {
+	/* Negotiate mutually supported features */
+	words = ( sizeof ( supported->feat ) / sizeof ( supported->feat[0] ) );
+	for ( i = 0 ; i < words ; i++ )
 		negotiated->feat[i] = ( supported->feat[i] & driver->feat[i] );
-		DBGC ( virtio, "%s%08x", ( i ? ":" : "" ),
-		       negotiated->feat[i] );
+	virtio->op->negotiate ( virtio );
+
+	DBGC ( virtio, "VIRTIO %s features ", virtio->name );
+	for ( i = ( words - 1) ; i >= 0 ; i-- ) {
+		DBGC ( virtio, "%08x%s", supported->feat[i],
+		       ( i ? ":" : "" ) );
+	}
+	DBGC ( virtio, " -> " );
+	for ( i = ( words - 1) ; i >= 0 ; i-- ) {
+		DBGC ( virtio, "%08x%s", negotiated->feat[i],
+		       ( i ? ":" : "" ) );
 	}
 	DBGC ( virtio, "\n" );
-	virtio->op->negotiate ( virtio );
 }
 
 /**
@@ -631,36 +632,44 @@ int virtio_enable ( struct virtio_device *virtio, struct virtio_queue *queue,
 
 	/* Determine queue size */
 	virtio->op->size ( virtio, queue, count );
-	DBGC ( virtio, "VIRTIO %s Q%d has %d entries (%zd bytes)\n",
-	       virtio->name, queue->index, queue->count, queue->len );
+	if ( ! queue->count ) {
+		DBGC ( virtio, "VIRTIO %s Q%d does not exist\n",
+		       virtio->name, queue->index );
+		rc = -ENODEV;
+		goto err_count;
+	}
 
 	/* Allocate and initialise queue */
-	queue->buf = dma_alloc ( virtio->dma, &queue->map, queue->len,
-				 VIRTIO_PAGE );
-	if ( ! queue->buf ) {
+	queue->desc = dma_alloc ( virtio->dma, &queue->map, queue->len,
+				  VIRTIO_PAGE );
+	if ( ! queue->desc ) {
 		rc = -ENOMEM;
 		goto err_alloc;
 	}
-	memset ( queue->buf, 0, queue->len );
+	memset ( queue->desc, 0, queue->len );
 
 	/* Enable queue */
 	virtio->op->enable ( virtio, queue );
-	DBGC ( virtio, "VIRTIO %s Q%d buffers at [%#08lx,%#08lx)\n",
-	       virtio->name, queue->index, virt_to_phys ( queue->buf ),
-	       ( virt_to_phys ( queue->buf ) +
-		 virtio_buf_size ( queue->count ) ) );
-	DBGC ( virtio, "VIRTIO %s Q%d submissions at [%#08lx,%#08lx)\n",
-	       virtio->name, queue->index, virt_to_phys ( queue->sq ),
+	DBGC ( virtio, "VIRTIO %s Q%d %dx descriptors at [%#08lx,%#08lx)\n",
+	       virtio->name, queue->index, queue->count,
+	       virt_to_phys ( queue->desc ),
+	       ( virt_to_phys ( queue->desc ) +
+		 virtio_desc_size ( queue->count ) ) );
+	DBGC ( virtio, "VIRTIO %s Q%d %dx submissions at [%#08lx,%#08lx)\n",
+	       virtio->name, queue->index, queue->count,
+	       virt_to_phys ( queue->sq ),
 	       ( virt_to_phys ( queue->sq ) +
 		 virtio_sq_size ( queue->count ) ) );
-	DBGC ( virtio, "VIRTIO %s Q%d completions at [%#08lx,%#08lx)\n",
-	       virtio->name, queue->index, virt_to_phys ( queue->cq ),
+	DBGC ( virtio, "VIRTIO %s Q%d %dx completions at [%#08lx,%#08lx)\n",
+	       virtio->name, queue->index, queue->count,
+	       virt_to_phys ( queue->cq ),
 	       ( virt_to_phys ( queue->cq ) +
 		 virtio_cq_size ( queue->count ) ) );
 
 	return 0;
 
-	dma_free ( &queue->map, queue->buf, queue->len );
+	dma_free ( &queue->map, queue->desc, queue->len );
  err_alloc:
+ err_count:
 	return rc;
 }
