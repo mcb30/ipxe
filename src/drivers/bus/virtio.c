@@ -26,7 +26,7 @@ FILE_SECBOOT ( PERMITTED );
 
 /** @file
  *
- * Virtual I/O Device
+ * Virtual I/O device
  *
  */
 
@@ -432,7 +432,7 @@ static void * virtio_pci_map_cap ( struct virtio_device *virtio,
 		/* Check type */
 		if ( typ != type )
 			continue;
-		DBGC2 ( virtio, "VIRTIO %s capability type %d BAR%d+%#x\n",
+		DBGC2 ( virtio, "VIRTIO %s capability type %d BAR%d+%#04x\n",
 			virtio->name, type, bar, offset );
 
 		/* Check BAR */
@@ -469,6 +469,9 @@ int virtio_pci_map ( struct virtio_device *virtio, struct pci_device *pci ) {
 	/* Initialise device */
 	virtio->name = pci->dev.name;
 	virtio->dma = &pci->dma;
+
+	/* Fix up PCI device */
+	adjust_pci_device ( pci );
 
 	/* Try mapping common capability */
 	virtio->common = virtio_pci_map_cap ( virtio, pci,
@@ -662,7 +665,39 @@ int virtio_enable ( struct virtio_device *virtio, struct virtio_queue *queue,
 	return 0;
 
 	dma_free ( &queue->map, queue->desc, queue->len );
+	queue->desc = NULL;
  err_alloc:
  err_count:
 	return rc;
+}
+
+/**
+ * Free queue
+ *
+ * @v virtio		Virtio device
+ * @v queue		Virtio queue
+ */
+void virtio_free ( struct virtio_device *virtio, struct virtio_queue *queue ) {
+
+	/* Free queue */
+	if ( queue->desc ) {
+		dma_free ( &queue->map, queue->desc, queue->len );
+		queue->desc = NULL;
+		DBGC ( virtio, "VIRTIO %s Q%d freed\n",
+		       virtio->name, queue->index );
+	}
+}
+
+/**
+ * Unmap device
+ *
+ * @v virtio		Virtio device
+ */
+void virtio_unmap ( struct virtio_device *virtio ) {
+
+	/* Unmap device-specific registers */
+	iounmap ( virtio->device );
+
+	/* Unmap common registers */
+	iounmap ( virtio->common );
 }

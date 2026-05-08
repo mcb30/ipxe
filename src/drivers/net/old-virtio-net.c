@@ -717,8 +717,8 @@ static void virtnet_remove ( struct pci_device *pci ) {
 }
 
 static struct pci_device_id virtnet_nics[] = {
-PCI_ROM(0x1af4, 0x1000, "virtio-net", "Virtio Network Interface", 0),
-PCI_ROM(0x1af4, 0x1041, "virtio-net", "Virtio Network Interface 1.0", 0),
+//PCI_ROM(0x1af4, 0x1000, "virtio-net", "Virtio Network Interface", 0),
+//PCI_ROM(0x1af4, 0x1041, "virtio-net", "Virtio Network Interface 1.0", 0),
 };
 
 struct pci_driver virtnet_driver __pci_driver = {

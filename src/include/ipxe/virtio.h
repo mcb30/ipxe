@@ -3,7 +3,7 @@
 
 /** @file
  *
- * Virtual I/O Device
+ * Virtual I/O device
  *
  */
 
@@ -335,9 +335,13 @@ struct virtio_operations {
 
 extern int virtio_pci_map ( struct virtio_device *virtio,
 			    struct pci_device *pci );
+extern int virtio_reset ( struct virtio_device *virtio );
 extern int virtio_init ( struct virtio_device *virtio,
 			 const struct virtio_features *driver );
 extern int virtio_enable ( struct virtio_device *virtio,
 			   struct virtio_queue *queue, unsigned int count );
+extern void virtio_free ( struct virtio_device *virtio,
+			  struct virtio_queue *queue );
+extern void virtio_unmap ( struct virtio_device *virtio );
 
 #endif /* _IPXE_VIRTIO_H */
