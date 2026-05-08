@@ -244,6 +244,7 @@ FILE_SECBOOT ( PERMITTED );
 #define ERRFILE_dwmac		     ( ERRFILE_DRIVER | 0x00dc0000 )
 #define ERRFILE_dwusb		     ( ERRFILE_DRIVER | 0x00dd0000 )
 #define ERRFILE_dwgpio		     ( ERRFILE_DRIVER | 0x00de0000 )
+#define ERRFILE_virtio		     ( ERRFILE_DRIVER | 0x00df0000 )
 
 #define ERRFILE_aoe			( ERRFILE_NET | 0x00000000 )
 #define ERRFILE_arp			( ERRFILE_NET | 0x00010000 )

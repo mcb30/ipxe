@@ -42,7 +42,7 @@ FILE_SECBOOT ( PERMITTED );
 /** Legacy queue doorbell notification register */
 #define VIRTIO_LEG_DB 0x10
 
-/** Legacy device status register */
+/** Legacy driver status register */
 #define VIRTIO_LEG_STAT 0x12
 #define VIRTIO_STAT_FOUND	0x0001	/**< Guest has found device */
 #define VIRTIO_STAT_DRIVER	0x0002	/**< Guest driver exists */
@@ -87,13 +87,13 @@ FILE_SECBOOT ( PERMITTED );
 #define VIRTIO_PCI_DBOFF 0x1e
 
 /** PCI queue buffer descriptor array base address register */
-#define VIRTIO_PCI_BUFS 0x20
+#define VIRTIO_PCI_BUF 0x20
 
 /** PCI queue submission queue base address register */
-#define VIRTIO_PCI_SQES 0x28
+#define VIRTIO_PCI_SQ 0x28
 
 /** PCI queue completion queue base address register */
-#define VIRTIO_PCI_CQES 0x30
+#define VIRTIO_PCI_CQ 0x30
 
 /** @} */
 
@@ -173,13 +173,64 @@ struct virtio_queue {
 /**
  * Initialise virtio queue
  *
- * @v vq		Virtio queue
+ * @v queue		Virtio queue
  * @v index		Queue index
  */
 static inline __attribute__ (( always_inline )) void
-virtio_queue_init ( struct virtio_queue *vq, unsigned int index ) {
+virtio_queue_init ( struct virtio_queue *queue, unsigned int index ) {
 
-	vq->index = index;
+	queue->index = index;
+}
+
+/**
+ * Calculate aligned size
+ *
+ * @v size		Unaligned size
+ * @ret size		Aligned size
+ */
+static inline __attribute__ (( always_inline )) size_t
+virtio_align ( size_t size ) {
+
+	return ( ( size + VIRTIO_ALIGN - 1 ) & ~( VIRTIO_ALIGN - 1 ) );
+}
+
+/**
+ * Calculate (unaligned) buffer descriptor array size
+ *
+ * @v queue		Virtio queue
+ * @v count		Queue size
+ */
+static inline __attribute__ (( always_inline )) size_t
+virtio_buf_size ( unsigned int count ) {
+	struct virtio_buf *buf;
+
+	return ( count * sizeof ( buf[0] ) );
+}
+
+/**
+ * Calculate (unaligned) submission queue size
+ *
+ * @v queue		Virtio queue
+ * @v count		Queue size
+ */
+static inline __attribute__ (( always_inline )) size_t
+virtio_sq_size ( unsigned int count ) {
+	struct virtio_sq *sq;
+
+	return ( sizeof ( *sq ) + ( count * sizeof ( sq->sqe[0] ) ) );
+}
+
+/**
+ * Calculate (unaligned) completion queue size
+ *
+ * @v queue		Virtio queue
+ * @v count		Queue size
+ */
+static inline __attribute__ (( always_inline )) size_t
+virtio_cq_size ( unsigned int count ) {
+	struct virtio_cq *cq;
+
+	return ( sizeof ( *cq ) + ( count * sizeof ( cq->cqe[0] ) ) );
 }
 
 /** A virtio feature set */
@@ -194,10 +245,14 @@ struct virtio_device {
 	const char *name;
 	/** Device operations */
 	struct virtio_operations *op;
+	/** DMA device */
+	struct dma_device *dma;
 	/** Common registers */
 	void *common;
 	/** Device-specific registers */
 	void *device;
+	/** Driver status */
+	unsigned int stat;
 	/** Device supported features */
 	struct virtio_features supported;
 	/** Negotiated features */
@@ -207,12 +262,18 @@ struct virtio_device {
 /** Virtio device operations */
 struct virtio_operations {
 	/**
-	 * Set device status
+	 * Reset device
 	 *
 	 * @v virtio		Virtio device
-	 * @v stat		Device status (0 to reset device)
+	 * @ret rc		Return status code
 	 */
-	void ( * status ) ( struct virtio_device *virtio, unsigned int stat );
+	int ( * reset ) ( struct virtio_device *virtio );
+	/**
+	 * Report driver status
+	 *
+	 * @v virtio		Virtio device
+	 */
+	void ( * status ) ( struct virtio_device *virtio );
 	/**
 	 * Get supported features
 	 *
@@ -239,18 +300,9 @@ struct virtio_operations {
 	 *
 	 * @v virtio		Virtio device
 	 * @v queue		Virtio queue
-	 * @ret rc		Return status code
 	 */
-	int ( * enable ) ( struct virtio_device *virtio,
-			   struct virtio_queue *queue );
-	/**
-	 * Disable queue
-	 *
-	 * @v virtio		Virtio device
-	 * @v queue		Virtio queue
-	 */
-	void ( * disable ) ( struct virtio_device *virtio,
-			     struct virtio_queue *queue );
+	void ( * enable ) ( struct virtio_device *virtio,
+			    struct virtio_queue *queue );
 };
 
 #endif /* _IPXE_VIRTIO_H */
