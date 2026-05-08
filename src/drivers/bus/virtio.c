@@ -90,13 +90,11 @@ static void virtio_legacy_supported ( struct virtio_device *virtio ) {
 	unsigned int i;
 
 	/* Get device supported features */
-	supported->feat[0] = ioread32 ( virtio->common + VIRTIO_LEG_FEAT );
+	supported->word[0] = ioread32 ( virtio->common + VIRTIO_LEG_FEAT );
 
 	/* Legacy devices have only a single 32-bit feature register */
-	for ( i = 1 ; i < ( sizeof ( supported->feat ) /
-			    sizeof ( supported->feat[0] ) ) ; i++ ) {
-		supported->feat[i] = 0;
-	}
+	for ( i = 1 ; i < VIRTIO_FEATURE_WORDS ; i++ )
+		supported->word[i] = 0;
 }
 
 /**
@@ -109,13 +107,11 @@ static void virtio_legacy_negotiate ( struct virtio_device *virtio ) {
 	unsigned int i;
 
 	/* Set device supported features */
-	iowrite32 ( used->feat[0], virtio->common + VIRTIO_LEG_FEAT );
+	iowrite32 ( used->word[0], virtio->common + VIRTIO_LEG_FEAT );
 
 	/* Legacy devices have only a single 32-bit feature register */
-	for ( i = 1 ; i < ( sizeof ( used->feat ) /
-			    sizeof ( used->feat[0] ) ) ; i++ ) {
-		assert ( used->feat[i] == 0 );
-	}
+	for ( i = 1 ; i < VIRTIO_FEATURE_WORDS ; i++ )
+		assert ( used->word[i] == 0 );
 }
 
 /**
@@ -272,10 +268,9 @@ static void virtio_pci_supported ( struct virtio_device *virtio ) {
 	unsigned int i;
 
 	/* Get device supported features */
-	for ( i = 0 ; i < ( sizeof ( supported->feat ) /
-			    sizeof ( supported->feat[0] ) ) ; i++ ) {
+	for ( i = 0 ; i < VIRTIO_FEATURE_WORDS ; i++ ) {
 		iowrite32 ( i, virtio->common + VIRTIO_PCI_FEAT_SEL );
-		supported->feat[i] =
+		supported->word[i] =
 			ioread32 ( virtio->common + VIRTIO_PCI_FEAT );
 	}
 }
@@ -290,10 +285,9 @@ static void virtio_pci_negotiate ( struct virtio_device *virtio ) {
 	unsigned int i;
 
 	/* Set device supported features */
-	for ( i = 0 ; i < ( sizeof ( used->feat ) /
-			    sizeof ( used->feat[0] ) ) ; i++ ) {
+	for ( i = 0 ; i < VIRTIO_FEATURE_WORDS ; i++ ) {
 		iowrite32 ( i, virtio->common + VIRTIO_PCI_USED_SEL );
-		iowrite32 ( used->feat[i], virtio->common + VIRTIO_PCI_USED );
+		iowrite32 ( used->word[i], virtio->common + VIRTIO_PCI_USED );
 	}
 }
 
@@ -558,26 +552,25 @@ static void virtio_negotiate ( struct virtio_device *virtio,
 			       const struct virtio_features *driver ) {
 	struct virtio_features *supported = &virtio->supported;
 	struct virtio_features *negotiated = &virtio->negotiated;
-	int words;
 	int i;
 
 	/* Get device supported features */
 	virtio->op->supported ( virtio );
 
 	/* Negotiate mutually supported features */
-	words = ( sizeof ( supported->feat ) / sizeof ( supported->feat[0] ) );
-	for ( i = 0 ; i < words ; i++ )
-		negotiated->feat[i] = ( supported->feat[i] & driver->feat[i] );
+	for ( i = 0 ; i < VIRTIO_FEATURE_WORDS ; i++ )
+		negotiated->word[i] = ( supported->word[i] & driver->word[i] );
 	virtio->op->negotiate ( virtio );
 
+	/* Show features */
 	DBGC ( virtio, "VIRTIO %s features ", virtio->name );
-	for ( i = ( words - 1) ; i >= 0 ; i-- ) {
-		DBGC ( virtio, "%08x%s", supported->feat[i],
+	for ( i = ( VIRTIO_FEATURE_WORDS - 1 ) ; i >= 0 ; i-- ) {
+		DBGC ( virtio, "%08x%s", supported->word[i],
 		       ( i ? ":" : "" ) );
 	}
-	DBGC ( virtio, " -> " );
-	for ( i = ( words - 1) ; i >= 0 ; i-- ) {
-		DBGC ( virtio, "%08x%s", negotiated->feat[i],
+	DBGC ( virtio, " / " );
+	for ( i = ( VIRTIO_FEATURE_WORDS - 1 ) ; i >= 0 ; i-- ) {
+		DBGC ( virtio, "%08x%s", negotiated->word[i],
 		       ( i ? ":" : "" ) );
 	}
 	DBGC ( virtio, "\n" );

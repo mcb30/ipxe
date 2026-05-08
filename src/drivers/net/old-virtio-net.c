@@ -679,7 +679,7 @@ static int virtnet_probe ( struct pci_device *pci ) {
 	static struct virtio_device virtio;
 	static struct virtio_queue queue;
 	static const struct virtio_features features = {
-		.feat = { 0, 0x1 },
+		.word = { 0, VIRTIO_FEAT1_VERSION },
 	};
 	virtio_pci_map ( &virtio, pci );
 	virtio_init ( &virtio, &features );

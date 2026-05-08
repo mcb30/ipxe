@@ -255,11 +255,17 @@ virtio_cq_size ( unsigned int count ) {
 	return ( sizeof ( *cq ) + ( count * sizeof ( cq->cqe[0] ) ) );
 }
 
+/** Number of 32-bit feature words */
+#define VIRTIO_FEATURE_WORDS 2
+
 /** A virtio feature set */
 struct virtio_features {
-	/** Feature bits */
-	uint32_t feat[2];
+	/** Feature words */
+	uint32_t word[VIRTIO_FEATURE_WORDS];
 };
+
+/** Virtio version 1.0 or above */
+#define VIRTIO_FEAT1_VERSION 0x00000001
 
 /** A virtio device */
 struct virtio_device {
