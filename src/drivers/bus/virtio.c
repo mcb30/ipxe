@@ -34,6 +34,7 @@ FILE_SECBOOT ( PERMITTED );
 #include <assert.h>
 #include <errno.h>
 #include <unistd.h>
+#include <ipxe/pci.h>
 #include <ipxe/virtio.h>
 
 /******************************************************************************
@@ -169,7 +170,7 @@ static void virtio_legacy_enable ( struct virtio_device *virtio,
 	assert ( len == queue->len );
 
 	/* Program queue base page address */
-	iowrite32 ( ( dma ( &queue->map, queue->buf ) / VIRTIO_ALIGN ),
+	iowrite32 ( ( dma ( &queue->map, queue->buf ) / VIRTIO_PAGE ),
 		    virtio->common + VIRTIO_LEG_BASE );
 }
 
@@ -182,6 +183,41 @@ static struct virtio_operations virtio_legacy_operations = {
 	.size = virtio_legacy_size,
 	.enable = virtio_legacy_enable,
 };
+
+/**
+ * Map legacy device
+ *
+ * @v virtio		Virtio device
+ * @v pci		PCI device
+ * @ret rc		Return status code
+ */
+static int virtio_legacy_map ( struct virtio_device *virtio,
+			       struct pci_device *pci ) {
+	int rc;
+
+	/* Map common device region */
+	if ( pci->ioaddr ) {
+		// update pci_ioremap() to handle I/O addresses
+		virtio->common = ( ( void * ) pci->ioaddr );
+	} else {
+		virtio->common = pci_ioremap ( pci, pci->membase,
+					       VIRTIO_PAGE );
+	}
+	if ( ! virtio->common ) {
+		DBGC ( virtio, "VIRTIO %s has no BARs\n", virtio->name );
+		rc = -ENODEV;
+		goto err_common;
+	}
+
+	/* Set device operations */
+	virtio->op = &virtio_legacy_operations;
+
+	return 0;
+
+	iounmap ( virtio->common );
+ err_common:
+	return rc;
+}
 
 /******************************************************************************
  *
@@ -359,6 +395,115 @@ static struct virtio_operations virtio_pci_operations = {
 	.enable = virtio_pci_enable,
 };
 
+/**
+ * Map PCI capability
+ *
+ * @v virtio		Virtio device
+ * @v pci		PCI device
+ * @v type		Capability type
+ * @ret io_addr		I/O address, or NULL on error
+ */
+static void * virtio_pci_map_cap ( struct virtio_device *virtio,
+				   struct pci_device *pci,
+				   unsigned int type ) {
+	uint8_t len;
+	uint8_t typ;
+	uint8_t bar;
+	uint32_t offset;
+	unsigned int reg;
+	unsigned long start;
+	void *io_addr;
+	int pos;
+
+	/* Scan through vendor capabilities */
+	for ( pos = pci_find_capability ( pci, PCI_CAP_ID_VNDR ) ; pos > 0 ;
+	      pos = pci_find_next_capability ( pci, pos, PCI_CAP_ID_VNDR ) ) {
+
+		/* Check length */
+		pci_read_config_byte ( pci, ( pos + PCI_CAP_LEN ), &len );
+		if ( len <= VIRTIO_PCI_CAP_END ) {
+			DBGC ( virtio, "VIRTIO %s capability +%#02x too "
+			       "short\n", virtio->name, pos );
+			continue;
+		}
+
+		/* Read values */
+		pci_read_config_byte ( pci, ( pos + VIRTIO_PCI_CAP_TYPE ),
+				       &typ );
+		pci_read_config_byte ( pci, ( pos + VIRTIO_PCI_CAP_BAR ),
+				       &bar );
+		pci_read_config_dword ( pci, ( pos + VIRTIO_PCI_CAP_OFFSET ),
+					&offset );
+
+		/* Check type */
+		if ( typ != type )
+			continue;
+		DBGC ( virtio, "VIRTIO %s capability type %d BAR%d+%#x\n",
+		       virtio->name, type, bar, offset );
+
+		/* Check BAR */
+		reg = PCI_BASE_ADDRESS ( bar );
+		if ( reg > PCI_BASE_ADDRESS_5 )
+			continue;
+		start = pci_bar_start ( pci, reg );
+		if ( ! start )
+			continue;
+
+		/* Map BAR region */
+		io_addr = pci_ioremap ( pci, start, VIRTIO_PAGE );
+		if ( ! io_addr )
+			continue;
+
+		return io_addr;
+	}
+
+	DBGC ( virtio, "VIRTIO %s has no usable capability type %d\n",
+	       virtio->name, type );
+	return NULL;
+}
+
+/**
+ * Map PCI device
+ *
+ * @v virtio		Virtio device
+ * @v pci		PCI device
+ * @ret rc		Return status code
+ */
+int virtio_pci_map ( struct virtio_device *virtio, struct pci_device *pci ) {
+	int rc;
+
+	/* Initialise device */
+	virtio->name = pci->dev.name;
+	virtio->dma = &pci->dma;
+
+	/* Try mapping common capability */
+	virtio->common = virtio_pci_map_cap ( virtio, pci,
+					      VIRTIO_PCI_CAP_TYPE_COMMON );
+	if ( ! virtio->common ) {
+		/* Assume this must be a legacy device */
+		return virtio_legacy_map ( virtio, pci );
+	}
+
+	/* Map device capability */
+	virtio->device = virtio_pci_map_cap ( virtio, pci,
+					      VIRTIO_PCI_CAP_TYPE_DEVICE );
+	if ( ! virtio->device ) {
+		rc = -ENODEV;
+		goto err_device;
+	}
+
+	/* Set device operations and DMA mask */
+	virtio->op = &virtio_pci_operations;
+	dma_set_mask_64bit ( virtio->dma );
+
+	return 0;
+
+	iounmap ( virtio->device );
+ err_device:
+	iounmap ( virtio->common );
+	return rc;
+}
+
 /******************************************************************************
  *
  * Transport-independent operations
@@ -491,7 +636,7 @@ int virtio_enable ( struct virtio_device *virtio, struct virtio_queue *queue,
 
 	/* Allocate and initialise queue */
 	queue->buf = dma_alloc ( virtio->dma, &queue->map, queue->len,
-				 VIRTIO_ALIGN );
+				 VIRTIO_PAGE );
 	if ( ! queue->buf ) {
 		rc = -ENOMEM;
 		goto err_alloc;

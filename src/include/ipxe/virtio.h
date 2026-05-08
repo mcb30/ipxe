@@ -14,7 +14,7 @@ FILE_SECBOOT ( PERMITTED );
 #include <ipxe/dma.h>
 
 /** Virtio page alignment */
-#define VIRTIO_ALIGN 4096
+#define VIRTIO_PAGE 4096
 
 /** Maximum time to wait for reset (in ms) */
 #define VIRTIO_RESET_MAX_WAIT_MS 100
@@ -52,7 +52,28 @@ FILE_SECBOOT ( PERMITTED );
 /** @} */
 
 /**
- * @defgroup virtio_pci PCI common device registers
+ * @defgroup virtio_pci_cap PCI capability registers
+ * @{
+ */
+
+/** Capability type */
+#define VIRTIO_PCI_CAP_TYPE 0x03
+#define VIRTIO_PCI_CAP_TYPE_COMMON 0x01	/**< Common registers */
+#define VIRTIO_PCI_CAP_TYPE_DEVICE 0x04	/**< Device-specific registers */
+
+/** Capability BAR index */
+#define VIRTIO_PCI_CAP_BAR 0x04
+
+/** Capability BAR offset */
+#define VIRTIO_PCI_CAP_OFFSET 0x08
+
+/** Capability minimum length */
+#define VIRTIO_PCI_CAP_END 0x10
+
+/** @} */
+
+/**
+ * @defgroup virtio_pci_common PCI common device registers
  * @{
  */
 
@@ -191,7 +212,7 @@ virtio_queue_init ( struct virtio_queue *queue, unsigned int index ) {
 static inline __attribute__ (( always_inline )) size_t
 virtio_align ( size_t size ) {
 
-	return ( ( size + VIRTIO_ALIGN - 1 ) & ~( VIRTIO_ALIGN - 1 ) );
+	return ( ( size + VIRTIO_PAGE - 1 ) & ~( VIRTIO_PAGE - 1 ) );
 }
 
 /**

@@ -102,6 +102,9 @@ FILE_SECBOOT ( PERMITTED );
 /** Next capability */
 #define PCI_CAP_NEXT		0x01
 
+/** Capability length */
+#define PCI_CAP_LEN		0x02
+
 /** Power management control and status */
 #define PCI_PM_CTRL		0x04
 #define PCI_PM_CTRL_STATE_MASK		0x0003	/**< Current power state */
