@@ -86,7 +86,7 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 
 	/* Initialise buffer ID ring */
 	for ( i = 0 ; i < fill ; i++ )
-		queue->ids[i] = ( i * 2 );
+		queue->ids[i] = ( i << 1 );
 
 	DBGC ( vnet, "VNET %s Q%d using %d/%d descriptors\n", virtio->name,
 	       queue->queue.index, queue->fill, queue->queue.count );
@@ -164,10 +164,33 @@ static int virtio_net_transmit ( struct net_device *netdev,
 				 struct io_buffer *iobuf ) {
 	struct virtio_net *vnet = netdev->priv;
 	struct virtio_device *virtio = &vnet->virtio;
+	struct virtio_net_queue *queue = &vnet->tx;
+	struct virtio_desc *desc;
+	unsigned int id;
+	size_t len;
 
-	DBGC ( vnet, "VNET %s does not yet support transmit\n", virtio->name );
-	( void ) iobuf;
-	return -ENOTSUP;
+	/* Get next transmit descriptor */
+	if ( ( queue->queue.prod - queue->queue.cons ) >= queue->fill ) {
+		DBGC ( vnet, "VNET %s out of transmit descriptors\n",
+		       virtio->name );
+		return -ENOBUFS;
+	}
+	id = queue->ids[ queue->queue.prod & queue->mask ];
+	desc = &queue->queue.desc[ id + 1 ];
+
+	/* Populate transmit descriptor */
+	len = iob_len ( iobuf );
+	desc->addr = cpu_to_le64 ( iob_dma ( iobuf ) );
+	desc->len = cpu_to_le32 ( len );
+	DBGC2 ( vnet, "VNET %s TX [%02x-%02x] is [%lx,%lx)\n", virtio->name,
+		id, ( id + 1 ), virt_to_phys ( iobuf->data ),
+		( virt_to_phys ( iobuf->data ) + len ) );
+
+	/* Push transmit descriptor */
+	virtio_submit ( &queue->queue, id );
+	virtio_notify ( &queue->queue );
+
+	return 0;
 }
 
 /**
@@ -182,28 +205,12 @@ static void virtio_net_poll ( struct net_device *netdev ) {
 	( void ) vnet;
 }
 
-/**
- * Enable or disable interrupts
- *
- * @v netdev		Network device
- * @v enable		Interrupts should be enabled
- */
-static void virtio_net_irq ( struct net_device *netdev, int enable ) {
-	struct virtio_net *vnet = netdev->priv;
-	struct virtio_device *virtio = &vnet->virtio;
-
-	DBGC ( vnet, "VNET %s does not yet support interrupts\n",
-	       virtio->name );
-	( void ) enable;
-}
-
 /** Virtio network device operations */
 static struct net_device_operations virtio_net_operations = {
 	.open		= virtio_net_open,
 	.close		= virtio_net_close,
 	.transmit	= virtio_net_transmit,
 	.poll		= virtio_net_poll,
-	.irq		= virtio_net_irq,
 };
 
 /******************************************************************************
@@ -259,6 +266,9 @@ static int virtio_net_probe ( struct pci_device *pci ) {
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register_netdev;
+
+	//
+	netdev_link_up ( netdev );
 
 	return 0;
 

@@ -11,6 +11,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
+#include <byteswap.h>
 #include <ipxe/dma.h>
 #include <ipxe/pci.h>
 
@@ -182,6 +183,10 @@ struct virtio_queue {
 	unsigned int count;
 	/** Queue mask */
 	unsigned int mask;
+	/** Submission queue producer index */
+	unsigned int prod;
+	/** Completion queue consumer index */
+	unsigned int cons;
 	/** Total length of queue */
 	size_t len;
 	/** DMA mapping */
@@ -334,6 +339,33 @@ struct virtio_operations {
 	void ( * enable ) ( struct virtio_device *virtio,
 			    struct virtio_queue *queue );
 };
+
+/**
+ * Submit descriptor(s) to queue
+ *
+ * @v queue		Virtio queue
+ * @v id		Starting descriptor index
+ */
+static inline __attribute__ (( always_inline )) void
+virtio_submit ( struct virtio_queue *queue, unsigned int id ) {
+
+	/* Write starting descriptor index to submission queue */
+	queue->sq->sqe[ queue->prod++ ].index = cpu_to_le16 ( id );
+}
+
+/**
+ * Notify queue
+ *
+ * @v queue		Virtio queue
+ */
+static inline __attribute__ (( always_inline )) void
+virtio_notify ( struct virtio_queue *queue ) {
+
+	/* Write producer index */
+	wmb();
+	queue->sq->index = cpu_to_le16 ( queue->prod );
+	wmb();
+}
 
 extern int virtio_pci_map ( struct virtio_device *virtio,
 			    struct pci_device *pci );
