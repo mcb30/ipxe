@@ -61,6 +61,7 @@ FILE_SECBOOT ( PERMITTED );
 /** Capability type */
 #define VIRTIO_PCI_CAP_TYPE 0x03
 #define VIRTIO_PCI_CAP_TYPE_COMMON 0x01	/**< Common registers */
+#define VIRTIO_PCI_CAP_TYPE_NOTIFY 0x02	/**< Notification doorbells */
 #define VIRTIO_PCI_CAP_TYPE_DEVICE 0x04	/**< Device-specific registers */
 
 /** Capability BAR index */
@@ -197,6 +198,8 @@ struct virtio_queue {
 	struct virtio_sq *sq;
 	/** Completion queue */
 	struct virtio_cq *cq;
+	/** Notification doorbell */
+	void *db;
 };
 
 /**
@@ -284,6 +287,8 @@ struct virtio_device {
 	struct dma_device *dma;
 	/** Common registers */
 	void *common;
+	/** Doorbell notification registers */
+	void *notify;
 	/** Device-specific registers */
 	void *device;
 	/** Driver status */
@@ -292,6 +297,8 @@ struct virtio_device {
 	struct virtio_features supported;
 	/** Negotiated features */
 	struct virtio_features negotiated;
+	/** Notification doorbell multiplier */
+	unsigned int multiplier;
 };
 
 /** Virtio device operations */
@@ -365,6 +372,9 @@ virtio_notify ( struct virtio_queue *queue ) {
 	wmb();
 	queue->sq->index = cpu_to_le16 ( queue->prod );
 	wmb();
+
+	/* Ring doorbell */
+	iowrite16 ( queue->index, queue->db );
 }
 
 /**

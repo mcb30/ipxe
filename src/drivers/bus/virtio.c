@@ -205,6 +205,11 @@ static int virtio_legacy_map ( struct virtio_device *virtio,
 		goto err_common;
 	}
 
+	/* Set doorbell register offset */
+	//
+	// need to prevent unmapping!
+	virtio->notify = ( virtio->common + VIRTIO_LEG_DB );
+
 	/* Set device operations */
 	virtio->op = &virtio_legacy_operations;
 
@@ -473,7 +478,7 @@ int virtio_pci_map ( struct virtio_device *virtio, struct pci_device *pci ) {
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
 
-	/* Try mapping common capability */
+	/* Try mapping common registers */
 	virtio->common = virtio_pci_map_cap ( virtio, pci,
 					      VIRTIO_PCI_CAP_TYPE_COMMON );
 	if ( ! virtio->common ) {
@@ -481,7 +486,15 @@ int virtio_pci_map ( struct virtio_device *virtio, struct pci_device *pci ) {
 		return virtio_legacy_map ( virtio, pci );
 	}
 
-	/* Map device capability */
+	/* Map notification doorbell registers */
+	virtio->notify = virtio_pci_map_cap ( virtio, pci,
+					      VIRTIO_PCI_CAP_TYPE_NOTIFY );
+	if ( ! virtio->notify ) {
+		rc = -ENODEV;
+		goto err_notify;
+	}
+
+	/* Map device-specific registers */
 	virtio->device = virtio_pci_map_cap ( virtio, pci,
 					      VIRTIO_PCI_CAP_TYPE_DEVICE );
 	if ( ! virtio->device ) {
@@ -497,6 +510,8 @@ int virtio_pci_map ( struct virtio_device *virtio, struct pci_device *pci ) {
 
 	iounmap ( virtio->device );
  err_device:
+	iounmap ( virtio->notify );
+ err_notify:
 	iounmap ( virtio->common );
 	return rc;
 }
@@ -624,6 +639,7 @@ int virtio_init ( struct virtio_device *virtio,
  */
 int virtio_enable ( struct virtio_device *virtio, struct virtio_queue *queue,
 		    unsigned int count ) {
+	unsigned int offset;
 	int rc;
 
 	/* Determine queue size */
@@ -664,6 +680,12 @@ int virtio_enable ( struct virtio_device *virtio, struct virtio_queue *queue,
 	       ( virt_to_phys ( queue->cq ) +
 		 virtio_cq_size ( queue->count ) ) );
 
+	/* Calculate doorbell register address */
+	offset = ( queue->index * virtio->multiplier );
+	queue->db = ( virtio->notify + offset );
+	DBGC ( virtio, "VIRTIO %s Q%d doorbell at +%#04x\n",
+	       virtio->name, queue->index, offset );
+
 	return 0;
 
 	dma_free ( &queue->map, queue->desc, queue->len );
@@ -699,6 +721,9 @@ void virtio_unmap ( struct virtio_device *virtio ) {
 
 	/* Unmap device-specific registers */
 	iounmap ( virtio->device );
+
+	/* Unmap notification doorbells */
+	iounmap ( virtio->notify );
 
 	/* Unmap common registers */
 	iounmap ( virtio->common );
