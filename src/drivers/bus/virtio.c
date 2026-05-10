@@ -628,12 +628,14 @@ int virtio_enable ( struct virtio_device *virtio, struct virtio_queue *queue,
 
 	/* Determine queue size */
 	virtio->op->size ( virtio, queue, count );
-	if ( ! queue->count ) {
-		DBGC ( virtio, "VIRTIO %s Q%d does not exist\n",
-		       virtio->name, queue->index );
+	if ( ( queue->count == 0 ) ||
+	     ( queue->count & ( queue->count - 1 ) ) ) {
+		DBGC ( virtio, "VIRTIO %s Q%d invalid size %d\n",
+		       virtio->name, queue->index, queue->count );
 		rc = -ENODEV;
 		goto err_count;
 	}
+	queue->mask = ( queue->count - 1 );
 
 	/* Allocate and initialise queue */
 	queue->desc = dma_alloc ( virtio->dma, &queue->map, queue->len,

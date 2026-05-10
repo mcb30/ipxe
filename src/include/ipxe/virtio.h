@@ -180,6 +180,8 @@ struct virtio_queue {
 	unsigned int index;
 	/** Queue size (must be a power of two) */
 	unsigned int count;
+	/** Queue mask */
+	unsigned int mask;
 	/** Total length of queue */
 	size_t len;
 	/** DMA mapping */

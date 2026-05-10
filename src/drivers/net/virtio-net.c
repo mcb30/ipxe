@@ -56,6 +56,44 @@ const struct virtio_features virtio_net_features = {
  */
 
 /**
+ * Enable queue
+ *
+ * @v vnet		Virtio network device
+ * @v queue		Virtio network queue
+ * @ret rc		Return status code
+ */
+static int virtio_net_enable ( struct virtio_net *vnet,
+			       struct virtio_net_queue *queue ) {
+	struct virtio_device *virtio = &vnet->virtio;
+	unsigned int fill;
+	unsigned int i;
+	int rc;
+
+	/* Enable queue */
+	if ( ( rc = virtio_enable ( virtio, &queue->queue,
+				    queue->count ) ) != 0 ) {
+		DBGC ( vnet, "VNET %s Q%d could not initialise: %s\n",
+		       virtio->name, queue->queue.index, strerror ( rc ) );
+		return rc;
+	}
+
+	/* Calculate mask */
+	fill = queue->queue.count;
+	if ( fill > queue->max )
+		fill = queue->max;
+	queue->fill = fill;
+	queue->mask = ( fill - 1 );
+
+	/* Initialise buffer ID ring */
+	for ( i = 0 ; i < fill ; i++ )
+		queue->ids[i] = ( i * 2 );
+
+	DBGC ( vnet, "VNET %s Q%d using %d/%d descriptors\n", virtio->name,
+	       queue->queue.index, queue->fill, queue->queue.count );
+	return 0;
+}
+
+/**
  * Open network device
  *
  * @v netdev		Network device
@@ -74,16 +112,14 @@ static int virtio_net_open ( struct net_device *netdev ) {
 	}
 
 	/* Enable receive queue */
-	if ( ( rc = virtio_enable ( virtio, &vnet->rx,
-				    VIRTIO_NET_RX_COUNT ) ) != 0 ) {
+	if ( ( rc = virtio_net_enable ( vnet, &vnet->rx ) ) != 0 ) {
 		DBGC ( vnet, "VNET %s could not enable RX: %s\n",
 		       virtio->name, strerror ( rc ) );
 		goto err_rx;
 	}
 
 	/* Enable transmit queue */
-	if ( ( rc = virtio_enable ( virtio, &vnet->tx,
-				    VIRTIO_NET_TX_COUNT ) ) != 0 ) {
+	if ( ( rc = virtio_net_enable ( vnet, &vnet->tx ) ) != 0 ) {
 		DBGC ( vnet, "VNET %s could not enable TX: %s\n",
 		       virtio->name, strerror ( rc ) );
 		goto err_tx;
@@ -94,8 +130,8 @@ static int virtio_net_open ( struct net_device *netdev ) {
  err_tx:
  err_rx:
 	virtio_reset ( virtio );
-	virtio_free ( virtio, &vnet->rx );
-	virtio_free ( virtio, &vnet->tx );
+	virtio_free ( virtio, &vnet->rx.queue );
+	virtio_free ( virtio, &vnet->tx.queue );
  err_init:
 	return rc;
 }
@@ -113,8 +149,8 @@ static void virtio_net_close ( struct net_device *netdev ) {
 	virtio_reset ( virtio );
 
 	/* Free queues */
-	virtio_free ( virtio, &vnet->rx );
-	virtio_free ( virtio, &vnet->tx );
+	virtio_free ( virtio, &vnet->rx.queue );
+	virtio_free ( virtio, &vnet->tx.queue );
 }
 
 /**
@@ -202,8 +238,12 @@ static int virtio_net_probe ( struct pci_device *pci ) {
 	netdev->dma = &pci->dma;
 	memset ( vnet, 0, sizeof ( *vnet ) );
 	virtio = &vnet->virtio;
-	virtio_queue_init ( &vnet->rx, VIRTIO_NET_RX_INDEX );
-	virtio_queue_init ( &vnet->tx, VIRTIO_NET_TX_INDEX );
+	virtio_net_queue_init ( &vnet->rx, VIRTIO_NET_RX_INDEX,
+				VIRTIO_NET_RX_COUNT, VIRTIO_NET_RX_MAX,
+				vnet->rx_ids );
+	virtio_net_queue_init ( &vnet->tx, VIRTIO_NET_TX_INDEX,
+				VIRTIO_NET_TX_COUNT, VIRTIO_NET_TX_MAX,
+				vnet->tx_ids );
 
 	/* Map PCI device */
 	if ( ( rc = virtio_pci_map ( virtio, pci ) ) != 0 ) {
