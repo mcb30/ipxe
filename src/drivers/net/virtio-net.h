@@ -38,6 +38,9 @@ union virtio_net_header {
 /** Transmit queue maximum fill level */
 #define VIRTIO_NET_TX_MAX 32
 
+/** Number of descriptors per packet */
+#define VIRTIO_NET_DESCS 2
+
 /** A virtio network queue */
 struct virtio_net_queue {
 	/** Underlying virtio queue */

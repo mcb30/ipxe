@@ -54,7 +54,7 @@ FILE_SECBOOT ( PERMITTED );
 
 /* Console types supported only on x86 CPUs */
 #if defined ( __i386__ ) || defined ( __x86_64__ )
-  //#define CONSOLE_DEBUGCON	/* Bochs/QEMU/KVM debug port console */
+  #define CONSOLE_DEBUGCON	/* Bochs/QEMU/KVM debug port console */
   //#define CONSOLE_DIRECT_VGA	/* Direct access to VGA card */
   //#define CONSOLE_PC_KBD	/* Direct access to PC keyboard */
   //#define CONSOLE_VMWARE	/* VMware logfile console */

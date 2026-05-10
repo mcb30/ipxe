@@ -494,6 +494,9 @@ int virtio_pci_map ( struct virtio_device *virtio, struct pci_device *pci ) {
 		goto err_notify;
 	}
 
+	//
+	virtio->multiplier = 4;
+
 	/* Map device-specific registers */
 	virtio->device = virtio_pci_map_cap ( virtio, pci,
 					      VIRTIO_PCI_CAP_TYPE_DEVICE );

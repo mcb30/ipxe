@@ -94,7 +94,7 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 	}
 
 	/* Calculate mask */
-	fill = queue->queue.count;
+	fill = ( queue->queue.count / VIRTIO_NET_DESCS );
 	if ( fill > queue->max )
 		fill = queue->max;
 	queue->fill = fill;
@@ -103,7 +103,7 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 	/* Initialise descriptors and buffer ID ring */
 	write = queue->write;
 	for ( i = 0 ; i < fill ; i++ ) {
-		id = ( i * 2 );
+		id = ( i * VIRTIO_NET_DESCS );
 		queue->ids[i] = id;
 		desc = &queue->queue.desc[id];
 		desc[0].addr = cpu_to_le64 ( dma ( &queue->map, &queue->hdr ));
@@ -228,6 +228,10 @@ static int virtio_net_transmit ( struct net_device *netdev,
 	DBGC2 ( vnet, "VNET %s TX [%02x-%02x] is [%lx,%lx)\n", virtio->name,
 		id, ( id + 1 ), virt_to_phys ( iobuf->data ),
 		( virt_to_phys ( iobuf->data ) + len ) );
+
+	//
+	desc = &queue->queue.desc[id];
+	DBGC_HD ( vnet, desc, ( 2 * sizeof ( *desc ) ) );
 
 	/* Push transmit descriptor */
 	virtio_submit ( &queue->queue, id );
