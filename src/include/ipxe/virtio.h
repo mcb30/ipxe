@@ -272,7 +272,7 @@ struct virtio_features {
 };
 
 /** Virtio version 1.0 or above */
-#define VIRTIO_FEAT1_VERSION 0x00000001
+#define VIRTIO_FEAT1_MODERN 0x00000001
 
 /** A virtio device */
 struct virtio_device {
@@ -365,6 +365,19 @@ virtio_notify ( struct virtio_queue *queue ) {
 	wmb();
 	queue->sq->index = cpu_to_le16 ( queue->prod );
 	wmb();
+}
+
+/**
+ * Check if device is using the legacy interface
+ *
+ * @v virtio		Virtio device
+ * @ret is_legacy	Device is using the legacy interface
+ */
+static inline __attribute__ (( always_inline )) int
+virtio_is_legacy ( struct virtio_device *virtio ) {
+
+	/* Check negotiation of version 1.0 or above */
+	return ( ! ( virtio->negotiated.word[1] & VIRTIO_FEAT1_MODERN ) );
 }
 
 extern int virtio_pci_map ( struct virtio_device *virtio,

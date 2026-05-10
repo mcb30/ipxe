@@ -12,6 +12,14 @@ FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/virtio.h>
 
+/** A virtio network packet header */
+union virtio_net_header {
+	/** Legacy interface */
+	uint8_t legacy[10];
+	/** Modern (version 1.0) interface */
+	uint8_t modern[12];
+} __attribute__ (( packed ));
+
 /** Receive queue index */
 #define VIRTIO_NET_RX_INDEX 0
 
@@ -34,16 +42,26 @@ FILE_SECBOOT ( PERMITTED );
 struct virtio_net_queue {
 	/** Underlying virtio queue */
 	struct virtio_queue queue;
-	/** Requested queue size */
-	unsigned int count;
-	/** Maximum fill level */
-	unsigned int max;
+	/** Buffer ID ring */
+	uint8_t *ids;
 	/** Effective fill level */
 	unsigned int fill;
 	/** Buffer ID ring mask */
 	unsigned int mask;
-	/** Buffer ID ring */
-	uint8_t *ids;
+
+	/** Shared packet header */
+	union virtio_net_header hdr;
+	/** DMA mapping for packet header */
+	struct dma_mapping map;
+
+	/** DMA direction for packet header */
+	uint8_t dma;
+	/** Buffer writability flag for packet header */
+	uint8_t write;
+	/** Requested queue size */
+	uint8_t count;
+	/** Maximum fill level */
+	uint8_t max;
 };
 
 /**
@@ -51,18 +69,24 @@ struct virtio_net_queue {
  *
  * @v queue		Virtio network queue
  * @v index		Queue index
+ * @v ids		Buffer ID ring
+ * @v dma		DMA direction for packet header
+ * @v write		Writability flag for packet header
  * @v count		Requested queue size
  * @v max		Maximum fill level
- * @v ids		Buffer ID ring
  */
 static inline __attribute__ (( always_inline )) void
-virtio_net_queue_init ( struct virtio_net_queue *queue, unsigned int index,
-			unsigned int count, unsigned int max, uint8_t *ids ) {
+virtio_net_queue_init ( struct virtio_net_queue *queue, uint8_t *ids,
+			unsigned int index, unsigned int count,
+			unsigned int max, unsigned int dma,
+			unsigned int write ) {
 
 	queue->queue.index = index;
+	queue->ids = ids;
+	queue->dma = dma;
+	queue->write = write;
 	queue->count = count;
 	queue->max = max;
-	queue->ids = ids;
 }
 
 /** A virtio network device */

@@ -45,7 +45,7 @@ FILE_SECBOOT ( PERMITTED );
 
 /** Supported features */
 const struct virtio_features virtio_net_features = {
-	.word = { 0, VIRTIO_FEAT1_VERSION },
+	.word = { 0, VIRTIO_FEAT1_MODERN },
 };
 
 /******************************************************************************
@@ -65,16 +65,32 @@ const struct virtio_features virtio_net_features = {
 static int virtio_net_enable ( struct virtio_net *vnet,
 			       struct virtio_net_queue *queue ) {
 	struct virtio_device *virtio = &vnet->virtio;
+	struct virtio_desc *desc;
+	unsigned int write;
 	unsigned int fill;
+	unsigned int id;
 	unsigned int i;
+	size_t hlen;
 	int rc;
+
+	/* Calculate packet header length */
+	hlen = ( virtio_is_legacy ( virtio ) ?
+		 sizeof ( queue->hdr.legacy ) : sizeof ( queue->hdr.modern ) );
+
+	/* Map packet header */
+	if ( ( dma_map ( virtio->dma, &queue->map, &queue->hdr,
+			 sizeof ( queue->hdr ), queue->dma ) ) != 0 ) {
+		DBGC ( vnet, "VNET %s Q%d could not map header: %s\n",
+		       virtio->name, queue->queue.index, strerror ( rc ) );
+		goto err_map;
+	}
 
 	/* Enable queue */
 	if ( ( rc = virtio_enable ( virtio, &queue->queue,
 				    queue->count ) ) != 0 ) {
 		DBGC ( vnet, "VNET %s Q%d could not initialise: %s\n",
 		       virtio->name, queue->queue.index, strerror ( rc ) );
-		return rc;
+		goto err_enable;
 	}
 
 	/* Calculate mask */
@@ -84,13 +100,31 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 	queue->fill = fill;
 	queue->mask = ( fill - 1 );
 
-	/* Initialise buffer ID ring */
-	for ( i = 0 ; i < fill ; i++ )
-		queue->ids[i] = ( i << 1 );
+	/* Initialise descriptors and buffer ID ring */
+	write = queue->write;
+	for ( i = 0 ; i < fill ; i++ ) {
+		id = ( i * 2 );
+		queue->ids[i] = id;
+		desc = &queue->queue.desc[id];
+		desc[0].addr = cpu_to_le64 ( dma ( &queue->map, &queue->hdr ));
+		desc[0].len = cpu_to_le32 ( hlen );
+		desc[0].flags = cpu_to_le16 ( VIRTIO_DESC_FL_NEXT | write );
+		desc[0].next = cpu_to_le16 ( id + 1 );
+		desc[1].flags = cpu_to_le16 ( VIRTIO_DESC_FL_WRITE ^ write );
+	}
 
 	DBGC ( vnet, "VNET %s Q%d using %d/%d descriptors\n", virtio->name,
 	       queue->queue.index, queue->fill, queue->queue.count );
 	return 0;
+
+	/* There may be no way to disable individual queues: the
+	 * caller must reset the whole device to recover from a
+	 * failure.
+	 */
+ err_enable:
+	dma_unmap ( &queue->map, sizeof ( queue->hdr ) );
+ err_map:
+	return rc;
 }
 
 /**
@@ -127,8 +161,13 @@ static int virtio_net_open ( struct net_device *netdev ) {
 
 	return 0;
 
+	dma_unmap ( &vnet->tx.map, sizeof ( vnet->tx.hdr ) );
  err_tx:
+	dma_unmap ( &vnet->rx.map, sizeof ( vnet->rx.hdr ) );
  err_rx:
+	/* There may be no way to disable individual queues: we must
+	 * reset the whole device instead and then free the queues.
+	 */
 	virtio_reset ( virtio );
 	virtio_free ( virtio, &vnet->rx.queue );
 	virtio_free ( virtio, &vnet->tx.queue );
@@ -147,6 +186,10 @@ static void virtio_net_close ( struct net_device *netdev ) {
 
 	/* Reset device */
 	virtio_reset ( virtio );
+
+	/* Unmap headers (now that device is guaranteed idle) */
+	dma_unmap ( &vnet->rx.map, sizeof ( vnet->rx.hdr ) );
+	dma_unmap ( &vnet->tx.map, sizeof ( vnet->tx.hdr ) );
 
 	/* Free queues */
 	virtio_free ( virtio, &vnet->rx.queue );
@@ -245,12 +288,12 @@ static int virtio_net_probe ( struct pci_device *pci ) {
 	netdev->dma = &pci->dma;
 	memset ( vnet, 0, sizeof ( *vnet ) );
 	virtio = &vnet->virtio;
-	virtio_net_queue_init ( &vnet->rx, VIRTIO_NET_RX_INDEX,
+	virtio_net_queue_init ( &vnet->rx, vnet->rx_ids, VIRTIO_NET_RX_INDEX,
 				VIRTIO_NET_RX_COUNT, VIRTIO_NET_RX_MAX,
-				vnet->rx_ids );
-	virtio_net_queue_init ( &vnet->tx, VIRTIO_NET_TX_INDEX,
+				DMA_TX, 0 );
+	virtio_net_queue_init ( &vnet->tx, vnet->tx_ids, VIRTIO_NET_TX_INDEX,
 				VIRTIO_NET_TX_COUNT, VIRTIO_NET_TX_MAX,
-				vnet->tx_ids );
+				DMA_RX, VIRTIO_DESC_FL_WRITE );
 
 	/* Map PCI device */
 	if ( ( rc = virtio_pci_map ( virtio, pci ) ) != 0 ) {

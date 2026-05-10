@@ -673,21 +673,6 @@ err_map_common:
  * @ret rc	Return status code
  */
 static int virtnet_probe ( struct pci_device *pci ) {
-
-
-	//
-	static struct virtio_device virtio;
-	static struct virtio_queue queue;
-	static const struct virtio_features features = {
-		.word = { 0, VIRTIO_FEAT1_VERSION },
-	};
-	virtio_pci_map ( &virtio, pci );
-	virtio_init ( &virtio, &features );
-	virtio_queue_init ( &queue, 0 );
-	virtio_enable ( &virtio, &queue, 128 );
-	return 0;
-
-
 	int found_modern = 0;
 	int rc = virtnet_probe_modern ( pci, &found_modern );
 	if ( ! found_modern && pci->device < 0x1040 ) {
