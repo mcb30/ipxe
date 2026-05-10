@@ -45,10 +45,7 @@ FILE_SECBOOT ( PERMITTED );
 
 /** Supported features */
 const struct virtio_features virtio_net_features = {
-	.word = {
-		0,
-		VIRTIO_FEAT1_VERSION,
-	},
+	.word = { 0, VIRTIO_FEAT1_VERSION },
 };
 
 /******************************************************************************
@@ -202,6 +199,7 @@ static int virtio_net_probe ( struct pci_device *pci ) {
 	vnet = netdev->priv;
 	pci_set_drvdata ( pci, netdev );
 	netdev->dev = &pci->dev;
+	netdev->dma = &pci->dma;
 	memset ( vnet, 0, sizeof ( *vnet ) );
 	virtio = &vnet->virtio;
 	virtio_queue_init ( &vnet->rx, VIRTIO_NET_RX_INDEX );
@@ -260,8 +258,8 @@ static void virtio_net_remove ( struct pci_device *pci ) {
 
 /** Virtio network PCI device IDs */
 static struct pci_device_id virtio_net_ids[] = {
-	PCI_ROM ( 0x1af4, 0x1000, "virtio-net-legacy", "Virtio (legacy)", 0 ),
-	PCI_ROM ( 0x1af4, 0x1041, "virtio-net-modern", "Virtio (modern)", 0 ),
+	PCI_ROM ( 0x1af4, 0x1000, "virtio-net", "Virtio (legacy)", 0 ),
+	PCI_ROM ( 0x1af4, 0x1041, "virtio-net", "Virtio (modern)", 0 ),
 };
 
 /** Virtio network PCI driver */
