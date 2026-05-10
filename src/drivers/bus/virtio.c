@@ -449,7 +449,7 @@ static void * virtio_pci_map_cap ( struct virtio_device *virtio,
 			continue;
 
 		/* Map BAR region */
-		io_addr = pci_ioremap ( pci, start, VIRTIO_PAGE );
+		io_addr = pci_ioremap ( pci, ( start + offset ), VIRTIO_PAGE );
 		if ( ! io_addr )
 			continue;
 

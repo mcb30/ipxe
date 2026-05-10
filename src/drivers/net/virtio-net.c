@@ -110,7 +110,7 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 		desc[0].len = cpu_to_le32 ( hlen );
 		desc[0].flags = cpu_to_le16 ( VIRTIO_DESC_FL_NEXT | write );
 		desc[0].next = cpu_to_le16 ( id + 1 );
-		desc[1].flags = cpu_to_le16 ( VIRTIO_DESC_FL_WRITE ^ write );
+		desc[1].flags = cpu_to_le16 ( write );
 	}
 
 	DBGC ( vnet, "VNET %s Q%d using %d/%d descriptors\n", virtio->name,
@@ -229,10 +229,6 @@ static int virtio_net_transmit ( struct net_device *netdev,
 		id, ( id + 1 ), virt_to_phys ( iobuf->data ),
 		( virt_to_phys ( iobuf->data ) + len ) );
 
-	//
-	desc = &queue->queue.desc[id];
-	DBGC_HD ( vnet, desc, ( 2 * sizeof ( *desc ) ) );
-
 	/* Push transmit descriptor */
 	virtio_submit ( &queue->queue, id );
 	virtio_notify ( &queue->queue );
@@ -294,10 +290,10 @@ static int virtio_net_probe ( struct pci_device *pci ) {
 	virtio = &vnet->virtio;
 	virtio_net_queue_init ( &vnet->rx, vnet->rx_ids, VIRTIO_NET_RX_INDEX,
 				VIRTIO_NET_RX_COUNT, VIRTIO_NET_RX_MAX,
-				DMA_TX, 0 );
+				DMA_RX, VIRTIO_DESC_FL_WRITE );
 	virtio_net_queue_init ( &vnet->tx, vnet->tx_ids, VIRTIO_NET_TX_INDEX,
 				VIRTIO_NET_TX_COUNT, VIRTIO_NET_TX_MAX,
-				DMA_RX, VIRTIO_DESC_FL_WRITE );
+				DMA_TX, 0 );
 
 	/* Map PCI device */
 	if ( ( rc = virtio_pci_map ( virtio, pci ) ) != 0 ) {
