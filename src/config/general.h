@@ -105,7 +105,7 @@ FILE_SECBOOT ( PERMITTED );
 //#define IPSTAT_CMD		/* IP statistics commands */
 #define IWMGMT_CMD		/* Wireless interface management commands */
 #define LOGIN_CMD		/* Login command */
-//#define LOTEST_CMD		/* Loopback testing commands */
+#define LOTEST_CMD		/* Loopback testing commands */
 #define MENU_CMD		/* Menu commands */
 //#define NEIGHBOUR_CMD		/* Neighbour management commands */
 //#define NSLOOKUP_CMD		/* DNS resolving command */
