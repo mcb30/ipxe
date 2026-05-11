@@ -45,8 +45,8 @@ union virtio_net_header {
 struct virtio_net_queue {
 	/** Underlying virtio queue */
 	struct virtio_queue queue;
-	/** Descriptor index ring */
-	uint8_t *ids;
+	/** Descriptor slot ring */
+	uint8_t *slot;
 	/** Effective fill level */
 	unsigned int fill;
 	/** Descriptor index ring mask */
@@ -72,20 +72,20 @@ struct virtio_net_queue {
  *
  * @v queue		Virtio network queue
  * @v index		Queue index
- * @v ids		Descriptor index ring
+ * @v slot		Descriptor slot ring
  * @v dma		DMA direction for packet header
  * @v write		Writability flag for packet header
  * @v count		Requested queue size
  * @v max		Maximum fill level
  */
 static inline __attribute__ (( always_inline )) void
-virtio_net_queue_init ( struct virtio_net_queue *queue, uint8_t *ids,
+virtio_net_queue_init ( struct virtio_net_queue *queue, uint8_t *slot,
 			unsigned int index, unsigned int count,
 			unsigned int max, unsigned int dma,
 			unsigned int write ) {
 
 	queue->queue.index = index;
-	queue->ids = ids;
+	queue->slot = slot;
 	queue->dma = dma;
 	queue->write = write;
 	queue->count = count;
@@ -101,13 +101,13 @@ struct virtio_net {
 	/** Transmit queue */
 	struct virtio_net_queue tx;
 
-	/** Receive descriptor index ring */
-	uint8_t rx_ids[VIRTIO_NET_RX_MAX];
+	/** Receive descriptor slot ring */
+	uint8_t rx_slot[VIRTIO_NET_RX_MAX];
 	/** Receive I/O buffers */
 	struct io_buffer *rx_iobuf[VIRTIO_NET_RX_MAX];
 
-	/** Transmit descriptor index ring */
-	uint8_t tx_ids[VIRTIO_NET_TX_MAX];
+	/** Transmit descriptor slot ring */
+	uint8_t tx_slot[VIRTIO_NET_TX_MAX];
 	/** Transmit I/O buffers */
 	struct io_buffer *tx_iobuf[VIRTIO_NET_TX_MAX];
 };

@@ -355,9 +355,13 @@ struct virtio_operations {
  */
 static inline __attribute__ (( always_inline )) void
 virtio_submit ( struct virtio_queue *queue, unsigned int index ) {
+	struct virtio_sqe *sqe;
 
-	/* Write starting descriptor index to submission queue */
-	queue->sq->sqe[ queue->prod++ ].index = cpu_to_le16 ( index );
+	/* Get next submission queue entry */
+	sqe = &queue->sq->sqe[ queue->prod++ ];
+
+	/* Populate submission queue entry */
+	sqe->index = cpu_to_le16 ( index );
 }
 
 /**
@@ -375,6 +379,41 @@ virtio_notify ( struct virtio_queue *queue ) {
 
 	/* Ring doorbell */
 	iowrite16 ( queue->index, queue->db );
+}
+
+/**
+ * Check for completed descriptors
+ *
+ * @v queue		Virtio queue
+ * @v completed		Number of completions
+ */
+static inline __attribute__ (( always_inline )) unsigned int
+virtio_completed ( struct virtio_queue *queue ) {
+	uint16_t completed;
+
+	/* Get completion count */
+	completed = ( le16_to_cpu ( queue->cq->index ) - queue->cons );
+	return completed;
+}
+
+/**
+ * Complete descriptor(s)
+ *
+ * @v queue		Virtio queue
+ * @v len		Length to fill in, or NULL
+ * @ret index		Starting descriptor index
+ */
+static inline __attribute__ (( always_inline )) unsigned int
+virtio_complete ( struct virtio_queue *queue, size_t *len ) {
+	struct virtio_cqe *cqe;
+
+	/* Get next completion queue entry */
+	cqe = &queue->cq->cqe[ queue->cons++ ];
+
+	/* Parse completion queue entry */
+	if ( len )
+		*len = le32_to_cpu ( cqe->len );
+	return le32_to_cpu ( cqe->index );
 }
 
 /**

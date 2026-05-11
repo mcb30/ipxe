@@ -67,7 +67,7 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 	struct virtio_device *virtio = &vnet->virtio;
 	struct virtio_desc *desc;
 	unsigned int fill;
-	unsigned int id;
+	unsigned int slot;
 	unsigned int index;
 	unsigned int write;
 	size_t hlen;
@@ -100,11 +100,11 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 	queue->fill = fill;
 	queue->mask = ( fill - 1 );
 
-	/* Initialise descriptors and buffer ID ring */
+	/* Initialise descriptors and slot ring */
 	write = queue->write;
-	for ( id = 0 ; id < fill ; id++ ) {
-		queue->ids[id] = id;
-		index = ( id * VIRTIO_NET_DESCS );
+	for ( slot = 0 ; slot < fill ; slot++ ) {
+		queue->slot[slot] = slot;
+		index = ( slot * VIRTIO_NET_DESCS );
 		desc = &queue->queue.desc[index];
 		desc[0].addr = cpu_to_le64 ( dma ( &queue->map, &queue->hdr ));
 		desc[0].len = cpu_to_le32 ( hlen );
@@ -209,18 +209,20 @@ static int virtio_net_transmit ( struct net_device *netdev,
 	struct virtio_device *virtio = &vnet->virtio;
 	struct virtio_net_queue *queue = &vnet->tx;
 	struct virtio_desc *desc;
-	unsigned int id;
 	unsigned int index;
+	unsigned int prod;
+	unsigned int slot;
 	size_t len;
 
 	/* Get next transmit descriptor */
-	if ( ( queue->queue.prod - queue->queue.cons ) >= queue->fill ) {
+	prod = queue->queue.prod;
+	if ( ( prod - queue->queue.cons ) >= queue->fill ) {
 		DBGC ( vnet, "VNET %s out of transmit descriptors\n",
 		       virtio->name );
 		return -ENOBUFS;
 	}
-	id = queue->ids[ queue->queue.prod & queue->mask ];
-	index = ( id * VIRTIO_NET_DESCS );
+	slot = queue->slot[ prod & queue->mask ];
+	index = ( slot * VIRTIO_NET_DESCS );
 	desc = &queue->queue.desc[index];
 
 	/* Populate transmit descriptor */
@@ -236,9 +238,43 @@ static int virtio_net_transmit ( struct net_device *netdev,
 	virtio_notify ( &queue->queue );
 
 	/* Record I/O buffer */
-	vnet->tx_iobuf[id] = iobuf;
+	assert ( vnet->tx_iobuf[slot] == NULL );
+	vnet->tx_iobuf[slot] = iobuf;
 
 	return 0;
+}
+
+/**
+ * Poll for completed packets
+ *
+ * @v netdev		Network device
+ */
+static void virtio_net_poll_tx ( struct net_device *netdev ) {
+	struct virtio_net *vnet = netdev->priv;
+	struct virtio_device *virtio = &vnet->virtio;
+	struct virtio_net_queue *queue = &vnet->tx;
+	struct io_buffer *iobuf;
+	unsigned int index;
+	unsigned int cons;
+	unsigned int slot;
+
+	/* Poll for completed descriptors */
+	while ( virtio_completed ( &queue->queue ) ) {
+
+		/* Complete descriptor and recycle slot */
+		cons = queue->queue.cons;
+		index = virtio_complete ( &queue->queue, NULL );
+		slot = ( index / VIRTIO_NET_DESCS );
+		queue->slot[ cons & queue->mask ] = slot;
+
+		/* Complete I/O buffer */
+		iobuf = vnet->tx_iobuf[slot];
+		assert ( iobuf != NULL );
+		vnet->tx_iobuf[slot] = NULL;
+		DBGC2 ( vnet, "VNET %s TX [%02x-%02x] complete\n",
+			virtio->name, index, ( index + 1 ) );
+		netdev_tx_complete ( netdev, iobuf );
+	}
 }
 
 /**
@@ -247,10 +283,9 @@ static int virtio_net_transmit ( struct net_device *netdev,
  * @v netdev		Network device
  */
 static void virtio_net_poll ( struct net_device *netdev ) {
-	struct virtio_net *vnet = netdev->priv;
 
-	/* Not yet implemented */
-	( void ) vnet;
+	/* Poll for completed packets */
+	virtio_net_poll_tx ( netdev );
 }
 
 /** Virtio network device operations */
@@ -293,10 +328,10 @@ static int virtio_net_probe ( struct pci_device *pci ) {
 	netdev->dma = &pci->dma;
 	memset ( vnet, 0, sizeof ( *vnet ) );
 	virtio = &vnet->virtio;
-	virtio_net_queue_init ( &vnet->rx, vnet->rx_ids, VIRTIO_NET_RX_INDEX,
+	virtio_net_queue_init ( &vnet->rx, vnet->rx_slot, VIRTIO_NET_RX_INDEX,
 				VIRTIO_NET_RX_COUNT, VIRTIO_NET_RX_MAX,
 				DMA_RX, VIRTIO_DESC_FL_WRITE );
-	virtio_net_queue_init ( &vnet->tx, vnet->tx_ids, VIRTIO_NET_TX_INDEX,
+	virtio_net_queue_init ( &vnet->tx, vnet->tx_slot, VIRTIO_NET_TX_INDEX,
 				VIRTIO_NET_TX_COUNT, VIRTIO_NET_TX_MAX,
 				DMA_TX, 0 );
 
