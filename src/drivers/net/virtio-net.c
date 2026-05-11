@@ -66,10 +66,10 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 			       struct virtio_net_queue *queue ) {
 	struct virtio_device *virtio = &vnet->virtio;
 	struct virtio_desc *desc;
-	unsigned int write;
 	unsigned int fill;
 	unsigned int id;
-	unsigned int i;
+	unsigned int index;
+	unsigned int write;
 	size_t hlen;
 	int rc;
 
@@ -94,7 +94,7 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 	}
 
 	/* Calculate mask */
-	fill = ( queue->queue.count / VIRTIO_NET_DESCS );
+	fill = queue->queue.count;
 	if ( fill > queue->max )
 		fill = queue->max;
 	queue->fill = fill;
@@ -102,14 +102,14 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 
 	/* Initialise descriptors and buffer ID ring */
 	write = queue->write;
-	for ( i = 0 ; i < fill ; i++ ) {
-		id = ( i * VIRTIO_NET_DESCS );
-		queue->ids[i] = id;
-		desc = &queue->queue.desc[id];
+	for ( id = 0 ; id < fill ; id++ ) {
+		queue->ids[id] = id;
+		index = ( id * VIRTIO_NET_DESCS );
+		desc = &queue->queue.desc[index];
 		desc[0].addr = cpu_to_le64 ( dma ( &queue->map, &queue->hdr ));
 		desc[0].len = cpu_to_le32 ( hlen );
 		desc[0].flags = cpu_to_le16 ( VIRTIO_DESC_FL_NEXT | write );
-		desc[0].next = cpu_to_le16 ( id + 1 );
+		desc[0].next = cpu_to_le16 ( index + 1 );
 		desc[1].flags = cpu_to_le16 ( write );
 	}
 
@@ -210,6 +210,7 @@ static int virtio_net_transmit ( struct net_device *netdev,
 	struct virtio_net_queue *queue = &vnet->tx;
 	struct virtio_desc *desc;
 	unsigned int id;
+	unsigned int index;
 	size_t len;
 
 	/* Get next transmit descriptor */
@@ -219,19 +220,23 @@ static int virtio_net_transmit ( struct net_device *netdev,
 		return -ENOBUFS;
 	}
 	id = queue->ids[ queue->queue.prod & queue->mask ];
-	desc = &queue->queue.desc[ id + 1 ];
+	index = ( id * VIRTIO_NET_DESCS );
+	desc = &queue->queue.desc[index];
 
 	/* Populate transmit descriptor */
 	len = iob_len ( iobuf );
-	desc->addr = cpu_to_le64 ( iob_dma ( iobuf ) );
-	desc->len = cpu_to_le32 ( len );
+	desc[1].addr = cpu_to_le64 ( iob_dma ( iobuf ) );
+	desc[1].len = cpu_to_le32 ( len );
 	DBGC2 ( vnet, "VNET %s TX [%02x-%02x] is [%lx,%lx)\n", virtio->name,
-		id, ( id + 1 ), virt_to_phys ( iobuf->data ),
+		index, ( index + 1 ), virt_to_phys ( iobuf->data ),
 		( virt_to_phys ( iobuf->data ) + len ) );
 
 	/* Push transmit descriptor */
-	virtio_submit ( &queue->queue, id );
+	virtio_submit ( &queue->queue, index );
 	virtio_notify ( &queue->queue );
+
+	/* Record I/O buffer */
+	vnet->tx_iobuf[id] = iobuf;
 
 	return 0;
 }

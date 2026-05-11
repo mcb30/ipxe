@@ -351,13 +351,13 @@ struct virtio_operations {
  * Submit descriptor(s) to queue
  *
  * @v queue		Virtio queue
- * @v id		Starting descriptor index
+ * @v index		Starting descriptor index
  */
 static inline __attribute__ (( always_inline )) void
-virtio_submit ( struct virtio_queue *queue, unsigned int id ) {
+virtio_submit ( struct virtio_queue *queue, unsigned int index ) {
 
 	/* Write starting descriptor index to submission queue */
-	queue->sq->sqe[ queue->prod++ ].index = cpu_to_le16 ( id );
+	queue->sq->sqe[ queue->prod++ ].index = cpu_to_le16 ( index );
 }
 
 /**

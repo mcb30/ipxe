@@ -45,11 +45,11 @@ union virtio_net_header {
 struct virtio_net_queue {
 	/** Underlying virtio queue */
 	struct virtio_queue queue;
-	/** Buffer ID ring */
+	/** Descriptor index ring */
 	uint8_t *ids;
 	/** Effective fill level */
 	unsigned int fill;
-	/** Buffer ID ring mask */
+	/** Descriptor index ring mask */
 	unsigned int mask;
 
 	/** Shared packet header */
@@ -72,7 +72,7 @@ struct virtio_net_queue {
  *
  * @v queue		Virtio network queue
  * @v index		Queue index
- * @v ids		Buffer ID ring
+ * @v ids		Descriptor index ring
  * @v dma		DMA direction for packet header
  * @v write		Writability flag for packet header
  * @v count		Requested queue size
@@ -100,10 +100,16 @@ struct virtio_net {
 	struct virtio_net_queue rx;
 	/** Transmit queue */
 	struct virtio_net_queue tx;
-	/** Receive buffer ID ring */
+
+	/** Receive descriptor index ring */
 	uint8_t rx_ids[VIRTIO_NET_RX_MAX];
-	/** Transmit buffer ID ring */
+	/** Receive I/O buffers */
+	struct io_buffer *rx_iobuf[VIRTIO_NET_RX_MAX];
+
+	/** Transmit descriptor index ring */
 	uint8_t tx_ids[VIRTIO_NET_TX_MAX];
+	/** Transmit I/O buffers */
+	struct io_buffer *tx_iobuf[VIRTIO_NET_TX_MAX];
 };
 
 #endif /* _VIRTIO_NET_H */
