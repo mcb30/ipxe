@@ -100,6 +100,8 @@ struct virtio_net {
 	struct virtio_net_queue rx;
 	/** Transmit queue */
 	struct virtio_net_queue tx;
+	/** Maximum frame size */
+	size_t mfs;
 
 	/** Receive descriptor slot ring */
 	uint8_t rx_slot[VIRTIO_NET_RX_MAX];

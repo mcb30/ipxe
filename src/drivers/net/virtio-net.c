@@ -128,6 +128,58 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 }
 
 /**
+ * Refill receive queue
+ *
+ * @v vnet		Virtio network device
+ */
+static void virtio_net_refill_rx ( struct virtio_net *vnet ) {
+	struct virtio_device *virtio = &vnet->virtio;
+	struct virtio_net_queue *queue = &vnet->rx;
+	struct io_buffer *iobuf;
+	struct virtio_desc *desc;
+	size_t len = vnet->mfs;
+	unsigned int refilled = 0;
+	unsigned int index;
+	unsigned int slot;
+
+	/* Refill queue */
+	while ( ( queue->queue.prod - queue->queue.cons ) < queue->fill ) {
+
+		/* Allocate I/O buffer */
+		iobuf = alloc_rx_iob ( len, virtio->dma );
+		if ( ! iobuf ) {
+			/* Wait for next refill */
+			break;
+		}
+
+		/* Get next receive descriptor */
+		slot = queue->slot[ queue->queue.prod & queue->mask ];
+		index = ( slot * VIRTIO_NET_DESCS );
+		desc = &queue->queue.desc[index];
+
+		/* Populate receive descriptor */
+		desc[1].addr = cpu_to_le64 ( iob_dma ( iobuf ) );
+		desc[1].len = cpu_to_le32 ( len );
+		DBGC2 ( vnet, "VNET %s RX [%02x-%02x] is [%lx,%lx)\n",
+			virtio->name, index, ( index + 1 ),
+			virt_to_phys ( iobuf->data ),
+			( virt_to_phys ( iobuf->data ) + len ) );
+
+		/* Record I/O buffer */
+		assert ( vnet->rx_iobuf[slot] == NULL );
+		vnet->rx_iobuf[slot] = iobuf;
+
+		/* Push receive descriptor */
+		virtio_submit ( &queue->queue, index );
+		refilled++;
+	}
+
+	/* Notify queue, if applicable */
+	if ( refilled )
+		virtio_notify ( &queue->queue );
+}
+
+/**
  * Open network device
  *
  * @v netdev		Network device
@@ -137,6 +189,9 @@ static int virtio_net_open ( struct net_device *netdev ) {
 	struct virtio_net *vnet = netdev->priv;
 	struct virtio_device *virtio = &vnet->virtio;
 	int rc;
+
+	/* Calculate maximum frame size */
+	vnet->mfs = ( ETH_HLEN + netdev->mtu );
 
 	/* (Re)initialise device */
 	if ( ( rc = virtio_init ( virtio, &virtio_net_features ) ) != 0 ) {
@@ -158,6 +213,9 @@ static int virtio_net_open ( struct net_device *netdev ) {
 		       virtio->name, strerror ( rc ) );
 		goto err_tx;
 	}
+
+	/* Refill receive queue */
+	virtio_net_refill_rx ( vnet );
 
 	return 0;
 
@@ -183,6 +241,8 @@ static int virtio_net_open ( struct net_device *netdev ) {
 static void virtio_net_close ( struct net_device *netdev ) {
 	struct virtio_net *vnet = netdev->priv;
 	struct virtio_device *virtio = &vnet->virtio;
+	struct io_buffer *iobuf;
+	unsigned int i;
 
 	/* Reset device */
 	virtio_reset ( virtio );
@@ -194,6 +254,20 @@ static void virtio_net_close ( struct net_device *netdev ) {
 	/* Free queues */
 	virtio_free ( virtio, &vnet->rx.queue );
 	virtio_free ( virtio, &vnet->tx.queue );
+
+	/* Flush any incomplete I/O buffers */
+	for ( i = 0 ; i < VIRTIO_NET_RX_MAX ; i++ ) {
+		iobuf = vnet->rx_iobuf[i];
+		vnet->rx_iobuf[i] = NULL;
+		if ( iobuf )
+			free_rx_iob ( iobuf );
+	}
+	for ( i = 0 ; i < VIRTIO_NET_TX_MAX ; i++ ) {
+		iobuf = vnet->tx_iobuf[i];
+		vnet->tx_iobuf[i] = NULL;
+		if ( iobuf )
+			netdev_tx_complete_err ( netdev, iobuf, -ECANCELED );
+	}
 }
 
 /**
@@ -233,13 +307,13 @@ static int virtio_net_transmit ( struct net_device *netdev,
 		index, ( index + 1 ), virt_to_phys ( iobuf->data ),
 		( virt_to_phys ( iobuf->data ) + len ) );
 
-	/* Push transmit descriptor */
-	virtio_submit ( &queue->queue, index );
-	virtio_notify ( &queue->queue );
-
 	/* Record I/O buffer */
 	assert ( vnet->tx_iobuf[slot] == NULL );
 	vnet->tx_iobuf[slot] = iobuf;
+
+	/* Push transmit descriptor and notify queue */
+	virtio_submit ( &queue->queue, index );
+	virtio_notify ( &queue->queue );
 
 	return 0;
 }
@@ -283,9 +357,13 @@ static void virtio_net_poll_tx ( struct net_device *netdev ) {
  * @v netdev		Network device
  */
 static void virtio_net_poll ( struct net_device *netdev ) {
+	struct virtio_net *vnet = netdev->priv;
 
 	/* Poll for completed packets */
 	virtio_net_poll_tx ( netdev );
+
+	/* Refill receive queue */
+	virtio_net_refill_rx ( vnet );
 }
 
 /** Virtio network device operations */
