@@ -129,8 +129,8 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 	int rc;
 
 	/* Map packet header */
-	if ( ( dma_map ( virtio->dma, &queue->map, &queue->hdr,
-			 sizeof ( queue->hdr ), queue->dma ) ) != 0 ) {
+	if ( ( rc = dma_map ( virtio->dma, &queue->map, &queue->hdr,
+			      sizeof ( queue->hdr ), queue->dma ) ) != 0 ) {
 		DBGC ( vnet, "VNET %s Q%d could not map header: %s\n",
 		       virtio->name, queue->queue.index, strerror ( rc ) );
 		goto err_map;
@@ -245,8 +245,11 @@ static struct io_buffer * virtio_net_complete ( struct virtio_net *vnet,
 	iobuf = queue->iobufs[slot];
 	assert ( iobuf != NULL );
 	queue->iobufs[slot] = NULL;
-	DBGC2 ( vnet, "VNET %s Q%d [%02x-%02x] complete\n",
+	DBGC2 ( vnet, "VNET %s Q%d [%02x-%02x] complete",
 		virtio->name, queue->queue.index, index, ( index + 1 ) );
+	if ( len )
+		DBGC2 ( vnet, " len %#zx\n", *len );
+	DBGC2 ( vnet, "\n" );
 
 	return iobuf;
 }
