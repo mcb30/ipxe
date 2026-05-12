@@ -463,6 +463,8 @@ virtio_is_legacy ( struct virtio_device *virtio ) {
 extern int virtio_pci_map ( struct virtio_device *virtio,
 			    struct pci_device *pci );
 extern int virtio_reset ( struct virtio_device *virtio );
+extern unsigned int virtio_status ( struct virtio_device *virtio,
+				    unsigned int stat );
 extern int virtio_init ( struct virtio_device *virtio,
 			 const struct virtio_features *driver );
 extern int virtio_enable ( struct virtio_device *virtio,

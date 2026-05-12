@@ -335,6 +335,9 @@ static int virtio_net_open ( struct net_device *netdev ) {
 		goto err_tx;
 	}
 
+	/* Report driver readiness */
+	virtio_status ( virtio, VIRTIO_STAT_DRIVER_OK );
+
 	/* Refill receive queue */
 	virtio_net_refill_rx ( vnet );
 

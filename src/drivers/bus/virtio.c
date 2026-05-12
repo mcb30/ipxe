@@ -588,8 +588,8 @@ int virtio_reset ( struct virtio_device *virtio ) {
  * @v stat		Additional driver status bits
  * @ret stat		Actual device status
  */
-static unsigned int virtio_status ( struct virtio_device *virtio,
-				    unsigned int stat ) {
+unsigned int virtio_status ( struct virtio_device *virtio,
+			     unsigned int stat ) {
 
 	/* Set new driver status bits */
 	virtio->stat |= stat;
@@ -663,9 +663,6 @@ int virtio_init ( struct virtio_device *virtio,
 			goto err_features;
 		}
 	}
-
-	/* Report driver readiness */
-	virtio_status ( virtio, VIRTIO_STAT_DRIVER_OK );
 
 	return 0;
 
