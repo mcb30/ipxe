@@ -45,12 +45,45 @@ FILE_SECBOOT ( PERMITTED );
 
 /** Supported features */
 const struct virtio_features virtio_net_features = {
-	.word = { 0, VIRTIO_FEAT1_MODERN },
+	.word = { VIRTIO_NET_FEAT0_MAC, VIRTIO_FEAT1_MODERN },
 };
 
 /******************************************************************************
  *
- * Network device interface
+ * MAC address
+ *
+ ******************************************************************************
+ */
+
+/**
+ * Get MAC address
+ *
+ * @v netdev		Network device
+ */
+static void virtio_net_mac ( struct net_device *netdev ) {
+	struct virtio_net *vnet = netdev->priv;
+	struct virtio_device *virtio = &vnet->virtio;
+	uint32_t has_mac;
+	unsigned int i;
+
+	/* Read MAC address from device registers */
+	for ( i = 0 ; i < ETH_ALEN ; i++ ) {
+		netdev->hw_addr[i] = ioread8 ( virtio->device +
+					       VIRTIO_NET_MAC + i );
+	}
+
+	/* Use random MAC address if undefined or invalid */
+	has_mac = ( virtio->features.word[0] & VIRTIO_NET_FEAT0_MAC );
+	if ( ! ( has_mac && is_valid_ether_addr ( netdev->hw_addr ) ) ) {
+		DBGC ( vnet, "VNET %s has %s MAC address\n",
+		       virtio->name, ( has_mac ? "invalid" : "no" ) );
+		eth_random_addr ( netdev->hw_addr );
+	}
+}
+
+/******************************************************************************
+ *
+ * Queue management
  *
  ******************************************************************************
  */
@@ -194,6 +227,13 @@ static struct io_buffer * virtio_net_complete ( struct virtio_net *vnet,
 
 	return iobuf;
 }
+
+/******************************************************************************
+ *
+ * Network device interface
+ *
+ ******************************************************************************
+ */
 
 /**
  * Refill receive queue
@@ -454,16 +494,19 @@ static int virtio_net_probe ( struct pci_device *pci ) {
 		goto err_pci_map;
 	}
 
-	/* Reset the NIC */
-	if ( ( rc = virtio_reset ( virtio ) ) != 0 )
-		goto err_reset;
+	/* Initialise device */
+	if ( ( rc = virtio_init ( virtio, &virtio_net_features ) ) != 0 ) {
+		DBGC ( vnet, "VNET %s could not initialise: %s\n",
+		       virtio->name, strerror ( rc ) );
+		goto err_init;
+	}
 
-	//
-	eth_random_addr ( netdev->hw_addr );
+	/* Get MAC address */
+	virtio_net_mac ( netdev );
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
-		goto err_register_netdev;
+		goto err_register;
 
 	//
 	netdev_link_up ( netdev );
@@ -471,9 +514,9 @@ static int virtio_net_probe ( struct pci_device *pci ) {
 	return 0;
 
 	unregister_netdev ( netdev );
- err_register_netdev:
+ err_register:
 	virtio_reset ( virtio );
- err_reset:
+ err_init:
 	virtio_unmap ( virtio );
  err_pci_map:
 	netdev_nullify ( netdev );

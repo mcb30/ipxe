@@ -12,6 +12,12 @@ FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/virtio.h>
 
+/** Device has a MAC address */
+#define VIRTIO_NET_FEAT0_MAC 0x00000020
+
+/** MAC address register offset */
+#define VIRTIO_NET_MAC 0x00
+
 /** A virtio network packet header */
 union virtio_net_header {
 	/** Legacy interface */

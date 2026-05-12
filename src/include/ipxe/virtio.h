@@ -322,7 +322,7 @@ struct virtio_device {
 	/** Device supported features */
 	struct virtio_features supported;
 	/** Negotiated features */
-	struct virtio_features negotiated;
+	struct virtio_features features;
 	/** Notification doorbell multiplier */
 	unsigned int multiplier;
 };
@@ -452,7 +452,7 @@ static inline __attribute__ (( always_inline )) int
 virtio_is_legacy ( struct virtio_device *virtio ) {
 
 	/* Check negotiation of version 1.0 or above */
-	return ( ! ( virtio->negotiated.word[1] & VIRTIO_FEAT1_MODERN ) );
+	return ( ! ( virtio->features.word[1] & VIRTIO_FEAT1_MODERN ) );
 }
 
 extern int virtio_pci_map ( struct virtio_device *virtio,
