@@ -99,6 +99,7 @@ static int virtio_net_enable ( struct virtio_net *vnet,
 	write = queue->write;
 	for ( slot = 0 ; slot < fill ; slot++ ) {
 		queue->slots[slot] = slot;
+		queue->iobufs[slot] = NULL;
 		index = ( slot * VIRTIO_NET_DESCS );
 		desc = &queue->queue.desc[index];
 		desc[0].addr = cpu_to_le64 ( dma ( &queue->map, &queue->hdr ));
@@ -250,7 +251,7 @@ static int virtio_net_open ( struct net_device *netdev ) {
 		       sizeof ( hdr.legacy ) : sizeof ( hdr.modern ) );
 
 	/* Calculate maximum frame size */
-	vnet->mfs = ( ETH_HLEN + netdev->mtu );
+	vnet->mfs = ( ETH_HLEN + 4 /* possible VLAN */ + netdev->mtu );
 
 	/* Enable receive queue */
 	if ( ( rc = virtio_net_enable ( vnet, &vnet->rx ) ) != 0 ) {
@@ -293,7 +294,6 @@ static int virtio_net_open ( struct net_device *netdev ) {
 static void virtio_net_close ( struct net_device *netdev ) {
 	struct virtio_net *vnet = netdev->priv;
 	struct virtio_device *virtio = &vnet->virtio;
-	struct io_buffer *iobuf;
 	unsigned int i;
 
 	/* Reset device */
@@ -307,19 +307,9 @@ static void virtio_net_close ( struct net_device *netdev ) {
 	virtio_free ( virtio, &vnet->rx.queue );
 	virtio_free ( virtio, &vnet->tx.queue );
 
-	/* Flush any incomplete I/O buffers */
-	for ( i = 0 ; i < VIRTIO_NET_RX_MAX ; i++ ) {
-		iobuf = vnet->rx_iobufs[i];
-		vnet->rx_iobufs[i] = NULL;
-		if ( iobuf )
-			free_rx_iob ( iobuf );
-	}
-	for ( i = 0 ; i < VIRTIO_NET_TX_MAX ; i++ ) {
-		iobuf = vnet->tx_iobufs[i];
-		vnet->tx_iobufs[i] = NULL;
-		if ( iobuf )
-			netdev_tx_complete_err ( netdev, iobuf, -ECANCELED );
-	}
+	/* Discard any incomplete RX buffers */
+	for ( i = 0 ; i < VIRTIO_NET_RX_MAX ; i++ )
+		free_rx_iob ( vnet->rx_iobufs[i] );
 }
 
 /**
