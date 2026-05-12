@@ -645,6 +645,10 @@ int virtio_enable ( struct virtio_device *virtio, struct virtio_queue *queue,
 	unsigned int offset;
 	int rc;
 
+	/* Reset counters */
+	queue->prod = 0;
+	queue->cons = 0;
+
 	/* Determine queue size */
 	virtio->op->size ( virtio, queue, count );
 	if ( ( queue->count == 0 ) ||
