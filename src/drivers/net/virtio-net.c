@@ -534,7 +534,7 @@ static int virtio_net_probe ( struct pci_device *pci ) {
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
 		goto err_register;
 
-	//
+	/* Mark as link up, since we have no way to test link state changes */
 	netdev_link_up ( netdev );
 
 	return 0;
