@@ -300,6 +300,9 @@ struct virtio_features {
 	uint32_t word[VIRTIO_FEATURE_WORDS];
 };
 
+/** Arbitrary descriptor layouts may be used */
+#define VIRTIO_FEAT0_ANY_LAYOUT 0x08000000
+
 /** Virtio version 1.0 or above */
 #define VIRTIO_FEAT1_MODERN 0x00000001
 

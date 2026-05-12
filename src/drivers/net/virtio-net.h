@@ -13,10 +13,10 @@ FILE_SECBOOT ( PERMITTED );
 #include <ipxe/virtio.h>
 
 /** Device has a reported MTU */
-#define VIRTIO_NET_FEAT0_MTU 0x00000008
+#define VIRTIO_FEAT0_NET_MTU 0x00000008
 
 /** Device has a MAC address */
-#define VIRTIO_NET_FEAT0_MAC 0x00000020
+#define VIRTIO_FEAT0_NET_MAC 0x00000020
 
 /** MAC address register offset */
 #define VIRTIO_NET_MAC 0x00

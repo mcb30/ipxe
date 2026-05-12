@@ -46,8 +46,10 @@ FILE_SECBOOT ( PERMITTED );
 /** Supported features */
 const struct virtio_features virtio_net_features = {
 	.word = {
-		( VIRTIO_NET_FEAT0_MTU | VIRTIO_NET_FEAT0_MAC ),
-		VIRTIO_FEAT1_MODERN,
+		( VIRTIO_FEAT0_ANY_LAYOUT |
+		  VIRTIO_FEAT0_NET_MTU |
+		  VIRTIO_FEAT0_NET_MAC ),
+		( VIRTIO_FEAT1_MODERN ),
 	},
 };
 
@@ -76,7 +78,7 @@ static void virtio_net_mac ( struct net_device *netdev ) {
 	}
 
 	/* Use random MAC address if undefined or invalid */
-	has_mac = ( virtio->features.word[0] & VIRTIO_NET_FEAT0_MAC );
+	has_mac = ( virtio->features.word[0] & VIRTIO_FEAT0_NET_MAC );
 	if ( ! ( has_mac && is_valid_ether_addr ( netdev->hw_addr ) ) ) {
 		DBGC ( vnet, "VNET %s has %s MAC address\n",
 		       virtio->name, ( has_mac ? "invalid" : "no" ) );
@@ -95,7 +97,7 @@ static void virtio_net_mtu ( struct net_device *netdev ) {
 	uint32_t has_mtu;
 
 	/* Read MTU from device registers, if available */
-	has_mtu = ( virtio->features.word[0] & VIRTIO_NET_FEAT0_MTU );
+	has_mtu = ( virtio->features.word[0] & VIRTIO_FEAT0_NET_MTU );
 	if ( has_mtu ) {
 		netdev->mtu = ioread16 ( virtio->device + VIRTIO_NET_MTU );
 		netdev->max_pkt_len = ( netdev->mtu + ETH_HLEN );
