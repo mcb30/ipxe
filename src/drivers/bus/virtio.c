@@ -598,7 +598,7 @@ static void virtio_negotiate ( struct virtio_device *virtio,
 			       const struct virtio_features *driver ) {
 	struct virtio_features *device = &virtio->supported;
 	struct virtio_features *features = &virtio->features;
-	int i;
+	unsigned int i;
 
 	/* Get device supported features */
 	virtio->op->supported ( virtio );
@@ -609,12 +609,12 @@ static void virtio_negotiate ( struct virtio_device *virtio,
 	virtio->op->negotiate ( virtio );
 
 	/* Show features */
-	DBGC ( virtio, "VIRTIO %s features ", virtio->name );
-	for ( i = ( VIRTIO_FEATURE_WORDS - 1 ) ; i >= 0 ; i-- )
-		DBGC ( virtio, "%08x%s", device->word[i], ( i ? ":" : "" ) );
-	DBGC ( virtio, " / " );
-	for ( i = ( VIRTIO_FEATURE_WORDS - 1 ) ; i >= 0 ; i-- )
-		DBGC ( virtio, "%08x%s", features->word[i], ( i ? ":" : "" ) );
+	DBGC ( virtio, "VIRTIO %s features", virtio->name );
+	for ( i = 0 ; i < VIRTIO_FEATURE_WORDS ; i++ )
+		DBGC ( virtio, "%s%08x", ( i ? ":" : " " ), device->word[i] );
+	DBGC ( virtio, " /" );
+	for ( i = 0 ; i < VIRTIO_FEATURE_WORDS ; i++ )
+		DBGC ( virtio, "%s%08x", ( i ? ":" : " " ), features->word[i] );
 	DBGC ( virtio, "\n" );
 }
 
