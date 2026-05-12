@@ -551,8 +551,6 @@ void netdev_rx ( struct net_device *netdev, struct io_buffer *iobuf ) {
 
 	DBGC2 ( netdev, "NETDEV %s received %p (%p+%zx)\n",
 		netdev->name, iobuf, iobuf->data, iob_len ( iobuf ) );
-	//
-	DBGC2_HDA ( netdev, 0, iobuf->data, iob_len ( iobuf ) );
 
 	/* Discard packet (for test purposes) if applicable */
 	if ( ( rc = inject_fault ( NETDEV_DISCARD_RATE ) ) != 0 ) {

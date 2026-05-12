@@ -431,23 +431,24 @@ static int virtio_pci_cap ( struct virtio_device *virtio,
 static void * virtio_pci_map_cap ( struct virtio_device *virtio,
 				   struct pci_device *pci,
 				   struct virtio_pci_capability *cap ) {
-	unsigned long start;
+	unsigned long addr;
+	unsigned int reg;
 	void *io_addr;
 
-	/* Get BAR start address */
-	start = pci_bar_start ( pci, PCI_BASE_ADDRESS ( cap->bar ) );
-	if ( ! start ) {
+	/* Get BAR start address and type */
+	reg = PCI_BASE_ADDRESS ( cap->bar );
+	addr = pci_bar_start ( pci, reg );
+	if ( ! addr ) {
 		DBGC ( virtio, "VIRTIO %s BAR%d is not usable\n",
 		       virtio->name, cap->bar );
 		return NULL;
 	}
 
-	// fix pci_ioremap() to map I/O space
-	if ( start < 0x10000 )
-		return ( ( void * ) ( start + cap->offset ) );
-
-	/* Map BAR region */
-	io_addr = pci_ioremap ( pci, ( start + cap->offset ), VIRTIO_PAGE );
+	/* Map memory or I/O BAR */
+	addr += cap->offset;
+	io_addr = ( pci_bar_is_io ( pci, reg ) ?
+		    ( ( void * ) addr ) :
+		    pci_ioremap ( pci, addr, VIRTIO_PAGE ) );
 	if ( ! io_addr ) {
 		DBGC ( virtio, "VIRTIO %s could not map BAR%d+%#04x\n",
 		       virtio->name, cap->bar, cap->offset );
