@@ -150,7 +150,7 @@ struct virtio_sq {
 	/** Flags */
 	uint16_t flags;
 	/** Producer index */
-	uint16_t index;
+	uint16_t prod;
 	/** Queue entries */
 	struct virtio_sqe sqe[];
 } __attribute__ (( packed ));
@@ -170,8 +170,8 @@ struct virtio_cqe {
 struct virtio_cq {
 	/** Flags */
 	uint16_t flags;
-	/** Consumer index */
-	uint16_t index;
+	/** Producer index */
+	uint16_t prod;
 	/** Queue entries */
 	struct virtio_cqe cqe[];
 } __attribute__ (( packed ));
@@ -358,7 +358,7 @@ virtio_submit ( struct virtio_queue *queue, unsigned int index ) {
 	struct virtio_sqe *sqe;
 
 	/* Get next submission queue entry */
-	sqe = &queue->sq->sqe[ queue->prod++ ];
+	sqe = &queue->sq->sqe[ queue->prod++ & queue->mask ];
 
 	/* Populate submission queue entry */
 	sqe->index = cpu_to_le16 ( index );
@@ -374,7 +374,7 @@ virtio_notify ( struct virtio_queue *queue ) {
 
 	/* Write producer index */
 	wmb();
-	queue->sq->index = cpu_to_le16 ( queue->prod );
+	queue->sq->prod = cpu_to_le16 ( queue->prod );
 	wmb();
 
 	/* Ring doorbell */
@@ -385,15 +385,15 @@ virtio_notify ( struct virtio_queue *queue ) {
  * Check for completed descriptors
  *
  * @v queue		Virtio queue
- * @v completed		Number of completions
+ * @v completions	Number of pending completions
  */
 static inline __attribute__ (( always_inline )) unsigned int
-virtio_completed ( struct virtio_queue *queue ) {
-	uint16_t completed;
+virtio_completions ( struct virtio_queue *queue ) {
+	uint16_t completions;
 
 	/* Get completion count */
-	completed = ( le16_to_cpu ( queue->cq->index ) - queue->cons );
-	return completed;
+	completions = ( le16_to_cpu ( queue->cq->prod ) - queue->cons );
+	return completions;
 }
 
 /**
@@ -408,7 +408,7 @@ virtio_complete ( struct virtio_queue *queue, size_t *len ) {
 	struct virtio_cqe *cqe;
 
 	/* Get next completion queue entry */
-	cqe = &queue->cq->cqe[ queue->cons++ ];
+	cqe = &queue->cq->cqe[ queue->cons++ & queue->mask ];
 
 	/* Parse completion queue entry */
 	if ( len )

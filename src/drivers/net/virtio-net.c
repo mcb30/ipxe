@@ -362,7 +362,7 @@ static void virtio_net_poll_tx ( struct net_device *netdev ) {
 	struct io_buffer *iobuf;
 
 	/* Poll for completed descriptors */
-	while ( virtio_completed ( &queue->queue ) ) {
+	while ( virtio_completions ( &queue->queue ) ) {
 
 		/* Complete I/O buffer */
 		iobuf = virtio_net_complete ( vnet, queue, NULL );
@@ -382,7 +382,7 @@ static void virtio_net_poll_rx ( struct net_device *netdev ) {
 	size_t len;
 
 	/* Poll for completed descriptors */
-	while ( virtio_completed ( &queue->queue ) ) {
+	while ( virtio_completions ( &queue->queue ) > 0 ) {
 
 		/* Complete I/O buffer */
 		iobuf = virtio_net_complete ( vnet, queue, &len );
