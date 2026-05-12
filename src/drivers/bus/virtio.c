@@ -422,7 +422,7 @@ static void * virtio_pci_map_cap ( struct virtio_device *virtio,
 		pci_read_config_byte ( pci, ( pos + PCI_CAP_LEN ), &len );
 		if ( len < VIRTIO_PCI_CAP_END ) {
 			DBGC ( virtio, "VIRTIO %s capability +%#02x too "
-			       "short (%zd bytes)\n", virtio->name, pos, len );
+			       "short (%d bytes)\n", virtio->name, pos, len );
 			continue;
 		}
 
