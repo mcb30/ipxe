@@ -46,9 +46,10 @@ FILE_SECBOOT ( PERMITTED );
 
 /** Legacy driver status register */
 #define VIRTIO_LEG_STAT 0x12
-#define VIRTIO_STAT_FOUND	0x0001	/**< Guest has found device */
+#define VIRTIO_STAT_ACKNOWLEDGE	0x0001	/**< Guest has found device */
 #define VIRTIO_STAT_DRIVER	0x0002	/**< Guest driver exists */
-#define VIRTIO_STAT_READY	0x0004	/**< Guest driver is ready */
+#define VIRTIO_STAT_DRIVER_OK	0x0004	/**< Guest driver is ready */
+#define VIRTIO_STAT_FEATURES_OK	0x0008	/**< Guest driver has set features */
 #define VIRTIO_STAT_FAIL	0x0080	/**< Guest driver has failed */
 
 /** Legacy device-specific registers */
@@ -343,8 +344,9 @@ struct virtio_operations {
 	 * Report driver status
 	 *
 	 * @v virtio		Virtio device
+	 * @ret stat		Actual device status
 	 */
-	void ( * status ) ( struct virtio_device *virtio );
+	unsigned int ( * status ) ( struct virtio_device *virtio );
 	/**
 	 * Get supported features
 	 *

@@ -73,11 +73,15 @@ static int virtio_legacy_reset ( struct virtio_device *virtio ) {
  * Report driver status
  *
  * @v virtio		Virtio device
+ * @ret stat		Actual device status
  */
-static void virtio_legacy_status ( struct virtio_device *virtio ) {
+static unsigned int virtio_legacy_status ( struct virtio_device *virtio ) {
 
 	/* Report device status */
 	iowrite8 ( virtio->stat, virtio->common + VIRTIO_LEG_STAT );
+
+	/* Read back device status */
+	return ioread8 ( virtio->common + VIRTIO_LEG_STAT );
 }
 
 /**
@@ -216,11 +220,15 @@ static int virtio_pci_reset ( struct virtio_device *virtio ) {
  * Report driver status
  *
  * @v virtio		Virtio device
+ * @ret stat		Actual device status
  */
-static void virtio_pci_status ( struct virtio_device *virtio ) {
+static unsigned int virtio_pci_status ( struct virtio_device *virtio ) {
 
 	/* Report device status */
 	iowrite8 ( virtio->stat, virtio->common + VIRTIO_PCI_STAT );
+
+	/* Read back device status */
+	return ioread8 ( virtio->common + VIRTIO_PCI_STAT );
 }
 
 /**
@@ -578,14 +586,16 @@ int virtio_reset ( struct virtio_device *virtio ) {
  *
  * @v virtio		Virtio device
  * @v stat		Additional driver status bits
+ * @ret stat		Actual device status
  */
-static void virtio_status ( struct virtio_device *virtio, unsigned int stat ) {
+static unsigned int virtio_status ( struct virtio_device *virtio,
+				    unsigned int stat ) {
 
 	/* Set new driver status bits */
 	virtio->stat |= stat;
 
 	/* Report driver status */
-	virtio->op->status ( virtio );
+	return virtio->op->status ( virtio );
 }
 
 /**
@@ -627,6 +637,7 @@ static void virtio_negotiate ( struct virtio_device *virtio,
  */
 int virtio_init ( struct virtio_device *virtio,
 		  const struct virtio_features *driver ) {
+	unsigned int stat;
 	int rc;
 
 	/* Reset device */
@@ -634,7 +645,7 @@ int virtio_init ( struct virtio_device *virtio,
 		goto err_reset;
 
 	/* Acknowledge device existence */
-	virtio_status ( virtio, VIRTIO_STAT_FOUND );
+	virtio_status ( virtio, VIRTIO_STAT_ACKNOWLEDGE );
 
 	/* Report driver existence */
 	virtio_status ( virtio, VIRTIO_STAT_DRIVER );
@@ -642,11 +653,23 @@ int virtio_init ( struct virtio_device *virtio,
 	/* Negotiate features */
 	virtio_negotiate ( virtio, driver );
 
+	/* Report feature negotiation completion, if applicable */
+	if ( virtio->features.word[1] & VIRTIO_FEAT1_MODERN ) {
+		stat = virtio_status ( virtio, VIRTIO_STAT_FEATURES_OK );
+		if ( ! ( stat & VIRTIO_STAT_FEATURES_OK ) ) {
+			DBGC ( virtio, "VIRTIO %s did not accept features\n",
+			       virtio->name );
+			rc = -ENOTSUP;
+			goto err_features;
+		}
+	}
+
 	/* Report driver readiness */
-	virtio_status ( virtio, VIRTIO_STAT_READY );
+	virtio_status ( virtio, VIRTIO_STAT_DRIVER_OK );
 
 	return 0;
 
+ err_features:
 	virtio_reset ( virtio );
  err_reset:
 	virtio_status ( virtio, VIRTIO_STAT_FAIL );
