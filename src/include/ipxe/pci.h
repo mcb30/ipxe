@@ -320,6 +320,7 @@ struct pci_driver {
 	PCI_SLOT ( (pci)->busdevfn ), PCI_FUNC ( (pci)->busdevfn )
 
 extern void adjust_pci_device ( struct pci_device *pci );
+extern int pci_bar_is_io ( struct pci_device *pci, unsigned int reg );
 extern unsigned long pci_bar_start ( struct pci_device *pci,
 				     unsigned int reg );
 extern void pci_bar_set ( struct pci_device *pci, unsigned int reg,

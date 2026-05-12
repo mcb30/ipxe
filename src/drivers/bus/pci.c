@@ -81,6 +81,20 @@ static unsigned long pci_bar ( struct pci_device *pci, unsigned int reg ) {
 }
 
 /**
+ * Get PCI BAR type
+ *
+ * @v pci		PCI device
+ * @v reg		PCI register number
+ * @v is_io		BAR is an I/O BAR
+ */
+int pci_bar_is_io ( struct pci_device *pci, unsigned int reg ) {
+	unsigned long bar;
+
+	bar = pci_bar ( pci, reg );
+	return ( bar & PCI_BASE_ADDRESS_SPACE_IO );
+}
+
+/**
  * Find the start of a PCI BAR
  *
  * @v pci		PCI device
