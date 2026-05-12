@@ -150,12 +150,17 @@ static int eth_slow_lacp_rx ( struct io_buffer *iobuf,
 			      struct net_device *netdev ) {
 	union eth_slow_packet *eth_slow = iobuf->data;
 	struct eth_slow_lacp *lacp = &eth_slow->lacp;
+	struct net_device *system;
 	unsigned int interval;
 
 	eth_slow_lacp_dump ( iobuf, netdev, "RX" );
 
+	/* Obtain system identifier */
+	system = list_first_entry ( &net_devices, struct net_device, list );
+	assert ( system != NULL );
+
 	/* Check for looped-back packets */
-	if ( memcmp ( lacp->actor.system, netdev->ll_addr,
+	if ( memcmp ( lacp->actor.system, system->ll_addr,
 		      sizeof ( lacp->actor.system ) ) == 0 ) {
 		DBGC ( netdev, "SLOW %s RX loopback detected\n",
 		       netdev->name );
@@ -197,11 +202,11 @@ static int eth_slow_lacp_rx ( struct io_buffer *iobuf,
 	lacp->actor.tlv.type = ETH_SLOW_TLV_LACP_ACTOR;
 	lacp->actor.tlv.length = ETH_SLOW_TLV_LACP_ACTOR_LEN;
 	lacp->actor.system_priority = htons ( LACP_SYSTEM_PRIORITY_MAX );
-	memcpy ( lacp->actor.system, netdev->ll_addr,
+	memcpy ( lacp->actor.system, system->ll_addr,
 		 sizeof ( lacp->actor.system ) );
-	lacp->actor.key = htons ( 1 );
+	lacp->actor.key = htons ( netdev->scope_id );
 	lacp->actor.port_priority = htons ( LACP_PORT_PRIORITY_MAX );
-	lacp->actor.port = htons ( 1 );
+	lacp->actor.port = htons ( netdev->scope_id );
 	lacp->actor.state = ( LACP_STATE_AGGREGATABLE |
 			      LACP_STATE_IN_SYNC |
 			      LACP_STATE_COLLECTING |
