@@ -180,46 +180,6 @@ static struct virtio_operations virtio_legacy_operations = {
 	.enable = virtio_legacy_enable,
 };
 
-/**
- * Map legacy device
- *
- * @v virtio		Virtio device
- * @v pci		PCI device
- * @ret rc		Return status code
- */
-static int virtio_legacy_map ( struct virtio_device *virtio,
-			       struct pci_device *pci ) {
-	int rc;
-
-	/* Map common device region */
-	if ( pci->ioaddr ) {
-		// update pci_ioremap() to handle I/O addresses
-		virtio->common = ( ( void * ) pci->ioaddr );
-	} else {
-		virtio->common = pci_ioremap ( pci, pci->membase,
-					       VIRTIO_PAGE );
-	}
-	if ( ! virtio->common ) {
-		DBGC ( virtio, "VIRTIO %s has no BARs\n", virtio->name );
-		rc = -ENODEV;
-		goto err_common;
-	}
-
-	/* Set doorbell register offset */
-	//
-	// need to prevent unmapping!
-	virtio->notify = ( virtio->common + VIRTIO_LEG_DB );
-
-	/* Set device operations */
-	virtio->op = &virtio_legacy_operations;
-
-	return 0;
-
-	iounmap ( virtio->common );
- err_common:
-	return rc;
-}
-
 /******************************************************************************
  *
  * PCI ("modern") device operations
@@ -395,23 +355,18 @@ static struct virtio_operations virtio_pci_operations = {
 };
 
 /**
- * Map PCI capability
+ * Find PCI capability
  *
  * @v virtio		Virtio device
  * @v pci		PCI device
  * @v type		Capability type
- * @ret io_addr		I/O address, or NULL on error
+ * @v cap		Virtio PCI capability to fill in
+ * @ret rc		Return status code
  */
-static void * virtio_pci_map_cap ( struct virtio_device *virtio,
-				   struct pci_device *pci,
-				   unsigned int type ) {
-	uint8_t len;
-	uint8_t typ;
-	uint8_t bar;
-	uint32_t offset;
+static int virtio_pci_cap ( struct virtio_device *virtio,
+			    struct pci_device *pci, unsigned int type,
+			    struct virtio_pci_capability *cap ) {
 	unsigned int reg;
-	unsigned long start;
-	void *io_addr;
 	int pos;
 
 	/* Scan through vendor capabilities */
@@ -419,46 +374,78 @@ static void * virtio_pci_map_cap ( struct virtio_device *virtio,
 	      pos = pci_find_next_capability ( pci, pos, PCI_CAP_ID_VNDR ) ) {
 
 		/* Check length */
-		pci_read_config_byte ( pci, ( pos + PCI_CAP_LEN ), &len );
-		if ( len < VIRTIO_PCI_CAP_END ) {
-			DBGC ( virtio, "VIRTIO %s capability +%#02x too "
-			       "short (%d bytes)\n", virtio->name, pos, len );
+		pci_read_config_byte ( pci, ( pos + PCI_CAP_LEN ), &cap->len );
+		if ( cap->len < VIRTIO_PCI_CAP_END ) {
+			DBGC ( virtio, "VIRTIO %s capability +%#02x too short "
+			       "(%d bytes)\n", virtio->name, pos, cap->len );
 			continue;
 		}
 
 		/* Read values */
 		pci_read_config_byte ( pci, ( pos + VIRTIO_PCI_CAP_TYPE ),
-				       &typ );
+				       &cap->type );
 		pci_read_config_byte ( pci, ( pos + VIRTIO_PCI_CAP_BAR ),
-				       &bar );
+				       &cap->bar );
 		pci_read_config_dword ( pci, ( pos + VIRTIO_PCI_CAP_OFFSET ),
-					&offset );
+					&cap->offset );
 
 		/* Check type */
-		if ( typ != type )
+		if ( cap->type != type )
 			continue;
 		DBGC2 ( virtio, "VIRTIO %s capability type %d BAR%d+%#04x\n",
-			virtio->name, type, bar, offset );
+			virtio->name, type, cap->bar, cap->offset );
 
 		/* Check BAR */
-		reg = PCI_BASE_ADDRESS ( bar );
+		reg = PCI_BASE_ADDRESS ( cap->bar );
 		if ( reg > PCI_BASE_ADDRESS_5 )
 			continue;
-		start = pci_bar_start ( pci, reg );
-		if ( ! start )
-			continue;
 
-		/* Map BAR region */
-		io_addr = pci_ioremap ( pci, ( start + offset ), VIRTIO_PAGE );
-		if ( ! io_addr )
-			continue;
-
-		return io_addr;
+		/* Success */
+		cap->pos = pos;
+		return 0;
 	}
 
 	DBGC ( virtio, "VIRTIO %s has no usable capability type %d\n",
 	       virtio->name, type );
-	return NULL;
+	cap->pos = 0;
+	return -ENOENT;
+}
+
+/**
+ * Map PCI capability
+ *
+ * @v virtio		Virtio device
+ * @v pci		PCI device
+ * @v cap		Virtio PCI capability
+ * @ret io_addr		I/O address, or NULL on error
+ */
+static void * virtio_pci_map_cap ( struct virtio_device *virtio,
+				   struct pci_device *pci,
+				   struct virtio_pci_capability *cap ) {
+	unsigned long start;
+	void *io_addr;
+
+	/* Get BAR start address */
+	start = pci_bar_start ( pci, PCI_BASE_ADDRESS ( cap->bar ) );
+	if ( ! start ) {
+		DBGC ( virtio, "VIRTIO %s BAR%d is not usable\n",
+		       virtio->name, cap->bar );
+		return NULL;
+	}
+
+	// fix pci_ioremap() to map I/O space
+	if ( start < 0x10000 )
+		return ( ( void * ) ( start + cap->offset ) );
+
+	/* Map BAR region */
+	io_addr = pci_ioremap ( pci, ( start + cap->offset ), VIRTIO_PAGE );
+	if ( ! io_addr ) {
+		DBGC ( virtio, "VIRTIO %s could not map BAR%d+%#04x\n",
+		       virtio->name, cap->bar, cap->offset );
+		return NULL;
+	}
+
+	return io_addr;
 }
 
 /**
@@ -469,6 +456,12 @@ static void * virtio_pci_map_cap ( struct virtio_device *virtio,
  * @ret rc		Return status code
  */
 int virtio_pci_map ( struct virtio_device *virtio, struct pci_device *pci ) {
+	struct virtio_pci_capability common;
+	struct virtio_pci_capability notify;
+	struct virtio_pci_capability device;
+	unsigned int msix;
+	uint32_t mult;
+	uint16_t ctrl;
 	int rc;
 
 	/* Initialise device */
@@ -478,36 +471,67 @@ int virtio_pci_map ( struct virtio_device *virtio, struct pci_device *pci ) {
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
 
-	/* Try mapping common registers */
-	virtio->common = virtio_pci_map_cap ( virtio, pci,
-					      VIRTIO_PCI_CAP_TYPE_COMMON );
-	if ( ! virtio->common ) {
-		/* Assume this must be a legacy device */
-		return virtio_legacy_map ( virtio, pci );
+	/* Check if MSI-X is enabled */
+	msix = pci_find_capability ( pci, PCI_CAP_ID_MSIX );
+	if ( msix ) {
+		pci_read_config_word ( pci, msix, &ctrl );
+		if ( ! ( ctrl & PCI_MSIX_CTRL_ENABLE ) )
+			msix = 0;
 	}
 
-	/* Map notification doorbell registers */
-	virtio->notify = virtio_pci_map_cap ( virtio, pci,
-					      VIRTIO_PCI_CAP_TYPE_NOTIFY );
+	/* Locate virtio capabilities */
+	virtio_pci_cap ( virtio, pci, VIRTIO_PCI_CAP_TYPE_COMMON, &common );
+	virtio_pci_cap ( virtio, pci, VIRTIO_PCI_CAP_TYPE_NOTIFY, &notify );
+	virtio_pci_cap ( virtio, pci, VIRTIO_PCI_CAP_TYPE_DEVICE, &device );
+
+
+	/* Use modern interface if available */
+	if ( common.pos && notify.pos && device.pos &&
+	     ( notify.len >= VIRTIO_PCI_CAP_NOTIFY_END ) ) {
+
+		/* Use modern interface */
+		virtio->op = &virtio_pci_operations;
+		dma_set_mask_64bit ( virtio->dma );
+
+		/* Read notification doorbell multiplier */
+		pci_read_config_dword ( pci, ( notify.pos +
+					       VIRTIO_PCI_CAP_NOTIFY_MULT ),
+					&mult );
+		virtio->multiplier = mult;
+		DBGC ( virtio, "VIRTIO %s using modern interface (mult x%d)\n",
+		       virtio->name, virtio->multiplier );
+
+	} else {
+
+		/* Use legacy interface */
+		virtio->op = &virtio_legacy_operations;
+		common.bar = 0;
+		common.offset = 0;
+		notify.bar = 0;
+		notify.offset = VIRTIO_LEG_DB;
+		device.bar = 0;
+		device.offset = ( msix ? VIRTIO_LEG_DEV_MSIX :
+				  VIRTIO_LEG_DEV );
+		DBGC ( virtio, "VIRTIO %s using legacy interface (MSI-X "
+		       "%sabled)\n", virtio->name, ( msix ? "en" : "dis" ) );
+	}
+
+	/* Map registers */
+	virtio->common = virtio_pci_map_cap ( virtio, pci, &common );
+	if ( ! virtio->common ) {
+		rc = -ENODEV;
+		goto err_common;
+	}
+	virtio->notify = virtio_pci_map_cap ( virtio, pci, &notify );
 	if ( ! virtio->notify ) {
 		rc = -ENODEV;
 		goto err_notify;
 	}
-
-	//
-	virtio->multiplier = 4;
-
-	/* Map device-specific registers */
-	virtio->device = virtio_pci_map_cap ( virtio, pci,
-					      VIRTIO_PCI_CAP_TYPE_DEVICE );
+	virtio->device = virtio_pci_map_cap ( virtio, pci, &device );
 	if ( ! virtio->device ) {
 		rc = -ENODEV;
 		goto err_device;
 	}
-
-	/* Set device operations and DMA mask */
-	virtio->op = &virtio_pci_operations;
-	dma_set_mask_64bit ( virtio->dma );
 
 	return 0;
 
@@ -516,6 +540,7 @@ int virtio_pci_map ( struct virtio_device *virtio, struct pci_device *pci ) {
 	iounmap ( virtio->notify );
  err_notify:
 	iounmap ( virtio->common );
+ err_common:
 	return rc;
 }
 

@@ -51,6 +51,12 @@ FILE_SECBOOT ( PERMITTED );
 #define VIRTIO_STAT_READY	0x0004	/**< Guest driver is ready */
 #define VIRTIO_STAT_FAIL	0x0080	/**< Guest driver has failed */
 
+/** Legacy device-specific registers */
+#define VIRTIO_LEG_DEV 0x14
+
+/** Legacy device-specific register (if MSI-X is enabled) */
+#define VIRTIO_LEG_DEV_MSIX 0x18
+
 /** @} */
 
 /**
@@ -73,7 +79,27 @@ FILE_SECBOOT ( PERMITTED );
 /** Capability minimum length */
 #define VIRTIO_PCI_CAP_END 0x10
 
+/** Notification doorbell capability multiplier offset */
+#define VIRTIO_PCI_CAP_NOTIFY_MULT 0x10
+
+/** Notification doorbell capability minimum length */
+#define VIRTIO_PCI_CAP_NOTIFY_END 0x14
+
 /** @} */
+
+/** A virtio PCI capability */
+struct virtio_pci_capability {
+	/** Capability type */
+	uint8_t type;
+	/** Capability offset */
+	uint8_t pos;
+	/** Capability length */
+	uint8_t len;
+	/** BAR number */
+	uint8_t bar;
+	/** Offset within BAR */
+	uint32_t offset;
+};
 
 /**
  * @defgroup virtio_pci_common PCI common device registers
