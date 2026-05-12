@@ -45,12 +45,15 @@ FILE_SECBOOT ( PERMITTED );
 
 /** Supported features */
 const struct virtio_features virtio_net_features = {
-	.word = { VIRTIO_NET_FEAT0_MAC, VIRTIO_FEAT1_MODERN },
+	.word = {
+		( VIRTIO_NET_FEAT0_MTU | VIRTIO_NET_FEAT0_MAC ),
+		VIRTIO_FEAT1_MODERN,
+	},
 };
 
 /******************************************************************************
  *
- * MAC address
+ * Device-specific registers
  *
  ******************************************************************************
  */
@@ -78,6 +81,26 @@ static void virtio_net_mac ( struct net_device *netdev ) {
 		DBGC ( vnet, "VNET %s has %s MAC address\n",
 		       virtio->name, ( has_mac ? "invalid" : "no" ) );
 		eth_random_addr ( netdev->hw_addr );
+	}
+}
+
+/**
+ * Get MTU
+ *
+ * @v netdev		Network device
+ */
+static void virtio_net_mtu ( struct net_device *netdev ) {
+	struct virtio_net *vnet = netdev->priv;
+	struct virtio_device *virtio = &vnet->virtio;
+	uint32_t has_mtu;
+
+	/* Read MTU from device registers, if available */
+	has_mtu = ( virtio->features.word[0] & VIRTIO_NET_FEAT0_MTU );
+	if ( has_mtu ) {
+		netdev->mtu = ioread16 ( virtio->device + VIRTIO_NET_MTU );
+		netdev->max_pkt_len = ( netdev->mtu + ETH_HLEN );
+		DBGC ( vnet, "VNET %s has MTU %zd\n",
+		       virtio->name, netdev->mtu );
 	}
 }
 
@@ -503,6 +526,9 @@ static int virtio_net_probe ( struct pci_device *pci ) {
 
 	/* Get MAC address */
 	virtio_net_mac ( netdev );
+
+	/* Set MTU */
+	virtio_net_mtu ( netdev );
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )

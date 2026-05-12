@@ -12,11 +12,17 @@ FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/virtio.h>
 
+/** Device has a reported MTU */
+#define VIRTIO_NET_FEAT0_MTU 0x00000008
+
 /** Device has a MAC address */
 #define VIRTIO_NET_FEAT0_MAC 0x00000020
 
 /** MAC address register offset */
 #define VIRTIO_NET_MAC 0x00
+
+/** MTU register offset */
+#define VIRTIO_NET_MTU 0x0a
 
 /** A virtio network packet header */
 union virtio_net_header {
