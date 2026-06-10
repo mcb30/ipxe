@@ -14,7 +14,7 @@ FILE_SECBOOT ( PERMITTED );
 
 static inline __attribute__ (( always_inline, const )) uint16_t
 __bswap_variable_16 ( uint16_t x ) {
-	uint32_t swapped;
+	unsigned long swapped;
 
 	__asm__ ( "lrvr %0, %1" : "=r" ( swapped ) : "r" ( x ) );
 	return ( swapped >> 16 );
@@ -22,15 +22,15 @@ __bswap_variable_16 ( uint16_t x ) {
 
 static inline __attribute__ (( always_inline )) void
 __bswap_16s ( uint16_t *x ) {
-	uint32_t swapped;
+	unsigned long swapped;
 
-	__asm__ ( "lrvr %0, %1" : "=r" ( swapped ) : "r" ( x ) );
-	*x = ( swapped >> 16 );
+	__asm__ ( "lrvh %0, %1" : "=r" ( swapped ) : "T" ( *x ) );
+	*x = swapped;
 }
 
 static inline __attribute__ (( always_inline, const )) uint32_t
 __bswap_variable_32 ( uint32_t x ) {
-	uint32_t swapped;
+	unsigned long swapped;
 
 	__asm__ ( "lrvr %0, %1" : "=r" ( swapped ) : "r" ( x ) );
 	return swapped;
@@ -38,15 +38,15 @@ __bswap_variable_32 ( uint32_t x ) {
 
 static inline __attribute__ (( always_inline )) void
 __bswap_32s ( uint32_t *x ) {
-	uint32_t swapped;
+	unsigned long swapped;
 
-	__asm__ ( "lrvr %0, %1" : "=r" ( swapped ) : "r" ( x ) );
+	__asm__ ( "lrv %0, %1" : "=r" ( swapped ) : "T" ( *x ) );
 	*x = swapped;
 }
 
 static inline __attribute__ (( always_inline, const )) uint64_t
 __bswap_variable_64 ( uint64_t x ) {
-	uint64_t swapped;
+	unsigned long swapped;
 
 	__asm__ ( "lrvgr %0, %1" : "=r" ( swapped ) : "r" ( x ) );
 	return swapped;
@@ -54,9 +54,9 @@ __bswap_variable_64 ( uint64_t x ) {
 
 static inline __attribute__ (( always_inline )) void
 __bswap_64s ( uint64_t *x ) {
-	uint64_t swapped;
+	unsigned long swapped;
 
-	__asm__ ( "lrvgr %0, %1" : "=r" ( swapped ) : "r" ( x ) );
+	__asm__ ( "lrvg %0, %1" : "=r" ( swapped ) : "T" ( *x ) );
 	*x = swapped;
 }
 
