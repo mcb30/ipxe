@@ -10,6 +10,7 @@
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <stdint.h>
+#include <byteswap.h>
 
 /**
  * Test and set bit atomically
@@ -23,11 +24,11 @@ test_and_set_bit ( unsigned int bit, volatile void *bits ) {
 	unsigned int index = ( bit / 32 );
 	unsigned int offset = ( bit % 32 );
 	volatile uint32_t *word = ( ( ( volatile uint32_t * ) bits ) + index );
-	uint32_t mask = ( 1U << offset );
+	uint32_t mask = cpu_to_le32 ( 1U << offset );
 	uint32_t old;
 
-	__asm__ __volatile__ ( "laog %0, %2, %1"
-			       : "=r" ( old ), "+Q" ( *word )
+	__asm__ __volatile__ ( "lao %0, %2, %1"
+			       : "=r" ( old ), "+S" ( *word )
 			       : "r" ( mask ) );
 
 	return ( !! ( old & mask ) );
@@ -45,11 +46,11 @@ test_and_clear_bit ( unsigned int bit, volatile void *bits ) {
 	unsigned int index = ( bit / 32 );
 	unsigned int offset = ( bit % 32 );
 	volatile uint32_t *word = ( ( ( volatile uint32_t * ) bits ) + index );
-	uint32_t mask = ( 1U << offset );
+	uint32_t mask = cpu_to_le32 ( 1U << offset );
 	uint32_t old;
 
-	__asm__ __volatile__ ( "laag %0, %2, %1"
-			       : "=r" ( old ), "+Q" ( *word )
+	__asm__ __volatile__ ( "lan %0, %2, %1"
+			       : "=r" ( old ), "+S" ( *word )
 			       : "r" ( ~mask ) );
 
 	return ( !! ( old & mask ) );
