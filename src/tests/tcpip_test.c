@@ -151,7 +151,7 @@ static uint16_t rfc_tcpip_chksum ( const void *data, size_t len ) {
 	}
 
 	if ( len > 0 )
-		sum += *( ( uint8_t * ) data );
+		sum += le16_to_cpu ( *( ( uint8_t * ) data ) );
 
 	while ( sum >> 16 )
 		sum = ( ( sum & 0xffff ) + ( sum >> 16 ) );
