@@ -33,17 +33,21 @@ extern void s390x_memmove ( void *dest, const void *src, size_t len );
 static inline __attribute__ (( always_inline )) void *
 memset ( void *dest, int character, size_t len ) {
 	struct s390x_addr_len_pair dpair = { dest, len };
-	struct s390x_addr_len_pair spair = { NULL, len };
+	struct s390x_addr_len_pair spair = { NULL, 0 };
 	char ( * dmem ) [ len ] = dest;
 
 	if ( __builtin_constant_p ( character ) ) {
 		/* Constant fill character: use an immediate */
-		__asm__ ( "mvcle %0, %1, %3"
+		__asm__ ( "\n1:\n\t"
+			  "mvcle %0, %1, %3\n\t"
+			  "jo 1b\n\t"
 			  : "+r" ( dpair ), "+r" ( spair ), "=m" ( *dmem )
 			  : "i" ( character ) );
 	} else {
 		/* Variable fill character: use a register */
-		__asm__ ( "mvcle %0, %1, 0(%3)"
+		__asm__ ( "\n1:\n\t"
+			  "mvcle %0, %1, 0(%3)\n\t"
+			  "jo 1b\n\t"
 			  : "+r" ( dpair ), "+r" ( spair ), "=m" ( *dmem )
 			  : "a" ( character ) );
 	}
@@ -75,7 +79,9 @@ memcpy ( void *dest, const void *src, size_t len ) {
 			  : "Q" ( *smem ), "i" ( len ) );
 	} else {
 		/* Variable or large length: use "mvcle" */
-		__asm__ ( "mvcle %0, %1, 0"
+		__asm__ ( "\n1:\n\t"
+			  "mvcle %0, %1, 0\n\t"
+			  "jo 1b\n\t"
 			  : "+r" ( dpair ), "+r" ( spair ), "=m" ( *dmem )
 			  : "m" ( *smem ) );
 	}
