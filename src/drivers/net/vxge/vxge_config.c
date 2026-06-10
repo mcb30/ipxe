@@ -737,7 +737,7 @@ __vxge_hw_legacy_swapper_set(struct vxge_hw_legacy_reg __iomem *legacy_reg)
  * Set the swapper bits appropriately for the vpath.
  */
 enum vxge_hw_status
-__vxge_hw_vpath_swapper_set(struct vxge_hw_vpath_reg __iomem *vpath_reg)
+__vxge_hw_vpath_swapper_set(struct vxge_hw_vpath_reg __iomem *vpath_reg __unused)
 {
 	vxge_trace();
 

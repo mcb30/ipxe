@@ -26,8 +26,8 @@ test_and_set_bit ( unsigned int bit, volatile void *bits ) {
 	uint32_t mask = ( 1U << offset );
 	uint32_t old;
 
-	__asm__ __volatile__ ( "amoor.w %0, %2, %1"
-			       : "=r" ( old ), "+A" ( *word )
+	__asm__ __volatile__ ( "laog %0, %2, %1"
+			       : "=r" ( old ), "+Q" ( *word )
 			       : "r" ( mask ) );
 
 	return ( !! ( old & mask ) );
@@ -48,8 +48,8 @@ test_and_clear_bit ( unsigned int bit, volatile void *bits ) {
 	uint32_t mask = ( 1U << offset );
 	uint32_t old;
 
-	__asm__ __volatile__ ( "amoand.w %0, %2, %1"
-			       : "=r" ( old ), "+A" ( *word )
+	__asm__ __volatile__ ( "laag %0, %2, %1"
+			       : "=r" ( old ), "+Q" ( *word )
 			       : "r" ( ~mask ) );
 
 	return ( !! ( old & mask ) );

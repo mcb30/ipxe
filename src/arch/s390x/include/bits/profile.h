@@ -19,12 +19,10 @@ FILE_SECBOOT ( PERMITTED );
  */
 static inline __attribute__ (( always_inline )) unsigned long
 profile_timestamp ( void ) {
-	unsigned long cycles;
+	uint64_t cycles;
 
 	/* Read timestamp counter */
-	//
-	cycles = 0;
-	//__asm__ __volatile__ ( "rdcycle %0" : "=r" ( cycles ) );
+	__asm__ ( "stckf %0" : "=Q" ( cycles ) );
 	return cycles;
 }
 
