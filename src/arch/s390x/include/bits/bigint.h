@@ -131,11 +131,26 @@ bigint_shl_raw ( unsigned long *value0, unsigned int size ) {
  */
 static inline __attribute__ (( always_inline )) int
 bigint_shr_raw ( unsigned long *value0, unsigned int size ) {
+	bigint_t ( size ) __attribute__ (( may_alias )) *value =
+		( ( void * ) value0 );
+	unsigned long discard_offset;
+	unsigned long discard_temp;
+	unsigned long carry;
 
-	//
-	( void ) value0;
-	( void ) size;
-	return 0;
+	__asm__ ( "\n1:\n\t"
+		  "sllg %1, %2, 63\n\t"
+		  "lg %2, (%O3 - 8)(%0, %R3)\n\t"
+		  "risbg %1, %2, 1, 63, 63\n\t"
+		  "stg %1, (%O3 - 8)(%0, %R3)\n\t"
+		  "aghi %0, -8\n\t"
+		  "jne 1b\n\t"
+		  : "=&a" ( discard_offset ),
+		    "=&r" ( discard_temp ),
+		    "=&r" ( carry ),
+		    "+S" ( *value )
+		  : "0" ( sizeof ( *value ) ), "2" ( 0 ) );
+
+	return ( carry & 1 );
 }
 
 /**
