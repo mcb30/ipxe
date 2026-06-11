@@ -146,7 +146,7 @@ bigint_shr_raw ( unsigned long *value0, unsigned int size ) {
 		  "risbg %1, %2, 1, 63, 63\n\t"
 		  "stg %1, (%O3 - 8)(%0, %R3)\n\t"
 		  "aghi %0, -8\n\t"
-		  "jne 1b\n\t"
+		  "jnz 1b\n\t"
 		  : "=&a" ( discard_offset ),
 		    "=&r" ( discard_temp ),
 		    "=&r" ( carry ),
@@ -166,8 +166,8 @@ bigint_shr_raw ( unsigned long *value0, unsigned int size ) {
  */
 static inline __attribute__ (( always_inline, pure )) int
 bigint_is_zero_raw ( const unsigned long *value0, unsigned int size ) {
-	bigint_t ( size ) __attribute__ (( may_alias )) *value =
-		( ( void * ) value0 );
+	const bigint_t ( size ) __attribute__ (( may_alias )) *value =
+		( ( const void * ) value0 );
 	unsigned long discard_pointer;
 	unsigned long discard_index;
 	unsigned long result;
@@ -200,12 +200,30 @@ bigint_is_zero_raw ( const unsigned long *value0, unsigned int size ) {
 static inline __attribute__ (( always_inline, pure )) int
 bigint_is_geq_raw ( const unsigned long *value0,
 		    const unsigned long *reference0, unsigned int size ) {
+	const bigint_t ( size ) __attribute__ (( may_alias )) *value =
+		( ( const void * ) value0 );
+	const bigint_t ( size ) __attribute__ (( may_alias )) *reference =
+		( ( const void * ) reference0 );
+	unsigned long discard_offset;
+	unsigned long discard_temp;
+	unsigned int result;
 
-	//
-	( void ) value0;
-	( void ) reference0;
-	( void ) size;
-	return 0;
+	__asm__ ( "\n1:\n\t"
+		  "lg %1, (%O4 - 8)(%0, %R4)\n\t"
+		  "clg %1, (%O3 - 8)(%0, %R3)\n\t"
+		  "jnz 2f\n\t"
+		  "aghi %0, -8\n\t"
+		  "jnz 1b\n\t"
+		  "\n2:\n\t"
+		  "slbr %2, %2\n\t" /* extract condition */
+		  : "=&a" ( discard_offset ),
+		    "=&r" ( discard_temp ),
+		    "=&r" ( result )
+		  : "S" ( *value ),
+		    "S" ( *reference ),
+		    "0" ( sizeof ( *value ) ) );
+
+	return ( -result );
 }
 
 /**
