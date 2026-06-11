@@ -61,7 +61,7 @@ bigint_add_raw ( const unsigned long *addend0, unsigned long *value0,
 		  "\n1:\n\t"
 		  "lg %1, %O3(%0, %R3)\n\t"
 		  "alcg %1, %O4(%0, %R4)\n\t"
-		  "sg %1, %O3(%0, %R3)\n\t"
+		  "stg %1, %O3(%0, %R3)\n\t"
 		  "la %0, 8(%0)\n\t"
 		  "brct %2, 1b\n\t"
 		  "alcr %2, %2\n\t" /* carry-out */
