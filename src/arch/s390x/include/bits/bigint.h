@@ -99,11 +99,27 @@ bigint_subtract_raw ( const unsigned long *subtrahend0, unsigned long *value0,
  */
 static inline __attribute__ (( always_inline )) int
 bigint_shl_raw ( unsigned long *value0, unsigned int size ) {
+	bigint_t ( size ) __attribute__ (( may_alias )) *value =
+		( ( void * ) value0 );
+	unsigned long discard_offset;
+	unsigned long discard_temp;
+	unsigned int index_carry;
 
-	//
-	( void ) value0;
-	( void ) size;
-	return 0;
+	__asm__ ( "xgr %0, %0\n\t" /* zero offset and clear carry-in */
+		  "\n1:\n\t"
+		  "lg %1, %O3(%0, %R3)\n\t"
+		  "alcgr %1, %1\n\t"
+		  "stg %1, %O3(%0, %R3)\n\t"
+		  "la %0, 8(%0)\n\t"
+		  "brct %2, 1b\n\t"
+		  "alcr %2, %2\n\t" /* carry-out */
+		  : "=&a" ( discard_offset ),
+		    "=&r" ( discard_temp ),
+		    "=&r" ( index_carry ),
+		    "+S" ( *value )
+		  : "2" ( size ) );
+
+	return index_carry;
 }
 
 /**
