@@ -166,11 +166,27 @@ bigint_shr_raw ( unsigned long *value0, unsigned int size ) {
  */
 static inline __attribute__ (( always_inline, pure )) int
 bigint_is_zero_raw ( const unsigned long *value0, unsigned int size ) {
+	bigint_t ( size ) __attribute__ (( may_alias )) *value =
+		( ( void * ) value0 );
+	unsigned long discard_pointer;
+	unsigned long discard_index;
+	unsigned long result;
 
-	//
-	( void ) value0;
-	( void ) size;
-	return 0;
+	__asm__ ( "\n1:\n\t"
+		  "laog %2, %2, 0(%0)\n\t"
+		  "jnz 2f\n\t"
+		  "la %0, 8(%0)\n\t"
+		  "brct %1, 1b\n\t"
+		  "\n2:\n\t"
+		  : "=&a" ( discard_pointer ),
+		    "=&r" ( discard_index ),
+		    "=&r" ( result )
+		  : "m" ( *value ),
+		    "0" ( value ),
+		    "1" ( size ),
+		    "2" ( 0UL ) );
+
+	return ( result == 0 );
 }
 
 /**
