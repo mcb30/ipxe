@@ -27,6 +27,7 @@ FILE_SECBOOT ( PERMITTED );
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
+#include <byteswap.h>
 #include <stdio.h>
 #include <ipxe/bigint.h>
 
@@ -79,6 +80,60 @@ const char * bigint_ntoa_raw ( const bigint_element_t *value0,
 	assert ( tmp < ( buf + sizeof ( buf ) ) );
 
 	return buf;
+}
+
+/**
+ * Initialise big integer
+ *
+ * @v value0		Element 0 of big integer to initialise
+ * @v size		Number of elements
+ * @v data		Raw data
+ * @v len		Length of raw data
+ */
+void bigint_init_raw ( bigint_element_t *value0, unsigned int size,
+		       const void *data, size_t len ) {
+	bigint_t ( size ) __attribute__ (( may_alias ))
+		*value = ( ( void * ) value0 );
+	uint8_t *value_byte = ( ( void * ) value0 );
+	const uint8_t *data_byte = data;
+	unsigned int toggle;
+	unsigned int i;
+
+	/* Zero big integer */
+	memset ( value, 0, sizeof ( *value ) );
+
+	/* Copy data, byte-swapping as needed */
+	toggle = ( ( __BYTE_ORDER == __LITTLE_ENDIAN ) ? 0 :
+		   ( sizeof ( value->element[0] ) - 1 ) );
+	for ( i = 0 ; len-- ; i++ )
+		value_byte[ i ^ toggle ] = data_byte[len];
+}
+
+/**
+ * Finalise big integer
+ *
+ * @v value0		Element 0 of big integer to finalise
+ * @v size		Number of elements
+ * @v out		Output buffer
+ * @v len		Length of output buffer
+ */
+void bigint_done_raw ( const bigint_element_t *value0, unsigned int size,
+		       void *out, size_t len ) {
+	const bigint_t ( size ) __attribute__ (( may_alias ))
+		*value = ( ( const void * ) value0 );
+	const uint8_t *value_byte = ( ( const void * ) value0 );
+	uint8_t *out_byte = out;
+	unsigned int toggle;
+	unsigned int i;
+
+	/* Zero output buffer */
+	memset ( out, 0, len );
+
+	/* Copy data, byte-swapping as needed */
+	toggle = ( ( __BYTE_ORDER == __LITTLE_ENDIAN ) ? 0 :
+		   ( sizeof ( value->element[0] ) - 1 ) );
+	for ( i = 0 ; len-- ; i++ )
+		out_byte[len] = value_byte[ i ^ toggle ];
 }
 
 /**

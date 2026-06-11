@@ -17,28 +17,6 @@ FILE_SECBOOT ( PERMITTED );
 typedef unsigned long bigint_element_t;
 
 /**
- * Initialise big integer
- *
- * @v value0		Element 0 of big integer to initialise
- * @v size		Number of elements
- * @v data		Raw data
- * @v len		Length of raw data
- */
-static inline __attribute__ (( always_inline )) void
-bigint_init_raw ( unsigned long *value0, unsigned int size,
-		  const void *data, size_t len ) {
-	size_t pad_len = ( sizeof ( bigint_t ( size ) ) - len );
-	uint8_t *value_byte = ( ( void * ) value0 );
-	const uint8_t *data_byte = ( data + len );
-
-	/* Copy raw data in reverse order, padding with zeros */
-	while ( len-- )
-		*(value_byte++) = *(--data_byte);
-	while ( pad_len-- )
-		*(value_byte++) = 0;
-}
-
-/**
  * Add big integers
  *
  * @v addend0		Element 0 of big integer to add
@@ -86,12 +64,30 @@ bigint_add_raw ( const unsigned long *addend0, unsigned long *value0,
 static inline __attribute__ (( always_inline )) int
 bigint_subtract_raw ( const unsigned long *subtrahend0, unsigned long *value0,
 		      unsigned int size ) {
+	bigint_t ( size ) __attribute__ (( may_alias )) *subtrahend =
+		( ( void * ) subtrahend0 );
+	bigint_t ( size ) __attribute__ (( may_alias )) *value =
+		( ( void * ) value0 );
+	unsigned long discard_offset;
+	unsigned long discard_temp;
+	unsigned int index_borrow;
 
-	//
-	( void ) subtrahend0;
-	( void ) value0;
-	( void ) size;
-	return 0;
+	__asm__ ( "slr %0, %0\n\t" /* zero offset and set borrow-in */
+		  "\n1:\n\t"
+		  "lg %1, %O3(%0, %R3)\n\t"
+		  "slbg %1, %O4(%0, %R4)\n\t"
+		  "stg %1, %O3(%0, %R3)\n\t"
+		  "la %0, 8(%0)\n\t"
+		  "brct %2, 1b\n\t"
+		  "slbr %2, %2\n\t" /* borrow-out */
+		  : "=&a" ( discard_offset ),
+		    "=&r" ( discard_temp ),
+		    "=&r" ( index_borrow ),
+		    "+S" ( *value )
+		  : "S" ( *subtrahend ),
+		    "2" ( size ) );
+
+	return ( -index_borrow );
 }
 
 /**
@@ -214,25 +210,6 @@ bigint_shrink_raw ( const unsigned long *source0,
 	( void ) dest0;
 	( void ) source_size;
 	( void ) dest_size;
-}
-
-/**
- * Finalise big integer
- *
- * @v value0		Element 0 of big integer to finalise
- * @v size		Number of elements
- * @v out		Output buffer
- * @v len		Length of output buffer
- */
-static inline __attribute__ (( always_inline )) void
-bigint_done_raw ( const unsigned long *value0, unsigned int size __unused,
-		  void *out, size_t len ) {
-	const uint8_t *value_byte = ( ( const void * ) value0 );
-	uint8_t *out_byte = ( out + len );
-
-	/* Copy raw data in reverse order */
-	while ( len-- )
-		*(--out_byte) = *(value_byte++);
 }
 
 /**
