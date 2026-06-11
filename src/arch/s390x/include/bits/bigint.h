@@ -72,7 +72,7 @@ bigint_subtract_raw ( const unsigned long *subtrahend0, unsigned long *value0,
 	unsigned long discard_temp;
 	unsigned int index_borrow;
 
-	__asm__ ( "slr %0, %0\n\t" /* zero offset and set borrow-in */
+	__asm__ ( "slgr %0, %0\n\t" /* zero offset and set borrow-in */
 		  "\n1:\n\t"
 		  "lg %1, %O3(%0, %R3)\n\t"
 		  "slbg %1, %O4(%0, %R4)\n\t"
@@ -103,23 +103,26 @@ bigint_shl_raw ( unsigned long *value0, unsigned int size ) {
 		( ( void * ) value0 );
 	unsigned long discard_offset;
 	unsigned long discard_temp;
-	unsigned int index_carry;
+	unsigned int discard_index;
+	unsigned int carry;
 
-	__asm__ ( "xgr %0, %0\n\t" /* zero offset and clear carry-in */
-		  "\n1:\n\t"
-		  "lg %1, %O3(%0, %R3)\n\t"
-		  "alcgr %1, %1\n\t"
-		  "stg %1, %O3(%0, %R3)\n\t"
+	__asm__ ( "\n1:\n\t"
+		  "lg %1, %O4(%0, %R4)\n\t"
+		  "risbg %3, %1, 0, 62, 1\n\t"
+		  "stg %3, %O4(%0, %R4)\n\t"
+		  "srlg %3, %1, 63\n\t"
 		  "la %0, 8(%0)\n\t"
 		  "brct %2, 1b\n\t"
-		  "alcr %2, %2\n\t" /* carry-out */
 		  : "=&a" ( discard_offset ),
 		    "=&r" ( discard_temp ),
-		    "=&r" ( index_carry ),
+		    "=&r" ( discard_index ),
+		    "=&r" ( carry ),
 		    "+S" ( *value )
-		  : "2" ( size ) );
+		  : "0" ( 0UL ),
+		    "2" ( size ),
+		    "3" ( 0U ) );
 
-	return index_carry;
+	return carry;
 }
 
 /**
@@ -135,7 +138,7 @@ bigint_shr_raw ( unsigned long *value0, unsigned int size ) {
 		( ( void * ) value0 );
 	unsigned long discard_offset;
 	unsigned long discard_temp;
-	unsigned long carry;
+	unsigned int carry;
 
 	__asm__ ( "\n1:\n\t"
 		  "sllg %1, %2, 63\n\t"
@@ -148,7 +151,8 @@ bigint_shr_raw ( unsigned long *value0, unsigned int size ) {
 		    "=&r" ( discard_temp ),
 		    "=&r" ( carry ),
 		    "+S" ( *value )
-		  : "0" ( sizeof ( *value ) ), "2" ( 0 ) );
+		  : "0" ( sizeof ( *value ) ),
+		    "2" ( 0 ) );
 
 	return ( carry & 1 );
 }
