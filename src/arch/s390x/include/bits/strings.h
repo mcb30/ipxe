@@ -10,14 +10,6 @@
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 FILE_SECBOOT ( PERMITTED );
 
-/** An address/length register pair */
-struct s390x_leftmost_pair {
-	/** Leftmost one bit */
-	unsigned long leftmost;
-	/** Reserved */
-	unsigned long reserved;
-};
-
 /**
  * Find first (i.e. least significant) set bit
  *
@@ -25,7 +17,7 @@ struct s390x_leftmost_pair {
  * @ret lsb		Least significant bit set in value (LSB=1), or zero
  */
 static inline __attribute__ (( always_inline )) int __ffsll ( long long value ){
-	struct s390x_leftmost_pair pair;
+	struct s390x_scalar_pair pair;
 
 	/* Extract least significant set bit */
 	value &= -value;
@@ -33,7 +25,7 @@ static inline __attribute__ (( always_inline )) int __ffsll ( long long value ){
 	/* Count number of leading zeros before LSB */
 	__asm__ ( "flogr %0, %1" : "=r" ( pair ) : "r" ( value ) );
 
-	return ( 64 - pair.leftmost );
+	return ( 64 - pair.even );
 }
 
 /**
@@ -54,11 +46,11 @@ static inline __attribute__ (( always_inline )) int __ffsl ( long value ) {
  * @ret msb		Most significant bit set in value (LSB=1), or zero
  */
 static inline __attribute__ (( always_inline )) int __flsll ( long long value ){
-	struct s390x_leftmost_pair pair;
+	struct s390x_scalar_pair pair;
 
 	/* Count leading zeros */
 	__asm__ ( "flogr %0, %1" : "=r" ( pair ) : "r" ( value ) );
-	return ( 64 - pair.leftmost );
+	return ( 64 - pair.even );
 }
 
 /**

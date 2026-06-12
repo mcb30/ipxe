@@ -158,38 +158,6 @@ bigint_shr_raw ( unsigned long *value0, unsigned int size ) {
 }
 
 /**
- * Test if big integer is equal to zero
- *
- * @v value0		Element 0 of big integer
- * @v size		Number of elements
- * @ret is_zero		Big integer is equal to zero
- */
-static inline __attribute__ (( always_inline, pure )) int
-bigint_is_zero_raw ( const unsigned long *value0, unsigned int size ) {
-	const bigint_t ( size ) __attribute__ (( may_alias )) *value =
-		( ( const void * ) value0 );
-	unsigned long discard_pointer;
-	unsigned long discard_index;
-	unsigned long result;
-
-	__asm__ ( "\n1:\n\t"
-		  "laog %2, %2, 0(%0)\n\t"
-		  "jnz 2f\n\t"
-		  "la %0, 8(%0)\n\t"
-		  "brct %1, 1b\n\t"
-		  "\n2:\n\t"
-		  : "=&a" ( discard_pointer ),
-		    "=&r" ( discard_index ),
-		    "=&r" ( result )
-		  : "m" ( *value ),
-		    "0" ( value ),
-		    "1" ( size ),
-		    "2" ( 0UL ) );
-
-	return ( result == 0 );
-}
-
-/**
  * Compare big integers
  *
  * @v value0		Element 0 of big integer
@@ -227,22 +195,6 @@ bigint_is_geq_raw ( const unsigned long *value0,
 }
 
 /**
- * Find highest bit set in big integer
- *
- * @v value0		Element 0 of big integer
- * @v size		Number of elements
- * @ret max_bit		Highest bit set + 1 (or 0 if no bits set)
- */
-static inline __attribute__ (( always_inline )) int
-bigint_max_set_bit_raw ( const unsigned long *value0, unsigned int size ) {
-
-	//
-	( void ) value0;
-	( void ) size;
-	return 0;
-}
-
-/**
  * Grow big integer
  *
  * @v source0		Element 0 of source big integer
@@ -253,12 +205,18 @@ bigint_max_set_bit_raw ( const unsigned long *value0, unsigned int size ) {
 static inline __attribute__ (( always_inline )) void
 bigint_grow_raw ( const unsigned long *source0, unsigned int source_size,
 		  unsigned long *dest0, unsigned int dest_size ) {
+	const bigint_t ( source_size ) __attribute__ (( may_alias )) *source =
+		( ( const void * ) source0 );
+	bigint_t ( dest_size ) __attribute__ (( may_alias )) *dest =
+		( ( void * ) dest0 );
+	struct s390x_pointer_pair spair = { source, sizeof ( *source ) };
+	struct s390x_pointer_pair dpair = { dest, sizeof ( *dest ) };
 
-	//
-	( void ) source0;
-	( void ) dest0;
-	( void ) source_size;
-	( void ) dest_size;
+	__asm__ ( "\n1:\n\t"
+		  "mvcle %0, %1, 0\n\t"
+		  "jo 1b\n\t"
+		  : "+r" ( dpair ), "+r" ( spair ), "=m" ( *dest )
+		  : "m" ( *source ) );
 }
 
 /**
@@ -270,15 +228,20 @@ bigint_grow_raw ( const unsigned long *source0, unsigned int source_size,
  * @v dest_size		Number of elements in destination big integer
  */
 static inline __attribute__ (( always_inline )) void
-bigint_shrink_raw ( const unsigned long *source0,
-		    unsigned int source_size __unused,
+bigint_shrink_raw ( const unsigned long *source0, unsigned int source_size,
 		    unsigned long *dest0, unsigned int dest_size ) {
+	const bigint_t ( source_size ) __attribute__ (( may_alias )) *source =
+		( ( const void * ) source0 );
+	bigint_t ( dest_size ) __attribute__ (( may_alias )) *dest =
+		( ( void * ) dest0 );
+	struct s390x_pointer_pair spair = { source, sizeof ( *source ) };
+	struct s390x_pointer_pair dpair = { dest, sizeof ( *dest ) };
 
-	//
-	( void ) source0;
-	( void ) dest0;
-	( void ) source_size;
-	( void ) dest_size;
+	__asm__ ( "\n1:\n\t"
+		  "mvcle %0, %1, 0\n\t"
+		  "jo 1b\n\t"
+		  : "+r" ( dpair ), "+r" ( spair ), "=m" ( *dest )
+		  : "m" ( *source ) );
 }
 
 /**
@@ -293,12 +256,25 @@ static inline __attribute__ (( always_inline )) void
 bigint_multiply_one ( const unsigned long multiplicand,
 		      const unsigned long multiplier,
 		      unsigned long *result, unsigned long *carry ) {
+	struct s390x_scalar_pair pair;
 
-	//
-	( void ) multiplicand;
-	( void ) multiplier;
-	( void ) result;
-	( void ) carry;
+	__asm__ ( /* Perform multiplication */
+		  "lgr %N0, %3\n\t"
+		  "mlgr %0, %4\n\t"
+		  /* Add carry-in */
+		  "algr %N0, %2\n\t"
+		  "slbgr %2, %2\n\t"
+		  "aghi %2, 1\n\t"
+		  /* Accumulate result */
+		  "alg %N0, %1\n\t"
+		  "stg %N0, %1\n\t"
+		  /* Accumulate carry-out */
+		  "alcgr %2, %0\n\t"
+		  : "=&r" ( pair ),
+		    "+T" ( *result ),
+		    "+r" ( *carry )
+		  : "r" ( multiplicand ),
+		    "r" ( multiplier ) );
 }
 
 #endif /* _BITS_BIGINT_H */

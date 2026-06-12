@@ -12,14 +12,6 @@ FILE_SECBOOT ( PERMITTED );
 
 #include <stddef.h>
 
-/** An address/length register pair */
-struct s390x_addr_len_pair {
-	/** Address */
-	const void *addr;
-	/** Length */
-	size_t len;
-};
-
 extern void s390x_memmove ( void *dest, const void *src, size_t len );
 
 /**
@@ -32,8 +24,8 @@ extern void s390x_memmove ( void *dest, const void *src, size_t len );
  */
 static inline __attribute__ (( always_inline )) void *
 memset ( void *dest, int character, size_t len ) {
-	const struct s390x_addr_len_pair spair = { NULL, 0 };
-	struct s390x_addr_len_pair dpair = { dest, len };
+	const struct s390x_pointer_pair spair = { NULL, 0 };
+	struct s390x_pointer_pair dpair = { dest, len };
 	char ( * dmem ) [ len ] = dest;
 
 	if ( __builtin_constant_p ( character ) ) {
@@ -65,8 +57,8 @@ memset ( void *dest, int character, size_t len ) {
  */
 static inline __attribute__ (( always_inline )) void *
 memcpy ( void *dest, const void *src, size_t len ) {
-	struct s390x_addr_len_pair spair = { src, len };
-	struct s390x_addr_len_pair dpair = { dest, len };
+	struct s390x_pointer_pair spair = { src, len };
+	struct s390x_pointer_pair dpair = { dest, len };
 	const char ( * smem ) [ len ] = src;
 	char ( * dmem ) [ len ] = dest;
 

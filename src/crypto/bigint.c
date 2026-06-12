@@ -137,6 +137,55 @@ void bigint_done_raw ( const bigint_element_t *value0, unsigned int size,
 }
 
 /**
+ * Test if big integer is equal to zero
+ *
+ * @v value0		Element 0 of big integer
+ * @v size		Number of elements
+ * @ret is_zero		Big integer is equal to zero
+ */
+int bigint_is_zero_raw ( const bigint_element_t *value0, unsigned int size ) {
+	const bigint_t ( size ) __attribute__ (( may_alias )) *value =
+		( ( const void * ) value0 );
+	bigint_element_t or;
+	unsigned int i;
+
+	/* Construct binary OR of all elements */
+	for ( i = 0, or = 0 ; i < size ; i++ )
+		or |= value->element[i];
+
+	return ( or == 0 );
+}
+
+/**
+ * Find highest bit set in big integer
+ *
+ * @v value0		Element 0 of big integer
+ * @v size		Number of elements
+ * @ret max_bit		Highest bit set + 1 (or 0 if no bits set)
+ */
+int bigint_max_set_bit_raw ( const bigint_element_t *value0,
+			     unsigned int size ) {
+	const bigint_t ( size ) __attribute__ (( may_alias )) *value =
+		( ( const void * ) value0 );
+	bigint_element_t element;
+	unsigned int max_bit;
+	unsigned int i;
+
+	/* Find highest set bit in highest non-zero element */
+	max_bit = ( sizeof ( *value ) * 8 );
+	for ( i = 0 ; i < size ; i++ ) {
+		element = value->element[ size - i - 1 ];
+		max_bit -= ( sizeof ( element) * 8 );
+		if ( element ) {
+			max_bit += flsll ( element );
+			break;
+		}
+	}
+
+	return max_bit;
+}
+
+/**
  * Conditionally swap big integers (in constant time)
  *
  * @v first0		Element 0 of big integer to be conditionally swapped
