@@ -26,6 +26,7 @@ FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #include <assert.h>
 #include <byteswap.h>
 #include <stdio.h>

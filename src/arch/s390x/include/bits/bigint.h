@@ -10,8 +10,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
-#include <string.h>
-#include <strings.h>
 
 /** Element of a big integer */
 typedef unsigned long bigint_element_t;
@@ -35,14 +33,17 @@ bigint_add_raw ( const unsigned long *addend0, unsigned long *value0,
 	unsigned long discard_temp;
 	unsigned int index_carry;
 
-	__asm__ ( "xgr %0, %0\n\t" /* zero offset and clear carry-in */
+	__asm__ ( /* Zero offset and clear carry-in */
+		  "xgr %0, %0\n\t"
+		  /* Add element by element */
 		  "\n1:\n\t"
 		  "lg %1, %O3(%0, %R3)\n\t"
 		  "alcg %1, %O4(%0, %R4)\n\t"
 		  "stg %1, %O3(%0, %R3)\n\t"
 		  "la %0, 8(%0)\n\t"
 		  "brct %2, 1b\n\t"
-		  "alcr %2, %2\n\t" /* carry-out */
+		  /* Obtain carry-out */
+		  "alcr %2, %2\n\t"
 		  : "=&a" ( discard_offset ),
 		    "=&r" ( discard_temp ),
 		    "=&r" ( index_carry ),
@@ -72,14 +73,17 @@ bigint_subtract_raw ( const unsigned long *subtrahend0, unsigned long *value0,
 	unsigned long discard_temp;
 	unsigned int index_borrow;
 
-	__asm__ ( "slgr %0, %0\n\t" /* zero offset and set borrow-in */
+	__asm__ ( /* Zero offset and clear (inverted) borrow-in */
+		  "slgr %0, %0\n\t"
+		  /* Subtract element by element */
 		  "\n1:\n\t"
 		  "lg %1, %O3(%0, %R3)\n\t"
 		  "slbg %1, %O4(%0, %R4)\n\t"
 		  "stg %1, %O3(%0, %R3)\n\t"
 		  "la %0, 8(%0)\n\t"
 		  "brct %2, 1b\n\t"
-		  "slbr %2, %2\n\t" /* borrow-out */
+		  /* Obtain (negative) borrow-out */
+		  "slbr %2, %2\n\t"
 		  : "=&a" ( discard_offset ),
 		    "=&r" ( discard_temp ),
 		    "=&r" ( index_borrow ),
@@ -106,7 +110,8 @@ bigint_shl_raw ( unsigned long *value0, unsigned int size ) {
 	unsigned int discard_index;
 	unsigned int carry;
 
-	__asm__ ( "\n1:\n\t"
+	__asm__ ( /* Shift element by element */
+		  "\n1:\n\t"
 		  "lg %1, %O4(%0, %R4)\n\t"
 		  "risbg %3, %1, 0, 62, 1\n\t"
 		  "stg %3, %O4(%0, %R4)\n\t"
@@ -140,7 +145,8 @@ bigint_shr_raw ( unsigned long *value0, unsigned int size ) {
 	unsigned long discard_temp;
 	unsigned int carry;
 
-	__asm__ ( "\n1:\n\t"
+	__asm__ ( /* Shift element by element */
+		  "\n1:\n\t"
 		  "sllg %1, %2, 63\n\t"
 		  "lg %2, (%O3 - 8)(%0, %R3)\n\t"
 		  "risbg %1, %2, 1, 63, 63\n\t"
@@ -212,7 +218,8 @@ bigint_grow_raw ( const unsigned long *source0, unsigned int source_size,
 	struct s390x_pointer_pair spair = { source, sizeof ( *source ) };
 	struct s390x_pointer_pair dpair = { dest, sizeof ( *dest ) };
 
-	__asm__ ( "\n1:\n\t"
+	__asm__ ( /* Copy source to destination, zero-padding as needed */
+		  "\n1:\n\t"
 		  "mvcle %0, %1, 0\n\t"
 		  "jo 1b\n\t"
 		  : "+r" ( dpair ), "+r" ( spair ), "=m" ( *dest )
@@ -237,7 +244,8 @@ bigint_shrink_raw ( const unsigned long *source0, unsigned int source_size,
 	struct s390x_pointer_pair spair = { source, sizeof ( *source ) };
 	struct s390x_pointer_pair dpair = { dest, sizeof ( *dest ) };
 
-	__asm__ ( "\n1:\n\t"
+	__asm__ ( /* Copy source to destination, truncating if needed */
+		  "\n1:\n\t"
 		  "mvcle %0, %1, 0\n\t"
 		  "jo 1b\n\t"
 		  : "+r" ( dpair ), "+r" ( spair ), "=m" ( *dest )
