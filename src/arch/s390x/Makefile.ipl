@@ -1,0 +1,9 @@
+# -*- makefile -*- : Force emacs to use Makefile mode
+
+# Linker script
+#
+LDSCRIPT	= arch/s390x/scripts/ipl.lds
+
+# Media types
+#
+MEDIA		+= ipl

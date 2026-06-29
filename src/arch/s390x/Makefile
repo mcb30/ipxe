@@ -22,6 +22,7 @@ INCDIRS		:= arch/$(ARCH)/include $(INCDIRS)
 # S/390-specific directories containing source files
 #
 SRCDIRS		+= arch/s390x/core
+SRCDIRS		+= arch/s390x/prefix
 
 # Include platform-specific Makefile
 #
