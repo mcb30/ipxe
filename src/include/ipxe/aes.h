@@ -10,6 +10,7 @@
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 FILE_SECBOOT ( PERMITTED );
 
+#include <stdint.h>
 #include <ipxe/crypto.h>
 
 /** AES blocksize */
@@ -39,11 +40,24 @@ struct aes_context {
 	/** Decryption keys */
 	struct aes_round_keys decrypt;
 	/** Number of rounds */
-	unsigned int rounds;
-};
+	uint8_t rounds;
+} __attribute__ (( aligned ( AES_BLOCKSIZE ) ));
 
-/** AES context size */
-#define AES_CTX_SIZE sizeof ( struct aes_context )
+/** AES context size (including alignment padding) */
+#define AES_CTX_SIZE ( sizeof ( struct aes_context ) + AES_BLOCKSIZE - 1 )
+
+/**
+ * Align AES context
+ *
+ * @v ctx		Context
+ * @ret aes		AES context
+ */
+static inline struct aes_context * aes_context ( void *ctx ) {
+
+	return ( ( struct aes_context * )
+		 ( ( ( ( intptr_t ) ctx ) + AES_BLOCKSIZE - 1 ) &
+		   ~( AES_BLOCKSIZE - 1 ) ) );
+}
 
 extern struct cipher_algorithm aes_algorithm;
 extern struct cipher_algorithm aes_ecb_algorithm;

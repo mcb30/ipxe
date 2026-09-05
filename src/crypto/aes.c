@@ -423,7 +423,7 @@ static unsigned int aes_rounds ( const struct aes_context *aes ) {
  */
 static void aes_encrypt ( struct cipher_algorithm *cipher __unused, void *ctx,
 			  const void *src, void *dst, size_t len ) {
-	const struct aes_context *aes = ctx;
+	const struct aes_context *aes = aes_context ( ctx );
 	const union aes_matrix *key = aes->encrypt.key;
 	union aes_matrix buffer[2];
 	union aes_matrix *in = &buffer[0];
@@ -460,7 +460,7 @@ static void aes_encrypt ( struct cipher_algorithm *cipher __unused, void *ctx,
  */
 static void aes_decrypt ( struct cipher_algorithm *cipher __unused, void *ctx,
 			  const void *src, void *dst, size_t len ) {
-	const struct aes_context *aes = ctx;
+	const struct aes_context *aes = aes_context ( ctx );
 	const union aes_matrix *key = aes->decrypt.key;
 	union aes_matrix buffer[2];
 	union aes_matrix *in = &buffer[0];
@@ -708,7 +708,7 @@ aes_key_rcon ( uint32_t column, unsigned int rcon ) {
  */
 static int aes_setkey ( struct cipher_algorithm *cipher __unused, void *ctx,
 			const void *key, size_t keylen ) {
-	struct aes_context *aes = ctx;
+	struct aes_context *aes = aes_context ( ctx );
 	union aes_matrix *enc;
 	union aes_matrix *dec;
 	union aes_matrix temp;
