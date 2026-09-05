@@ -721,6 +721,10 @@ static int aes_setkey ( struct cipher_algorithm *cipher __unused, void *ctx,
 	uint32_t *end;
 	uint32_t tmp;
 
+	//
+	extern void aesni_detect ( void );
+	aesni_detect();
+
 	/* Generate lookup tables, if not already done */
 	if ( ! aes_mixcolumns.entry[0].byte[0] )
 		aes_generate();

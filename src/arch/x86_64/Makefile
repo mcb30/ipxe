@@ -42,6 +42,10 @@ MS_ABI_FLAGS := $(shell $(MS_ABI_TEST) || $(ECHO) '-maccumulate-outgoing-args')
 WORKAROUND_CFLAGS += $(MS_ABI_FLAGS)
 endif
 
+# File-specific flags
+#
+CFLAGS_aesni	+= -msse
+
 # x86_64-specific directories containing source files
 #
 SRCDIRS		+= arch/x86_64/core
