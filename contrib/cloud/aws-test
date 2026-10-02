@@ -3,14 +3,32 @@
 import argparse
 from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import datetime
+from email.message import EmailMessage
+from hashlib import sha256
+import io
 from itertools import chain, groupby
 import logging
+import random
+import textwrap
 
 import boto3
+import botocore.config
 
 
 logger = logging.getLogger('aws-test')
+
+
+
+def create_megabyte(bucket):
+    """Create 1MB pseudorandom data test file"""
+    client = boto3.client('s3')
+    body = random.Random(42).randbytes(1024 * 1024)
+    digest = sha256(body)
+    key = 'test/%s' % digest.hexdigest()
+    client.put_object(Bucket=bucket, Key=key, Body=body)
+    logger.info("1MB test file is %s/%s", bucket, key)
+    return key
 
 
 def find_types(region, types):
@@ -53,16 +71,94 @@ def find_images(region, types, family, commit, image_ids):
     return result
 
 
-def test_instance_type(instance_type, images):
+def create_userdata(typ, name, bucket, megabyte):
+    """Create user-data"""
+    client = boto3.client('s3')
+    region = client.head_bucket(Bucket=bucket)['BucketRegion']
+    config = botocore.config.Config(
+        s3={'addressing_style': 'virtual'},
+        signature_version='s3v4',
+    )
+    client = boto3.client('s3', region_name=region, config=config)
+    urls = {
+        test: client.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': bucket,
+                'Key': 'test/%s/%s/%s' % (name, typ, test)
+            }
+        ).replace('https://', 'http://')
+        for test in ['config']
+    }
+    script = textwrap.dedent(f"""
+    #!ipxe
+
+    echo Automated test for instance type {typ}
+    echo Test ID {name}
+    params --method PUT
+    param product ${{product}}
+    param chip ${{netX/chip}}
+    imgfetch {urls['config']}##params ||
+    shell
+    """).strip()
+    userdata = EmailMessage()
+    userdata.make_mixed()
+    userdata.add_attachment(script, subtype="x-ipxe")
+    return userdata.as_bytes()
+
+
+def delete_launch_templates(region, filters):
+    """Delete launch templates"""
+    client = boto3.client('ec2', region_name=region)
+    paginator = client.get_paginator('describe_launch_templates')
+    info = chain.from_iterable(
+        x['LaunchTemplates'] for x in paginator.paginate(Filters=filters)
+    )
+    for template in info:
+        name = template['LaunchTemplateName']
+        logger.info("%s deleting launch template %s", region, name)
+        client.delete_launch_template(LaunchTemplateName=name)
+
+
+def create_launch_template(typ, region, image, userdata):
+    """Create launch template"""
+    client = boto3.client('ec2', region_name=region)
+    name = 'ipxetest-%s' % typ
+    delete_launch_templates(region, [{'Name': 'launch-template-name',
+                                      'Values': [name]}])
+    logger.info("%s creating launch template %s", region, name)
+    template = client.create_launch_template(
+        LaunchTemplateName=name,
+        LaunchTemplateData={
+            'ImageId': image['ImageId'],
+            'InstanceInitiatedShutdownBehavior': 'terminate',
+            'InstanceType': typ,
+            'UserData': b64encode(userdata).decode(),
+            'TagSpecifications': [{
+                'ResourceType': 'instance',
+                'Tags': [{'Key': 'ipxetest', 'Value': 'ipxetest'}],
+            }],
+        },
+        TagSpecifications=[{
+            'ResourceType': 'launch-template',
+            'Tags': [{'Key': 'ipxetest', 'Value': 'ipxetest'}],
+        }],
+    )
+    return name
+
+
+def run_test(typ, region, image, name, bucket, megabyte):
     """Test instance type"""
-    region = next(k for k, v in images.items() if instance_type in v)
-    image = images[region][instance_type]
-    logger.info("%s using %s in %s", instance_type, image['ImageId'], region)
+    logger.info("%s using %s for %s", region, image['ImageId'], typ)
+    userdata = create_userdata(typ, name, bucket, megabyte)
+    template = create_launch_template(typ, region, image, userdata)
 
 
 # Parse command-line arguments
-parser = argparse.ArgumentParser(description="Test AWS EC2 image (AMI)")
+parser = argparse.ArgumentParser(description="Test AWS EC2 instance type")
 parser.add_argument('--verbose', '-v', action='count', default=0)
+parser.add_argument('--name', '-n',
+                    help="Test name")
 parser.add_argument('--family', '-f',
                     help="Image family name")
 parser.add_argument('--commit', '-c',
@@ -81,6 +177,11 @@ loglevels = [logging.WARNING, logging.INFO, logging.DEBUG]
 verbosity = min(args.verbose, (len(loglevels) - 1))
 logging.basicConfig(level=loglevels[verbosity])
 logging.getLogger('botocore.credentials').setLevel(logging.WARNING)
+
+# Construct test name if not specified
+if not args.name:
+    args.name = datetime.now().strftime('%Y%m%d%H%M%S')
+logger.info("test name %s", args.name)
 
 # Use default family name if nothing else specified
 if not args.family and not args.commit and not args.image:
@@ -118,11 +219,24 @@ missing = set(args.type) - set(chain.from_iterable(images.values()))
 if missing:
     parser.error("No regions have images for %s" % ",".join(sorted(missing)))
 
+# Select region for each test
+regions = {
+    typ: next(k for k, v in images.items() if typ in v)
+    for typ in args.type
+}
+
+# Create 1MB test file
+megabyte = create_megabyte(args.bucket)
+
 # Run tests
 with ThreadPoolExecutor(max_workers=len(args.type)) as executor:
-    futures = {executor.submit(test_instance_type,
-                               instance_type=instance_type,
-                               images=images): instance_type
-               for instance_type in args.type}
+    futures = {executor.submit(run_test,
+                               typ=typ,
+                               region=regions[typ],
+                               image=images[regions[typ]][typ],
+                               name=args.name,
+                               bucket=args.bucket,
+                               megabyte=megabyte): typ
+               for typ in args.type}
     results = {futures[future]: future.result()
                for future in as_completed(futures)}
