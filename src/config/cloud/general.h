@@ -2,6 +2,11 @@
 #define NET_PROTO_IPV6
 #define DOWNLOAD_PROTO_HTTPS
 
+/* Enable commands useful for headless operation */
+#define CERT_CMD
+#define DIGEST_CMD
+#define NTP_CMD
+
 /* Allow scripts to create custom headers for retrieving metadata */
 #define PARAM_CMD
 

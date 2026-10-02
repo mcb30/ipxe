@@ -19,16 +19,15 @@ import botocore.config
 logger = logging.getLogger('aws-test')
 
 
-
 def create_megabyte(bucket):
     """Create 1MB pseudorandom data test file"""
     client = boto3.client('s3')
     body = random.Random(42).randbytes(1024 * 1024)
-    digest = sha256(body)
-    key = 'test/%s' % digest.hexdigest()
+    digest = sha256(body).hexdigest()
+    key = 'test/%s' % digest
     client.put_object(Bucket=bucket, Key=key, Body=body)
-    logger.info("1MB test file is %s/%s", bucket, key)
-    return key
+    logger.info("test file is %s/%s", bucket, key)
+    return digest
 
 
 def find_types(region, types):
@@ -80,6 +79,7 @@ def create_userdata(typ, name, bucket, megabyte):
         signature_version='s3v4',
     )
     client = boto3.client('s3', region_name=region, config=config)
+    public = f"http://{bucket}.s3.{region}.amazonaws.com/test"
     urls = {
         test: client.generate_presigned_url(
             'put_object',
@@ -88,17 +88,37 @@ def create_userdata(typ, name, bucket, megabyte):
                 'Key': 'test/%s/%s/%s' % (name, typ, test)
             }
         ).replace('https://', 'http://')
-        for test in ['config']
+        for test in ['start', 'download']
     }
     script = textwrap.dedent(f"""
     #!ipxe
 
     echo Automated test for instance type {typ}
     echo Test ID {name}
+    ifstat
+    route
+
+    # Start test
     params --method PUT
-    param product ${{product}}
-    param chip ${{netX/chip}}
-    imgfetch {urls['config']}##params ||
+    param dmesg ${{dmesg:base64}}
+    imgfetch {urls['start']}##params || goto fail
+
+    # Download test
+    set expected:hexraw {megabyte}
+    imgfetch -n 1mb {public}/{megabyte}
+    sha256sum --set actual 1mb
+    iseq ${{expected}} ${{actual}} || goto fail
+    imgfree
+    params --method PUT
+    param dmesg ${{dmesg:base64}}
+    imgfetch {urls['download']}##params || goto fail
+
+    # Terminate instance
+    poweroff
+
+    # Leave shell open for debugging on failure
+    :fail
+    shell
     poweroff
     """).strip()
     userdata = EmailMessage()
@@ -156,9 +176,10 @@ def delete_fleets(typ, region):
         x['Fleets'] for x in paginator.paginate(Filters=filters)
     )
     for fleet in info:
-        fleet_id = fleet['FleetId']
-        logger.info("%s deleting fleet %s", region, fleet_id)
-        client.delete_fleets(FleetIds=[fleet_id], TerminateInstances=True)
+        if fleet['FleetState'] != 'deleted':
+            fleet_id = fleet['FleetId']
+            logger.info("%s deleting fleet %s", region, fleet_id)
+            client.delete_fleets(FleetIds=[fleet_id], TerminateInstances=True)
 
 
 def create_fleet(typ, region, template):
@@ -186,7 +207,7 @@ def create_fleet(typ, region, template):
             'Tags': [{'Key': 'ipxetest', 'Value': typ}],
         }],
     )
-    logger.info("%s created fleet %s", region, fleet['FleetId'])
+    logger.info("%s creating fleet %s", region, fleet['FleetId'])
     return fleet
 
 
@@ -225,7 +246,7 @@ logging.getLogger('botocore.credentials').setLevel(logging.WARNING)
 # Construct test name if not specified
 if not args.name:
     args.name = datetime.now().strftime('%Y%m%d%H%M%S')
-logger.info("test name %s", args.name)
+logger.info("test results in %s/test/%s", args.bucket, args.name)
 
 # Use default family name if nothing else specified
 if not args.family and not args.commit and not args.image:
