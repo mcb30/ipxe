@@ -3,7 +3,7 @@
 import argparse
 from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from hashlib import sha256
 import io
@@ -99,18 +99,19 @@ def create_userdata(typ, name, bucket, megabyte):
     param product ${{product}}
     param chip ${{netX/chip}}
     imgfetch {urls['config']}##params ||
-    shell
+    poweroff
     """).strip()
     userdata = EmailMessage()
     userdata.make_mixed()
-    userdata.add_attachment(script, subtype="x-ipxe")
+    userdata.add_attachment(script, subtype="x-ipxe", cte="8bit")
     return userdata.as_bytes()
 
 
-def delete_launch_templates(region, filters):
+def delete_launch_templates(typ, region):
     """Delete launch templates"""
     client = boto3.client('ec2', region_name=region)
     paginator = client.get_paginator('describe_launch_templates')
+    filters = [{'Name': 'tag:ipxetest', 'Values': [typ]}]
     info = chain.from_iterable(
         x['LaunchTemplates'] for x in paginator.paginate(Filters=filters)
     )
@@ -122,10 +123,9 @@ def delete_launch_templates(region, filters):
 
 def create_launch_template(typ, region, image, userdata):
     """Create launch template"""
+    delete_launch_templates(typ, region)
     client = boto3.client('ec2', region_name=region)
     name = 'ipxetest-%s' % typ
-    delete_launch_templates(region, [{'Name': 'launch-template-name',
-                                      'Values': [name]}])
     logger.info("%s creating launch template %s", region, name)
     template = client.create_launch_template(
         LaunchTemplateName=name,
@@ -136,15 +136,58 @@ def create_launch_template(typ, region, image, userdata):
             'UserData': b64encode(userdata).decode(),
             'TagSpecifications': [{
                 'ResourceType': 'instance',
-                'Tags': [{'Key': 'ipxetest', 'Value': 'ipxetest'}],
+                'Tags': [{'Key': 'ipxetest', 'Value': typ}],
             }],
         },
         TagSpecifications=[{
             'ResourceType': 'launch-template',
-            'Tags': [{'Key': 'ipxetest', 'Value': 'ipxetest'}],
+            'Tags': [{'Key': 'ipxetest', 'Value': typ}],
         }],
     )
     return name
+
+
+def delete_fleets(typ, region):
+    """Delete fleets"""
+    client = boto3.client('ec2', region_name=region)
+    paginator = client.get_paginator('describe_fleets')
+    filters = [{'Name': 'tag:ipxetest', 'Values': [typ]}]
+    info = chain.from_iterable(
+        x['Fleets'] for x in paginator.paginate(Filters=filters)
+    )
+    for fleet in info:
+        fleet_id = fleet['FleetId']
+        logger.info("%s deleting fleet %s", region, fleet_id)
+        client.delete_fleets(FleetIds=[fleet_id], TerminateInstances=True)
+
+
+def create_fleet(typ, region, template):
+    """Create single-instance fleet"""
+    delete_fleets(typ, region)
+    client = boto3.client('ec2', region_name=region)
+    expiry = datetime.now(timezone.utc) + timedelta(minutes=20)
+    fleet = client.create_fleet(
+        LaunchTemplateConfigs=[{
+            'LaunchTemplateSpecification': {
+                'LaunchTemplateName': template,
+                'Version': '$Latest',
+            },
+        }],
+        TargetCapacitySpecification={
+            'TotalTargetCapacity': 1,
+            'OnDemandTargetCapacity': 1,
+            'DefaultTargetCapacityType': 'on-demand',
+        },
+        TerminateInstancesWithExpiration=True,
+        Type='request',
+        ValidUntil=expiry,
+        TagSpecifications=[{
+            'ResourceType': 'fleet',
+            'Tags': [{'Key': 'ipxetest', 'Value': typ}],
+        }],
+    )
+    logger.info("%s created fleet %s", region, fleet['FleetId'])
+    return fleet
 
 
 def run_test(typ, region, image, name, bucket, megabyte):
@@ -152,6 +195,7 @@ def run_test(typ, region, image, name, bucket, megabyte):
     logger.info("%s using %s for %s", region, image['ImageId'], typ)
     userdata = create_userdata(typ, name, bucket, megabyte)
     template = create_launch_template(typ, region, image, userdata)
+    fleet = create_fleet(typ, region, template)
 
 
 # Parse command-line arguments
@@ -221,7 +265,7 @@ if missing:
 
 # Select region for each test
 regions = {
-    typ: next(k for k, v in images.items() if typ in v)
+    typ: sorted(k for k, v in images.items() if typ in v)[0]
     for typ in args.type
 }
 
