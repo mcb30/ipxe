@@ -26,7 +26,7 @@ def create_megabyte(bucket):
     digest = sha256(body).hexdigest()
     key = 'test/%s' % digest
     client.put_object(Bucket=bucket, Key=key, Body=body)
-    logger.info("test file is %s/%s", bucket, key)
+    logger.info("test file at %s/%s", bucket, key)
     return digest
 
 
@@ -136,19 +136,17 @@ def delete_launch_templates(typ, region):
         x['LaunchTemplates'] for x in paginator.paginate(Filters=filters)
     )
     for template in info:
-        name = template['LaunchTemplateName']
-        logger.info("%s deleting launch template %s", region, name)
-        client.delete_launch_template(LaunchTemplateName=name)
+        template_id = template['LaunchTemplateId']
+        logger.info("deleting template %s %s %s", typ, region, template_id)
+        client.delete_launch_template(LaunchTemplateId=template_id)
 
 
-def create_launch_template(typ, region, image, userdata):
+def create_launch_template(typ, region, image, name, userdata):
     """Create launch template"""
     delete_launch_templates(typ, region)
     client = boto3.client('ec2', region_name=region)
-    name = 'ipxetest-%s' % typ
-    logger.info("%s creating launch template %s", region, name)
-    template = client.create_launch_template(
-        LaunchTemplateName=name,
+    info = client.create_launch_template(
+        LaunchTemplateName='%s-%s-%s' % (typ, region, name),
         LaunchTemplateData={
             'ImageId': image['ImageId'],
             'InstanceInitiatedShutdownBehavior': 'terminate',
@@ -164,7 +162,10 @@ def create_launch_template(typ, region, image, userdata):
             'Tags': [{'Key': 'ipxetest', 'Value': typ}],
         }],
     )
-    return name
+    template = info['LaunchTemplate']
+    template_id = template['LaunchTemplateId']
+    logger.info("creating template %s %s %s", typ, region, template_id)
+    return template
 
 
 def delete_fleets(typ, region):
@@ -178,7 +179,7 @@ def delete_fleets(typ, region):
     for fleet in info:
         if fleet['FleetState'] != 'deleted':
             fleet_id = fleet['FleetId']
-            logger.info("%s deleting fleet %s", region, fleet_id)
+            logger.info("deleting fleet %s %s %s", typ, region, fleet_id)
             client.delete_fleets(FleetIds=[fleet_id], TerminateInstances=True)
 
 
@@ -190,7 +191,7 @@ def create_fleet(typ, region, template):
     fleet = client.create_fleet(
         LaunchTemplateConfigs=[{
             'LaunchTemplateSpecification': {
-                'LaunchTemplateName': template,
+                'LaunchTemplateId': template['LaunchTemplateId'],
                 'Version': '$Latest',
             },
         }],
@@ -207,15 +208,17 @@ def create_fleet(typ, region, template):
             'Tags': [{'Key': 'ipxetest', 'Value': typ}],
         }],
     )
-    logger.info("%s creating fleet %s", region, fleet['FleetId'])
+    fleet_id = fleet['FleetId']
+    logger.info("creating fleet %s %s %s", typ, region, fleet_id)
     return fleet
 
 
 def run_test(typ, region, image, name, bucket, megabyte):
     """Test instance type"""
-    logger.info("%s using %s for %s", region, image['ImageId'], typ)
+    image_id = image['ImageId']
+    logger.info("testing %s %s %s", typ, region, image_id)
     userdata = create_userdata(typ, name, bucket, megabyte)
-    template = create_launch_template(typ, region, image, userdata)
+    template = create_launch_template(typ, region, image, name, userdata)
     fleet = create_fleet(typ, region, template)
 
 
@@ -246,7 +249,7 @@ logging.getLogger('botocore.credentials').setLevel(logging.WARNING)
 # Construct test name if not specified
 if not args.name:
     args.name = datetime.now().strftime('%Y%m%d%H%M%S')
-logger.info("test results in %s/test/%s", args.bucket, args.name)
+logger.info("test results at %s/test/%s/", args.bucket, args.name)
 
 # Use default family name if nothing else specified
 if not args.family and not args.commit and not args.image:
