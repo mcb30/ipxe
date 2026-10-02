@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+
+import argparse
+from base64 import b64encode
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date
+from itertools import chain, groupby
+import logging
+
+import boto3
+
+
+logger = logging.getLogger('aws-test')
+
+
+def find_types(region, types):
+    """Find available instance types"""
+    client = boto3.client('ec2', region_name=region)
+    filters = [{'Name': 'instance-type', 'Values': types}]
+    paginator = client.get_paginator('describe_instance_types')
+    info = chain.from_iterable(
+        x['InstanceTypes'] for x in paginator.paginate(Filters=filters)
+    )
+    result = {x['InstanceType']: x for x in info}
+    return result
+
+
+def find_images(region, types, family, commit, image_ids):
+    """Find available images for each instance type"""
+    client = boto3.client('ec2', region_name=region)
+    filters = []
+    if family:
+        filters.append({'Name': 'tag:family', 'Values': [family]})
+    if commit:
+        filters.append({'Name': 'tag:commit', 'Values': [commit]})
+    if image_ids:
+        filters.append({'Name': 'image-id', 'Values': image_ids})
+    paginator = client.get_paginator('describe_images')
+    info = chain.from_iterable(
+        x['Images'] for x in paginator.paginate(Filters=filters)
+    )
+    image_key = lambda x: x['Architecture']
+    type_key = lambda x: x['ProcessorInfo']['SupportedArchitectures'][0]
+    images = {
+        k: sorted(v, key=lambda x: x['CreationDate'])
+        for k, v in groupby(sorted(info, key=image_key), key=image_key)
+    }
+    result = {
+        k: images.get(type_key(v))[-1]
+        for k, v in types.items()
+        if images.get(type_key(v))
+    }
+    return result
+
+
+def test_instance_type(instance_type, images):
+    """Test instance type"""
+    region = next(k for k, v in images.items() if instance_type in v)
+    image = images[region][instance_type]
+    logger.info("%s using %s in %s", instance_type, image['ImageId'], region)
+
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="Test AWS EC2 image (AMI)")
+parser.add_argument('--verbose', '-v', action='count', default=0)
+parser.add_argument('--family', '-f',
+                    help="Image family name")
+parser.add_argument('--commit', '-c',
+                    help="Image commit ID")
+parser.add_argument('--image', '-i', action='append',
+                    help="Image AMI ID(s)")
+parser.add_argument('--region', '-r', action='append',
+                    help="AWS region(s)")
+parser.add_argument('--bucket', '-b', default="ipxe-ci",
+                    help="Upload test files and results to S3 bucket")
+parser.add_argument('type', nargs='+', help="Instance type(s)")
+args = parser.parse_args()
+
+# Configure logging
+loglevels = [logging.WARNING, logging.INFO, logging.DEBUG]
+verbosity = min(args.verbose, (len(loglevels) - 1))
+logging.basicConfig(level=loglevels[verbosity])
+logging.getLogger('botocore.credentials').setLevel(logging.WARNING)
+
+# Use default family name if nothing else specified
+if not args.family and not args.commit and not args.image:
+    args.family = 'iPXE'
+
+# Use all regions if none specified
+if not args.region:
+    args.region = sorted(x['RegionName'] for x in
+                         boto3.client('ec2').describe_regions()['Regions'])
+
+# Identify available instance types across selected regions
+with ThreadPoolExecutor(max_workers=len(args.region)) as executor:
+    futures = {executor.submit(find_types,
+                               region=region,
+                               types=args.type): region
+               for region in args.region}
+    types = {futures[future]: future.result()
+             for future in as_completed(futures)}
+missing = set(args.type) - set(chain.from_iterable(types.values()))
+if missing:
+    parser.error("No regions support %s" % ",".join(sorted(missing)))
+
+# Identify available images across selected regions
+with ThreadPoolExecutor(max_workers=len(args.region)) as executor:
+    futures = {executor.submit(find_images,
+                               region=region,
+                               types=types[region],
+                               family=args.family,
+                               commit=args.commit,
+                               image_ids=args.image): region
+               for region in args.region}
+    images = {futures[future]: future.result()
+              for future in as_completed(futures)}
+missing = set(args.type) - set(chain.from_iterable(images.values()))
+if missing:
+    parser.error("No regions have images for %s" % ",".join(sorted(missing)))
+
+# Run tests
+with ThreadPoolExecutor(max_workers=len(args.type)) as executor:
+    futures = {executor.submit(test_instance_type,
+                               instance_type=instance_type,
+                               images=images): instance_type
+               for instance_type in args.type}
+    results = {futures[future]: future.result()
+               for future in as_completed(futures)}
